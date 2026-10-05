@@ -7,6 +7,7 @@
 //   antibody setup gemini       add the hooks and MCP server to Gemini CLI
 //   antibody setup codex        add the hooks to Codex CLI
 //   antibody stats              print the memory's ledger, for people and scripts
+//   antibody watch              the live fleet view
 //   antibody --version          print the version
 //
 // A hook must never break or block the agent it runs in, so `hook` fails open:
@@ -29,6 +30,8 @@ import type { GitRunner } from "./paths";
 import { runSetup } from "./setup";
 import type { SetupDeps } from "./setup";
 import { createTools } from "./tools";
+import { runWatch } from "./watch";
+import type { WatchDeps } from "./watch";
 import type { Tool } from "./tools";
 
 /** The version `antibody --version` prints. */
@@ -178,6 +181,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
        antibody stats              print the memory's ledger for this repository
+       antibody watch              the live fleet view; q quits
        antibody --version
 `;
 
@@ -263,13 +267,14 @@ export async function runStats(
 export async function main(
   argv: readonly string[],
   io: CliIo,
-  deps: HookDeps & McpDeps & SetupDeps = {},
+  deps: HookDeps & McpDeps & SetupDeps & WatchDeps = {},
 ): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
   if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
   if (command === "setup") return runSetup(rest, io, deps);
   if (command === "stats") return runStats(rest, io, deps);
+  if (command === "watch") return runWatch(rest, io, deps);
   if (command === "--version" || command === "-v") {
     io.stdout(`${VERSION}\n`);
     return 0;

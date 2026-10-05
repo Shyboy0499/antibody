@@ -4286,6 +4286,446 @@ function createTools(context) {
 		})
 	];
 }
+const fixNotice = (e) => e.kind === "notice" && FIX_NOTICE_KINDS.includes(e.notice);
+/** How one event reads in the events pane. */
+function eventLine(event) {
+	const text = oneLine(event.text ?? "");
+	const line = (tag, body) => ({
+		t: event.t,
+		agent: event.agent,
+		...event.id === void 0 ? {} : { id: event.id },
+		tag,
+		text: body
+	});
+	switch (event.kind) {
+		case "miss": return line("new", text);
+		case "hit": return line("again", text);
+		case "claim": return line("claimed", "diagnosing it");
+		case "hold": return line("holding", text);
+		case "fix": return line("antibody", text);
+		case "notice": return fixNotice(event) ? line("immune", `fix pushed (${event.tokens ?? 0} tokens)`) : line("notice", text);
+		case "release": return line("released", text === "" ? "claim released" : text);
+		case "resolve": return line("resolved", "the call succeeded again");
+		case "forget": return line("forgotten", text === "" ? "archived" : text);
+	}
+}
+/**
+* Fold the memory into the fleet view.
+*
+* @param events - events.jsonl, oldest first.
+* @param entries - the entries, with this machine's hits added.
+* @param claims - claims.json.
+* @param now - the current time.
+*/
+function fleetView(events, entries, claims, now) {
+	const at = now.getTime();
+	const byFingerprint = new Map(entries.map((e) => [e.fingerprint, e]));
+	const live = Object.values(claims.claims).filter((c) => activeClaim(claims, c.id, now) !== void 0);
+	const entryIdOf = (fingerprint) => byFingerprint.get(fingerprint)?.id ?? `new ${fingerprint}`;
+	const latest = /* @__PURE__ */ new Map();
+	const lastHold = /* @__PURE__ */ new Map();
+	const lastImmune = /* @__PURE__ */ new Map();
+	for (const event of events) {
+		latest.set(event.agent, event);
+		if (event.kind === "hold") lastHold.set(event.agent, event);
+		if (fixNotice(event)) lastImmune.set(event.agent, event);
+	}
+	const agents = [];
+	for (const [agent, last] of latest) {
+		if (at - Date.parse(last.t) > 18e5) continue;
+		const row = {
+			agent,
+			state: "working",
+			lastSeen: last.t
+		};
+		const claim = live.find((c) => c.agent === agent);
+		const hold = lastHold.get(agent);
+		const immune = lastImmune.get(agent);
+		const holdId = hold?.id ?? "";
+		const holdEntry = entries.find((e) => e.id === holdId);
+		const heldClaim = live.find((c) => holdEntry !== void 0 && c.id === holdEntry.fingerprint);
+		if (claim !== void 0) Object.assign(row, {
+			state: "diagnosing",
+			id: entryIdOf(claim.id),
+			since: claim.since
+		});
+		else if (hold !== void 0 && heldClaim !== void 0 && (immune === void 0 || Date.parse(immune.t) < Date.parse(hold.t))) Object.assign(row, {
+			state: "holding",
+			id: holdId,
+			holder: heldClaim.agent
+		});
+		else if (immune !== void 0 && at - Date.parse(immune.t) <= 12e4) Object.assign(row, {
+			state: "immune",
+			...immune.id === void 0 ? {} : { id: immune.id },
+			saved: Math.max(0, 800 - (immune.tokens ?? 0))
+		});
+		agents.push(row);
+	}
+	agents.sort((a, b) => a.agent.localeCompare(b.agent));
+	const notices = events.filter((e) => e.kind === "notice");
+	const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+	const fixNotices = notices.filter(fixNotice);
+	const withFix = entries.filter((e) => oneLine(e.fix) !== "");
+	const fixedIds = new Set(withFix.map((e) => e.id));
+	const hitsOnFixed = events.filter((e) => e.kind === "hit" && e.id !== void 0 && fixedIds.has(e.id)).length;
+	const antibodies = entries.map((entry) => {
+		const reusedNotices = fixNotices.filter((e) => e.id === entry.id);
+		const spent = reusedNotices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+		let fixEvent;
+		for (const e of events) if (e.kind === "fix" && e.id === entry.id) fixEvent = e;
+		const claim = live.find((c) => c.id === entry.fingerprint);
+		const hasFix = oneLine(entry.fix) !== "";
+		return {
+			id: entry.id,
+			fingerprint: entry.fingerprint,
+			category: entry.category,
+			title: entry.title,
+			status: entry.status,
+			fix: oneLine(entry.fix),
+			...!hasFix && claim !== void 0 ? { diagnosing: claim.agent } : {},
+			...fixEvent === void 0 ? {} : { beatenBy: fixEvent.agent },
+			reused: reusedNotices.length,
+			saved: Math.max(0, reusedNotices.length * 800 - spent)
+		};
+	});
+	return {
+		agents,
+		memory: {
+			tokensSaved: Math.max(0, fixNotices.length * 800 - noticeTokens),
+			noticeTokens,
+			avoided: fixNotices.length,
+			antibodies: withFix.length,
+			entries: entries.length,
+			open: entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length,
+			immunity: hitsOnFixed === 0 ? 0 : Math.min(1, fixNotices.length / hitsOnFixed)
+		},
+		antibodies,
+		events: events.slice(-200).map(eventLine)
+	};
+}
+//#endregion
+//#region src/watch-render.ts
+const SGR = {
+	bold: "1",
+	dim: "2",
+	red: "31",
+	green: "32",
+	yellow: "33",
+	cyan: "36",
+	inverse: "7"
+};
+const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+const ZERO = /[\u0000-\u001f\u007f-\u009f̀-ͯ​-‏]/u;
+/** How many terminal cells a string takes. */
+function cells(text) {
+	let n = 0;
+	for (const ch of text) n += ZERO.test(ch) ? 0 : WIDE.test(ch) ? 2 : 1;
+	return n;
+}
+/**
+* A string made exactly `width` cells wide: clipped with an ellipsis, or
+* padded with spaces. Controls are dropped, so text from the memory cannot
+* move the cursor.
+*/
+function fit(text, width) {
+	if (width <= 0) return "";
+	const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+	if (cells(clean) <= width) return clean + " ".repeat(width - cells(clean));
+	let out = "";
+	let used = 0;
+	for (const ch of clean) {
+		const w = ZERO.test(ch) ? 0 : WIDE.test(ch) ? 2 : 1;
+		if (used + w > width - 1) break;
+		out += ch;
+		used += w;
+	}
+	return `${out}…${" ".repeat(width - 1 - used)}`;
+}
+const thousands = (n) => Math.round(n).toLocaleString("en-US");
+/** One screen of the fleet view. */
+function renderView(view, o) {
+	const width = Math.max(20, o.width);
+	const paint = (text, ...styles) => o.color && styles.length > 0 ? `\u001b[${styles.map((s) => SGR[s]).join(";")}m${text}\u001b[0m` : text;
+	const row = (...parts) => {
+		let budget = width;
+		const sizes = parts.map(([, w]) => {
+			if (w < 0) return -1;
+			const size = Math.min(Math.max(0, w), budget);
+			budget -= size;
+			return size;
+		});
+		let line = "";
+		parts.forEach(([text, , ...styles], i) => {
+			let size = sizes[i];
+			if (size < 0) {
+				size = budget;
+				budget = 0;
+			}
+			line += paint(fit(text, size), ...styles);
+		});
+		return line + " ".repeat(budget);
+	};
+	const clock = (iso) => new Date(iso).toLocaleTimeString("en-GB", {
+		hour12: false,
+		...o.timeZone === void 0 ? {} : { timeZone: o.timeZone }
+	});
+	const ago = (iso) => elapsedText(o.now.getTime() - Date.parse(iso));
+	const heading = (title, summary = "") => row([
+		` ${title}  `,
+		cells(title) + 3,
+		"bold"
+	], [
+		summary,
+		-1,
+		"dim"
+	]);
+	const diagnosing = view.agents.filter((a) => a.state === "diagnosing").length;
+	const right = `${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
+	const status = row([
+		" antibody ",
+		10,
+		"bold",
+		"inverse"
+	], [` ${o.repo}`, -1], [
+		`  ${view.agents.length} agents · ${diagnosing} diagnosing · ${thousands(view.memory.tokensSaved)} tokens saved  `,
+		Math.min(64, width - 10 - cells(right) - 10),
+		"dim"
+	], [right, cells(right)]);
+	const counts = {
+		working: 0,
+		diagnosing: 0,
+		holding: 0,
+		immune: 0
+	};
+	for (const a of view.agents) counts[a.state]++;
+	const nameWidth = Math.min(28, Math.max(12, Math.floor(width * .28)));
+	const agentRow = (a) => {
+		const [label, style] = {
+			diagnosing: ["◐ diagnosing", "yellow"],
+			holding: ["◌ holding", "yellow"],
+			immune: ["✓ immune", "green"],
+			working: ["· working", "dim"]
+		}[a.state];
+		const detail = a.state === "diagnosing" ? `${a.id} for ${ago(a.since)}` : a.state === "holding" ? `${a.id} · ${a.holder} is on it` : a.state === "immune" ? `${a.id ?? ""} · saved ${thousands(a.saved ?? 0)} tokens` : `last seen ${ago(a.lastSeen)} ago`;
+		return row([` ${a.agent}`, nameWidth], [
+			label,
+			14,
+			style
+		], [
+			detail,
+			-1,
+			a.state === "working" ? "dim" : "cyan"
+		]);
+	};
+	const m = view.memory;
+	const memoryParts = [
+		`tokens saved ${thousands(m.tokensSaved)} (after ${thousands(m.noticeTokens)} tokens of notices)`,
+		`re-diagnoses avoided ${m.avoided}`,
+		`antibodies ${m.antibodies} / ${m.entries} (${m.open} open)`,
+		`fleet immunity ${Math.round(m.immunity * 100)}%`
+	];
+	const memoryLines = cells(memoryParts.join(" · ")) + 2 <= width ? [memoryParts.join(" · ")] : [memoryParts.slice(0, 2).join(" · "), memoryParts.slice(2).join(" · ")];
+	const byWidth = Math.min(22, Math.floor(width * .18));
+	const flexible = width - 9 - byWidth - 8 - 9;
+	const titleWidth = Math.floor(flexible * .45);
+	const antibodyRow = (a) => {
+		const [fix, style] = a.fix !== "" ? [a.fix, "green"] : a.diagnosing !== void 0 ? [`diagnosing (${a.diagnosing})`, "yellow"] : [a.status === "wontfix" ? "wontfix" : "open", "red"];
+		return row([
+			` ${a.id}`,
+			9,
+			"cyan"
+		], [a.title.replace(/^\[[^\]]*\]\s*/, ""), titleWidth], [
+			` ${fix}`,
+			flexible - titleWidth,
+			style
+		], [
+			` ${a.beatenBy ?? "-"}`,
+			byWidth,
+			"dim"
+		], [`${a.reused}`.padStart(7), 8], [`${thousands(a.saved)}`.padStart(8), 9]);
+	};
+	const tagStyle = {
+		new: "red",
+		again: "red",
+		claimed: "dim",
+		holding: "yellow",
+		antibody: "green",
+		immune: "green",
+		notice: "dim",
+		released: "dim",
+		resolved: "green",
+		forgotten: "dim"
+	};
+	const eventRow = (e) => row([
+		` ${clock(e.t)}`,
+		10,
+		"dim"
+	], [` ${e.agent}`, nameWidth], [
+		` ${e.id ?? ""}`,
+		9,
+		"cyan"
+	], [
+		` ${e.tag}`,
+		10,
+		tagStyle[e.tag]
+	], [` ${e.text}`, -1]);
+	const keys = row([
+		" q quit · space freeze or resume",
+		-1,
+		"dim"
+	]);
+	const fixed = 3 + memoryLines.length + 1 + 1 + 1 + 1;
+	const room = Math.max(0, o.height - fixed);
+	const fleetRows = Math.min(Math.max(1, view.agents.length), Math.max(1, Math.floor(room * .35)));
+	const antibodyRows = Math.min(Math.max(1, view.antibodies.length), Math.max(1, Math.floor(room * .3)));
+	const eventRows = Math.max(0, room - fleetRows - antibodyRows);
+	const empty = (text) => row([
+		` ${text}`,
+		-1,
+		"dim"
+	]);
+	const lines = [
+		status,
+		heading("Fleet", `${counts.working} working · ${counts.diagnosing} diagnosing · ${counts.holding} holding · ${counts.immune} immune`),
+		...view.agents.length === 0 ? [empty("no agent has been seen in the last 30 minutes")] : view.agents.slice(0, fleetRows).map(agentRow),
+		heading("Memory"),
+		...memoryLines.map((text) => row([` ${text}`, -1])),
+		heading("Antibodies", view.antibodies.length > antibodyRows ? `${antibodyRows} of ${view.antibodies.length}, newest last` : ""),
+		...view.antibodies.length === 0 ? [empty("no errors yet")] : view.antibodies.slice(-antibodyRows).map(antibodyRow),
+		heading("Events"),
+		...view.events.length === 0 ? [empty("no events yet")] : view.events.slice(view.events.length - eventRows).map(eventRow)
+	];
+	const blank = " ".repeat(width);
+	const body = lines.slice(0, Math.max(0, o.height - 1));
+	while (body.length < o.height - 1) body.push(blank);
+	return o.height > 0 ? [...body, keys] : [];
+}
+const ENTER = "\x1B[?1049h\x1B[?25l";
+const LEAVE = "\x1B[?25h\x1B[?1049l";
+const HOME = "\x1B[H";
+const WATCH_USAGE = `usage: antibody watch [--once] [--no-color]
+  --once      print one frame and exit
+  --no-color  draw without colours (also when NO_COLOR is set)
+`;
+/** Reads the memory incrementally: events from where the last read stopped. */
+function memoryReader(memory) {
+	const files = filesIn(memory);
+	const store = createStore(files);
+	const state = createStateFile(files);
+	const claimsFile = createClaimsFile(files);
+	let offset = 0;
+	let events = [];
+	return async () => {
+		const tail = await readEventsFrom(files.events, offset);
+		if (tail.offset < offset) events = [];
+		offset = tail.offset;
+		events = [...events, ...tail.events].slice(-5e3);
+		const [document, machine, claims] = await Promise.all([
+			store.read().catch(() => ({
+				preamble: "",
+				blocks: []
+			})),
+			state.read(),
+			claimsFile.read().catch(() => emptyClaims())
+		]);
+		const entries = document.blocks.map((b) => effectiveEntry(b.entry, machine.state.entries[b.entry.id]));
+		return {
+			events,
+			entries,
+			claims
+		};
+	};
+}
+/**
+* `antibody watch`: draw the fleet view until q, or once with `--once`.
+*
+* @param args - the arguments after `watch`.
+* @param io - stdout for the screen, stderr for errors, the environment.
+* @param deps - the directory, the clock, the terminal; injected in tests.
+* @returns 0, 1 outside a repository, 2 on usage.
+*/
+async function runWatch(args, io, deps = {}) {
+	let once = false;
+	let color = io.env.NO_COLOR === void 0 || io.env.NO_COLOR === "";
+	for (const arg of args) if (arg === "--once") once = true;
+	else if (arg === "--no-color") color = false;
+	else {
+		io.stderr(`antibody: unknown option: ${arg}\n${WATCH_USAGE}`);
+		return 2;
+	}
+	const cwd = deps.cwd ?? process.cwd();
+	let memory;
+	try {
+		memory = memoryDir(cwd, deps.git, io.env);
+	} catch (error) {
+		io.stderr(`antibody: ${error.message}\n`);
+		return 1;
+	}
+	const repo = basename(worktreeRoot(cwd, deps.git));
+	const now = deps.now ?? (() => /* @__PURE__ */ new Date());
+	const size = deps.size ?? (() => ({
+		columns: process.stdout.columns || 80,
+		rows: process.stdout.rows || 24
+	}));
+	const read = memoryReader(memory);
+	let frozen = false;
+	let last = await read();
+	const frame = (colours) => {
+		const { columns, rows } = size();
+		return renderView(fleetView(last.events, last.entries, last.claims, now()), {
+			width: columns,
+			height: rows,
+			color: colours,
+			now: now(),
+			repo,
+			frozen
+		});
+	};
+	if (once) {
+		io.stdout(`${frame(false).join("\n")}\n`);
+		return 0;
+	}
+	const keys = deps.keys ?? process.stdin;
+	const raw = keys;
+	if (raw.isTTY === true) raw.setRawMode(true);
+	io.stdout(ENTER);
+	let drawn = "";
+	const draw = () => {
+		const { columns, rows } = size();
+		const shape = `${columns}x${rows}`;
+		io.stdout((shape === drawn ? HOME : "\x1B[2J\x1B[H") + frame(color).join("\r\n"));
+		drawn = shape;
+	};
+	draw();
+	return new Promise((done) => {
+		let busy = false;
+		const timer = setInterval(() => {
+			if (busy) return;
+			busy = true;
+			(frozen ? Promise.resolve(last) : read()).then((data) => {
+				last = data;
+				draw();
+			}).finally(() => {
+				busy = false;
+			});
+		}, deps.intervalMs ?? 500);
+		const onKey = (chunk) => {
+			const text = chunk.toString();
+			if (text.includes("q") || text.includes("")) {
+				clearInterval(timer);
+				keys.off("data", onKey);
+				if (raw.isTTY === true) raw.setRawMode(false);
+				if (deps.keys === void 0) process.stdin.pause();
+				io.stdout(LEAVE);
+				done(0);
+			} else if (text.includes(" ")) {
+				frozen = !frozen;
+				draw();
+			}
+		};
+		keys.on("data", onKey);
+	});
+}
 //#endregion
 //#region src/cli.ts
 /** The version `antibody --version` prints. */
@@ -4378,6 +4818,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
        antibody stats              print the memory's ledger for this repository
+       antibody watch              the live fleet view; q quits
        antibody --version
 `;
 /**
@@ -4456,6 +4897,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
 	if (command === "setup") return runSetup(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
+	if (command === "watch") return runWatch(rest, io, deps);
 	if (command === "--version" || command === "-v") {
 		io.stdout(`${VERSION}\n`);
 		return 0;
