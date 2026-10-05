@@ -9,7 +9,7 @@ import { main } from "../src/cli";
 import type { CliIo } from "../src/cli";
 import { appendEvent } from "../src/events";
 import { createFleet } from "../src/fleet";
-import { filesIn, memoryDir } from "../src/paths";
+import { filesIn, injectionPaused, memoryDir } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { memoryReader, runWatch } from "../src/watch";
 import type { WatchDeps } from "../src/watch";
@@ -151,6 +151,19 @@ describe("antibody watch", () => {
     keys.write("\u0003");
     expect(await done).toBe(0);
     expect(out.join("")).not.toMatch(SGR);
+  });
+
+  it("pauses injection for the fleet on p, and resumes it", async () => {
+    const memory = memoryDir(wtA);
+    const { keys, out, done } = watch({});
+    await until(() => out.length > 1);
+    keys.write("p");
+    await until(() => out.some((o) => o.includes("injection paused")));
+    expect(injectionPaused(memory)).toBe(true);
+    keys.write("p");
+    await until(() => !injectionPaused(memory));
+    keys.write("q");
+    await done;
   });
 
   it("clears the screen when the terminal changes size", async () => {

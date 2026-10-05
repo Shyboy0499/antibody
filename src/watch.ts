@@ -4,7 +4,9 @@
 // ANTIBODIES.md with this machine's hit counts, claims.json - folds them into
 // a FleetView and redraws the screen in place on the terminal's alternate
 // screen, so the shell is left as it was on quit. Keys: q (or Ctrl-C) quits,
-// space freezes the view and resumes it.
+// space freezes the view and resumes it, and p pauses injection for the whole
+// fleet, and resumes it: the hooks go on recording but tell the agents
+// nothing, and fixes held meanwhile are delivered once it resumes.
 //
 // `--once` prints one frame without colours or cursor movement and exits, for
 // scripts and for looking at the fleet from a pipe.
@@ -15,7 +17,12 @@ import type { ClaimsState } from "./claims";
 import type { CliIo } from "./cli";
 import { readEventsFrom } from "./events";
 import type { MemoryEvent } from "./events";
-import { filesIn, memoryDir } from "./paths";
+import {
+  filesIn,
+  injectionPaused,
+  memoryDir,
+  setInjectionPaused,
+} from "./paths";
 import type { GitRunner } from "./paths";
 import { createStateFile, effectiveEntry } from "./state";
 import { createStore } from "./store";
@@ -64,6 +71,7 @@ export function memoryReader(memory: string) {
     events: MemoryEvent[];
     entries: Entry[];
     claims: ClaimsState;
+    paused: boolean;
   }> => {
     const tail = await readEventsFrom(files.events, offset);
     // The log was replaced or shortened: start again with what it holds now.
@@ -78,7 +86,7 @@ export function memoryReader(memory: string) {
     const entries = document.blocks.map((b) =>
       effectiveEntry(b.entry, machine.state.entries[b.entry.id]),
     );
-    return { events, entries, claims };
+    return { events, entries, claims, paused: injectionPaused(memory) };
   };
 }
 
@@ -134,6 +142,7 @@ export async function runWatch(
       now: now(),
       repo,
       frozen,
+      paused: last.paused,
     });
   };
 
@@ -183,6 +192,10 @@ export async function runWatch(
         done(0);
       } else if (text.includes(" ")) {
         frozen = !frozen;
+        draw();
+      } else if (text.includes("p")) {
+        setInjectionPaused(memory, !last.paused);
+        last = { ...last, paused: !last.paused };
         draw();
       }
     };

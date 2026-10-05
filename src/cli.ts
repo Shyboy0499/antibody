@@ -24,7 +24,7 @@ import { createFleet } from "./fleet";
 import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
-import { memoryDir } from "./paths";
+import { injectionPaused, memoryDir } from "./paths";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
 import { runSetup } from "./setup";
@@ -143,7 +143,9 @@ export async function runHook(
       return "";
     }
     const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
-    const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(
+    // Paused: the fleet loop still records, but injects nothing.
+    const options = injectionPaused(memory) ? { inject: "off" as const } : {};
+    const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s, options)))(
       memory,
       agent,
       input.sessionId,

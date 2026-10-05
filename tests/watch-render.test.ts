@@ -157,7 +157,9 @@ describe("renderView", () => {
     expect(text).toMatch(
       / 09:59:40 +codex@wt-c +E-0001 +immune +fix pushed \(60 tokens\)/,
     );
-    expect(lines.at(-1)).toMatch(/^ q quit · space freeze or resume +$/);
+    expect(lines.at(-1)).toMatch(
+      /^ q quit · space freeze or resume · p pause or resume injection +$/,
+    );
   });
 
   it("puts the memory figures on one line when there is room", () => {
@@ -207,11 +209,14 @@ describe("renderView", () => {
       antibodies: [],
       events: [],
     };
-    const text = renderView(empty, options({ frozen: true })).join("\n");
+    const text = renderView(
+      empty,
+      options({ frozen: true, paused: true }),
+    ).join("\n");
     expect(text).toContain("no agent has been seen in the last 30 minutes");
     expect(text).toContain("no errors yet");
     expect(text).toContain("no events yet");
-    expect(text.split("\n")[0]).toMatch(/frozen  10:00:00 $/);
+    expect(text.split("\n")[0]).toMatch(/injection paused  frozen  10:00:00 $/);
   });
 
   it("draws in the machine's time zone by default, and in a narrow terminal", () => {

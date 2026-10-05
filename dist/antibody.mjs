@@ -293,6 +293,26 @@ function corruptFileName(now = /* @__PURE__ */ new Date()) {
 }
 /** The directory inside the git common directory that holds antibody's memory. */
 const MEMORY_DIR_NAME = "antibody";
+/**
+* The file whose presence in the memory directory pauses injection: hooks go
+* on recording errors, claims and fixes, but tell the agents nothing until it
+* is removed. `antibody watch` toggles it with p.
+*/
+const PAUSE_FILE_NAME = "paused";
+/** Whether injection is paused for a memory directory. */
+function injectionPaused(memory) {
+	return nodeFs.existsSync(join(memory, PAUSE_FILE_NAME));
+}
+/** Pause injection for a memory directory, or resume it. */
+function setInjectionPaused(memory, paused) {
+	const file = join(memory, PAUSE_FILE_NAME);
+	if (!paused) {
+		nodeFs.rmSync(file, { force: true });
+		return;
+	}
+	nodeFs.mkdirSync(memory, { recursive: true });
+	nodeFs.writeFileSync(file, "Injection is paused while this file exists.\n");
+}
 /** The real git, found on PATH. Its error output is discarded. */
 const runGit = (args, cwd) => lazyChildProcess().execFileSync("git", args, {
 	cwd,
@@ -3151,7 +3171,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			id: label,
 			text: `held by ${outcome.holder.agent}`
 		});
-		if (!rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
+		if (o.inject === "off" || !rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
 		const elapsed = clock.now().getTime() - Date.parse(outcome.holder.since);
 		const text = claimHintText(label, outcome.holder.agent, elapsed);
 		notices.push(text);
@@ -4480,7 +4500,7 @@ function renderView(view, o) {
 		"dim"
 	]);
 	const diagnosing = view.agents.filter((a) => a.state === "diagnosing").length;
-	const right = `${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
+	const right = `${o.paused === true ? "injection paused  " : ""}${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
 	const status = row([
 		" antibody ",
 		10,
@@ -4570,7 +4590,7 @@ function renderView(view, o) {
 		tagStyle[e.tag]
 	], [` ${e.text}`, -1]);
 	const keys = row([
-		" q quit · space freeze or resume",
+		" q quit · space freeze or resume · p pause or resume injection",
 		-1,
 		"dim"
 	]);
@@ -4632,7 +4652,8 @@ function memoryReader(memory) {
 		return {
 			events,
 			entries,
-			claims
+			claims,
+			paused: injectionPaused(memory)
 		};
 	};
 }
@@ -4678,7 +4699,8 @@ async function runWatch(args, io, deps = {}) {
 			color: colours,
 			now: now(),
 			repo,
-			frozen
+			frozen,
+			paused: last.paused
 		});
 	};
 	if (once) {
@@ -4720,6 +4742,13 @@ async function runWatch(args, io, deps = {}) {
 				done(0);
 			} else if (text.includes(" ")) {
 				frozen = !frozen;
+				draw();
+			} else if (text.includes("p")) {
+				setInjectionPaused(memory, !last.paused);
+				last = {
+					...last,
+					paused: !last.paused
+				};
 				draw();
 			}
 		};
@@ -4792,7 +4821,8 @@ async function runHook(harness, io, deps = {}) {
 			return "";
 		}
 		const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
-		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(memory, agent, input.sessionId);
+		const options = injectionPaused(memory) ? { inject: "off" } : {};
+		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s, options)))(memory, agent, input.sessionId);
 		return adapter.respond(input.event, await dispatch(input, fleet));
 	};
 	try {

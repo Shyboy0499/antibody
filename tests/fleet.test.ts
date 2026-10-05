@@ -509,3 +509,22 @@ describe("fleet: recording a fix", () => {
     expect(await events()).toEqual([]);
   });
 });
+
+describe("fleet: injection off (paused)", () => {
+  it("records and holds without telling, then delivers once it resumes", async () => {
+    const off = { inject: "off" as const };
+    expect(await fail("s-a", off)).toEqual([]);
+    // The second agent is not hinted while injection is off, but waits.
+    expect(await fail("s-b", off)).toEqual([]);
+    const session = JSON.parse(
+      await readFile(join(memory, "sessions", "s-b.json"), "utf8"),
+    );
+    expect(session.holding).toHaveLength(1);
+    await recordFix();
+    expect(await createFleet(memory, "agent-s-b", "s-b", off).poll()).toEqual(
+      [],
+    );
+    const [notice] = await createFleet(memory, "agent-s-b", "s-b").poll();
+    expect(notice).toContain(`fix: ${FIX}`);
+  });
+});

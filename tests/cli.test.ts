@@ -14,7 +14,7 @@ import { HOOK_DEADLINE_MS, VERSION, main, runHook } from "../src/cli";
 import type { CliIo, HookDeps, McpDeps } from "../src/cli";
 import { readEventsFrom } from "../src/events";
 import type { Fleet } from "../src/fleet";
-import { filesIn, memoryDir } from "../src/paths";
+import { filesIn, memoryDir, setInjectionPaused } from "../src/paths";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync(
@@ -576,6 +576,24 @@ describe("antibody hook gemini, beside Claude Code", () => {
     expect(told.additionalContext).toMatch(
       /^\[antibody\] E-0002: codex@wt-gemini has been diagnosing this/,
     );
+  });
+
+  it("tells nobody anything while injection is paused", async () => {
+    const memory = memoryDir(gem);
+    setInjectionPaused(memory, true);
+    const failing = (session: string, cwd: string) =>
+      payload(cwd, session, {
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "make" },
+        error: "Exit code 2\nmake: *** [all] Error 2",
+      });
+    expect(await hookAs("claude-code", failing("p-1", gem))).toBeUndefined();
+    expect(await hookAs("claude-code", failing("p-2", cc))).toBeUndefined();
+    setInjectionPaused(memory, false);
+    expect(
+      (await hookAs("claude-code", failing("p-3", cc))).additionalContext,
+    ).toContain("has been diagnosing this");
   });
 
   it("starts a Gemini turn on BeforeAgent and ends its session", async () => {
