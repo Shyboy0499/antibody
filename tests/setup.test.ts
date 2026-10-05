@@ -10,7 +10,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { main } from "../src/cli";
 import {
+  CODEX_HOOK_TIMEOUT_SEC,
   GEMINI_HOOK_TIMEOUT_MS,
+  codexHooks,
   geminiSettings,
   runSetup,
   shellQuote,
@@ -200,14 +202,14 @@ describe("antibody setup gemini", () => {
   it("refuses arguments it does not understand", async () => {
     for (const args of [
       [],
-      ["codex"],
+      ["cursor"],
       ["gemini", "--force"],
       ["gemini", "extra"],
       ["gemini", "--settings"],
     ]) {
       err = "";
       expect(await setup(...args), args.join(" ")).toBe(2);
-      expect(err).toContain("usage: antibody setup gemini");
+      expect(err).toContain("usage: antibody setup <gemini|codex>");
     }
   });
 
@@ -224,5 +226,118 @@ describe("antibody setup gemini", () => {
     );
     expect(code).toBe(0);
     expect(JSON.parse(out).mcpServers.antibody).toEqual(server);
+  });
+});
+
+describe("codexHooks", () => {
+  const codexHook = {
+    hooks: [
+      {
+        type: "command",
+        command: `node ${BUNDLE} hook codex`,
+        timeout: CODEX_HOOK_TIMEOUT_SEC,
+      },
+    ],
+  };
+
+  it("adds a hook for each event Codex reports", () => {
+    expect(codexHooks({}, BUNDLE, "node")).toEqual({
+      hooks: {
+        SessionStart: [codexHook],
+        UserPromptSubmit: [codexHook],
+        PostToolUse: [codexHook],
+        SessionEnd: [codexHook],
+      },
+    });
+  });
+
+  it("replaces its own hooks, from any bundle path, and keeps the rest", () => {
+    const theirs = {
+      matcher: "Bash",
+      hooks: [{ type: "command", command: "./audit.sh", timeout: 5 }],
+    };
+    const stale = {
+      hooks: [
+        { type: "command", command: "node /old/antibody.mjs hook codex" },
+      ],
+    };
+    const before = {
+      description: "team hooks",
+      hooks: { PostToolUse: [theirs, stale], Stop: [theirs] },
+    };
+    const after = codexHooks(before, BUNDLE, "node");
+    expect(after).toEqual({
+      description: "team hooks",
+      hooks: {
+        PostToolUse: [theirs, codexHook],
+        Stop: [theirs],
+        SessionStart: [codexHook],
+        UserPromptSubmit: [codexHook],
+        SessionEnd: [codexHook],
+      },
+    });
+    expect(codexHooks(after, BUNDLE, "node")).toEqual(after);
+    expect(codexHooks(after, BUNDLE, "node", true)).toEqual({
+      description: "team hooks",
+      hooks: { PostToolUse: [theirs], Stop: [theirs] },
+    });
+    expect(
+      codexHooks(codexHooks({}, BUNDLE, "node"), BUNDLE, "node", true),
+    ).toEqual({});
+  });
+});
+
+describe("antibody setup codex", () => {
+  let home: string;
+  let out: string;
+  const setup = (env: NodeJS.ProcessEnv, ...args: string[]) =>
+    runSetup(
+      args,
+      {
+        stdout: (t) => void (out += t),
+        stderr: () => undefined,
+        env: { HOME: home, ...env },
+      },
+      { bundle: BUNDLE },
+    );
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "antibody-setup-codex-"));
+    out = "";
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("writes ~/.codex/hooks.json and says how to trust it and add the MCP server", async () => {
+    expect(await setup({}, "codex")).toBe(0);
+    const file = join(home, ".codex", "hooks.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(
+      codexHooks({}, BUNDLE, "node"),
+    );
+    expect(out).toBe(
+      [
+        `Added antibody's hooks (SessionStart, UserPromptSubmit, PostToolUse, SessionEnd) to ${file}.`,
+        "Codex runs new hooks once you trust them: review them with /hooks.",
+        "To add the MCP server too, run",
+        `  codex mcp add antibody -- node ${BUNDLE} mcp codex`,
+        "",
+      ].join("\n"),
+    );
+    out = "";
+    expect(await setup({}, "codex", "--remove")).toBe(0);
+    expect(out).toBe(
+      `Removed antibody's hooks from ${file}.\nIf you added its MCP server, remove it with: codex mcp remove antibody\n`,
+    );
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
+  });
+
+  it("follows CODEX_HOME", async () => {
+    const codexHome = join(home, "elsewhere");
+    expect(await setup({ CODEX_HOME: codexHome }, "codex")).toBe(0);
+    expect(
+      JSON.parse(readFileSync(join(codexHome, "hooks.json"), "utf8")).hooks,
+    ).toHaveProperty("PostToolUse");
   });
 });

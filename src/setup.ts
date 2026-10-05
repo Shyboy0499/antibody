@@ -8,13 +8,20 @@
 //                                         "command": …, "timeout": ms }] }] },
 //   "mcpServers": { "<name>": { "command": …, "args": [ … ] } }
 //
-// Every entry antibody writes is named "antibody", so running setup again
+// Codex CLI reads hooks from ~/.codex/hooks.json (or $CODEX_HOME/hooks.json)
+// in the same shape, with `timeout` in seconds and no `name`, and asks the user
+// to trust new hooks before it runs them. Its MCP servers live in config.toml,
+// which setup does not edit: it prints the `codex mcp add` command instead.
+//
+// Every entry antibody writes is recognisable as its own - named "antibody"
+// for Gemini CLI, running `… hook codex` for Codex - so running setup again
 // replaces its own entries and nothing else, and --remove takes them out.
 // The rest of the file is left as it was. A file that is not plain JSON is
 // never overwritten: Gemini CLI allows comments in it, which a rewrite would
 // lose.
 import { dirname, join, resolve } from "node:path";
 import type { CliIo } from "./cli";
+import { CODEX, CODEX_EVENTS } from "./codex";
 import { GEMINI, GEMINI_EVENTS } from "./gemini";
 import { nodeFs } from "./lazy";
 
@@ -23,6 +30,9 @@ export const SETUP_NAME = "antibody";
 
 /** A Gemini CLI hook's time limit, in milliseconds. */
 export const GEMINI_HOOK_TIMEOUT_MS = 10_000;
+
+/** A Codex CLI hook's time limit, in seconds. */
+export const CODEX_HOOK_TIMEOUT_SEC = 10;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,14 +44,41 @@ export function shellQuote(path: string): string {
     : `'${path.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Whether a hook definition holds only antibody's hooks. */
-function ours(definition: unknown): boolean {
+/** Whether a hook definition holds only hooks that pass `isOurs`. */
+function onlyOurs(
+  definition: unknown,
+  isOurs: (hook: Record<string, unknown>) => boolean,
+): boolean {
   return (
     isRecord(definition) &&
     Array.isArray(definition.hooks) &&
     definition.hooks.length > 0 &&
-    definition.hooks.every((h) => isRecord(h) && h.name === SETUP_NAME)
+    definition.hooks.every((h) => isRecord(h) && isOurs(h))
   );
+}
+
+/**
+ * A `hooks` section with antibody's definition put on each event, after the
+ * definitions it already had, or taken off; empty events are dropped.
+ */
+function withHooks(
+  section: unknown,
+  events: readonly string[],
+  isOurs: (hook: Record<string, unknown>) => boolean,
+  hook: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const hooks: Record<string, unknown> = isRecord(section)
+    ? { ...section }
+    : {};
+  for (const event of events) {
+    const kept = (Array.isArray(hooks[event]) ? hooks[event] : []).filter(
+      (definition) => !onlyOurs(definition, isOurs),
+    );
+    if (hook !== undefined) kept.push({ hooks: [hook] });
+    if (kept.length > 0) hooks[event] = kept;
+    else delete hooks[event];
+  }
+  return hooks;
 }
 
 /**
@@ -61,28 +98,20 @@ export function geminiSettings(
   remove = false,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...settings };
-  const hooks: Record<string, unknown> = isRecord(settings.hooks)
-    ? { ...settings.hooks }
-    : {};
   const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${GEMINI}`;
-  for (const event of Object.keys(GEMINI_EVENTS)) {
-    const kept = (Array.isArray(hooks[event]) ? hooks[event] : []).filter(
-      (definition) => !ours(definition),
-    );
-    if (!remove)
-      kept.push({
-        hooks: [
-          {
-            type: "command",
-            name: SETUP_NAME,
-            command,
-            timeout: GEMINI_HOOK_TIMEOUT_MS,
-          },
-        ],
-      });
-    if (kept.length > 0) hooks[event] = kept;
-    else delete hooks[event];
-  }
+  const hooks = withHooks(
+    settings.hooks,
+    Object.keys(GEMINI_EVENTS),
+    (hook) => hook.name === SETUP_NAME,
+    remove
+      ? undefined
+      : {
+          type: "command",
+          name: SETUP_NAME,
+          command,
+          timeout: GEMINI_HOOK_TIMEOUT_MS,
+        },
+  );
   if (Object.keys(hooks).length > 0) next.hooks = hooks;
   else delete next.hooks;
 
@@ -96,6 +125,40 @@ export function geminiSettings(
   return next;
 }
 
+// A hook runs `… hook codex`: antibody's, whatever path its bundle had.
+const CODEX_HOOK = / hook codex$/;
+
+/**
+ * A Codex CLI hooks.json with antibody's hooks added, or taken out. Other
+ * hooks, and every other field, are kept as they were.
+ *
+ * @param file - the parsed hooks.json, or {} when there is none.
+ * @param bundle - the absolute path of dist/antibody.mjs.
+ * @param node - the Node.js executable the hooks run.
+ * @param remove - take antibody's hooks out instead of adding them.
+ * @returns the new file; the input is not changed.
+ */
+export function codexHooks(
+  file: Record<string, unknown>,
+  bundle: string,
+  node: string,
+  remove = false,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...file };
+  const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${CODEX}`;
+  const hooks = withHooks(
+    file.hooks,
+    CODEX_EVENTS,
+    (hook) => typeof hook.command === "string" && CODEX_HOOK.test(hook.command),
+    remove
+      ? undefined
+      : { type: "command", command, timeout: CODEX_HOOK_TIMEOUT_SEC },
+  );
+  if (Object.keys(hooks).length > 0) next.hooks = hooks;
+  else delete next.hooks;
+  return next;
+}
+
 /** What `antibody setup` needs from the machine; injected in tests. */
 export interface SetupDeps {
   /** The home directory; $HOME by default. */
@@ -104,15 +167,16 @@ export interface SetupDeps {
   bundle?: string;
 }
 
-const SETUP_USAGE = `usage: antibody setup gemini [--settings <file>] [--remove] [--print]
-  --settings <file>  the settings file (default ~/.gemini/settings.json)
-  --remove           take antibody's hooks and MCP server out again
-  --print            print the new settings instead of writing them
+const SETUP_USAGE = `usage: antibody setup <gemini|codex> [--settings <file>] [--remove] [--print]
+  --settings <file>  the file to change (default ~/.gemini/settings.json,
+                     or ~/.codex/hooks.json)
+  --remove           take antibody's entries out again
+  --print            print the new file instead of writing it
 `;
 
 /**
- * `antibody setup gemini`: add antibody's hooks and MCP server to Gemini CLI's
- * settings, or take them out.
+ * `antibody setup <gemini|codex>`: add antibody's hooks (and, for Gemini CLI,
+ * its MCP server) to the harness's settings, or take them out.
  *
  * @param args - the arguments after `setup`.
  * @param io - stdout and stderr, and the environment.
@@ -143,7 +207,7 @@ export async function runSetup(
     else if (harness === undefined) harness = arg;
     else return usage(`unexpected argument: ${arg}`);
   }
-  if (harness !== GEMINI)
+  if (harness !== GEMINI && harness !== CODEX)
     return usage(
       harness === undefined
         ? "setup needs a harness"
@@ -151,7 +215,12 @@ export async function runSetup(
     );
 
   const home = deps.home ?? io.env.HOME ?? "";
-  const path = resolve(file ?? join(home, ".gemini", "settings.json"));
+  const path = resolve(
+    file ??
+      (harness === GEMINI
+        ? join(home, ".gemini", "settings.json")
+        : join(io.env.CODEX_HOME || join(home, ".codex"), "hooks.json")),
+  );
   let settings: Record<string, unknown> = {};
   let text: string | undefined;
   try {
@@ -178,14 +247,19 @@ export async function runSetup(
       );
     else {
       io.stderr(
-        `antibody: ${path} is not plain JSON (comments, perhaps), so it was left as it was. Run 'antibody setup gemini --print' and merge the entries by hand.\n`,
+        `antibody: ${path} is not plain JSON (comments, perhaps), so it was left as it was. Run 'antibody setup ${harness} --print' and merge the entries by hand.\n`,
       );
       return 1;
     }
   }
 
   const bundle = deps.bundle ?? nodeFs.realpathSync(process.argv[1] as string);
-  const next = geminiSettings(settings, bundle, "node", remove);
+  const next = (harness === GEMINI ? geminiSettings : codexHooks)(
+    settings,
+    bundle,
+    "node",
+    remove,
+  );
   const json = `${JSON.stringify(next, null, 2)}\n`;
   if (print) {
     io.stdout(json);
@@ -195,10 +269,26 @@ export async function runSetup(
   const temp = `${path}.antibody-${process.pid}.tmp`;
   nodeFs.writeFileSync(temp, json);
   nodeFs.renameSync(temp, path);
-  io.stdout(
-    remove
-      ? `Removed antibody's hooks and MCP server from ${path}.\n`
-      : `Added antibody's hooks (${Object.keys(GEMINI_EVENTS).join(", ")}) and MCP server to ${path}.\nRestart Gemini CLI to load them.\n`,
-  );
+  // One line per entry; the lines are joined below.
+  const lines =
+    harness === GEMINI
+      ? remove
+        ? [`Removed antibody's hooks and MCP server from ${path}.`]
+        : [
+            `Added antibody's hooks (${Object.keys(GEMINI_EVENTS).join(", ")}) and MCP server to ${path}.`,
+            "Restart Gemini CLI to load them.",
+          ]
+      : remove
+        ? [
+            `Removed antibody's hooks from ${path}.`,
+            `If you added its MCP server, remove it with: codex mcp remove ${SETUP_NAME}`,
+          ]
+        : [
+            `Added antibody's hooks (${CODEX_EVENTS.join(", ")}) to ${path}.`,
+            "Codex runs new hooks once you trust them: review them with /hooks.",
+            "To add the MCP server too, run",
+            `  codex mcp add ${SETUP_NAME} -- node ${shellQuote(bundle)} mcp ${CODEX}`,
+          ];
+  io.stdout(`${lines.join("\n")}\n`);
   return 0;
 }
