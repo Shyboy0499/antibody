@@ -15,3 +15,4 @@ export * from "./state";
 export * from "./events";
 export * from "./claims";
 export * from "./agent";
+export * from "./claude-code";
