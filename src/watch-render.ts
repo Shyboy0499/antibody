@@ -122,11 +122,15 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     });
     return line + " ".repeat(budget);
   };
-  const clock = (iso: string | Date) =>
-    new Date(iso).toLocaleTimeString("en-GB", {
-      hour12: false,
-      ...(o.timeZone === undefined ? {} : { timeZone: o.timeZone }),
-    });
+  // One formatter for the frame: building one per row is the slow part.
+  const clockFormat = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    ...(o.timeZone === undefined ? {} : { timeZone: o.timeZone }),
+  });
+  const clock = (iso: string | Date) => clockFormat.format(new Date(iso));
   const ago = (iso: string) => elapsedText(o.now.getTime() - Date.parse(iso));
   const heading = (title: string, summary = "") =>
     row([` ${title}  `, cells(title) + 3, "bold"], [summary, -1, "dim"]);

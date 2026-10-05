@@ -241,4 +241,47 @@ describe("renderView", () => {
     );
     expect(none.join("\n")).toContain("no fixes yet");
   });
+
+  it("keeps up with an eight-agent fleet, at 80 columns and wide", async () => {
+    const { fleetView } = await import("../src/watch-model");
+    const agents = Array.from({ length: 8 }, (_, i) => `agent-${i}@wt-${i}`);
+    const events = Array.from({ length: 5_000 }, (_, i) => ({
+      v: 1 as const,
+      t: ago(5_000 - i),
+      kind: (["miss", "hit", "notice", "fix", "hold"] as const)[i % 5],
+      agent: agents[i % 8]!,
+      session: `s-${i % 8}`,
+      id: `E-${String((i % 200) + 1).padStart(4, "0")}`,
+      tokens: 40,
+      notice: "hit" as const,
+      text: `error number ${i % 200} in a fairly long message`,
+    }));
+    const entries = Array.from({ length: 200 }, (_, i) => ({
+      id: `E-${String(i + 1).padStart(4, "0")}`,
+      title: `[command-exit:Bash] pnpm test → error number ${i}`,
+      meta: {},
+      fingerprint: `fp${i}`,
+      category: "command-exit / Bash",
+      firstSeen: "2026-10-05",
+      lastSeen: "2026-10-05",
+      hits: 3,
+      trigger: "",
+      raw: "",
+      fix: i % 2 === 0 ? `Fix number ${i}.` : "",
+      status: (i % 2 === 0 ? "fixed" : "open") as "fixed" | "open",
+      notes: "",
+    }));
+    const start = performance.now();
+    for (const width of [80, 200])
+      for (let frame = 0; frame < 5; frame++)
+        renderView(
+          fleetView(events, entries, { version: 1, claims: {} }, NOW),
+          {
+            ...options({ width, height: 50 }),
+            color: true,
+          },
+        );
+    // Ten frames; a few redraws a second leaves each several hundred ms.
+    expect((performance.now() - start) / 10).toBeLessThan(100);
+  });
 });

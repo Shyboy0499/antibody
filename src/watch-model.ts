@@ -225,13 +225,25 @@ export function fleetView(
     (e) => e.kind === "hit" && e.id !== undefined && fixedIds.has(e.id),
   ).length;
 
+  // Per entry, in one pass: its fix notices and their tokens, and who
+  // recorded its latest fix.
+  const reuse = new Map<string, { count: number; tokens: number }>();
+  const fixedBy = new Map<string, string>();
+  for (const e of events) {
+    if (e.id === undefined) continue;
+    if (e.kind === "fix") fixedBy.set(e.id, e.agent);
+    if (!fixNotice(e)) continue;
+    const tally = reuse.get(e.id) ?? { count: 0, tokens: 0 };
+    tally.count++;
+    tally.tokens += e.tokens ?? 0;
+    reuse.set(e.id, tally);
+  }
+  const claimOf = new Map(live.map((c) => [c.id, c]));
+
   const antibodies: AntibodyRow[] = entries.map((entry) => {
-    const reusedNotices = fixNotices.filter((e) => e.id === entry.id);
-    const spent = reusedNotices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-    let fixEvent: MemoryEvent | undefined;
-    for (const e of events)
-      if (e.kind === "fix" && e.id === entry.id) fixEvent = e;
-    const claim = live.find((c) => c.id === entry.fingerprint);
+    const { count, tokens } = reuse.get(entry.id) ?? { count: 0, tokens: 0 };
+    const beatenBy = fixedBy.get(entry.id);
+    const claim = claimOf.get(entry.fingerprint);
     const hasFix = oneLine(entry.fix) !== "";
     return {
       id: entry.id,
@@ -241,12 +253,9 @@ export function fleetView(
       status: entry.status,
       fix: oneLine(entry.fix),
       ...(!hasFix && claim !== undefined ? { diagnosing: claim.agent } : {}),
-      ...(fixEvent === undefined ? {} : { beatenBy: fixEvent.agent }),
-      reused: reusedNotices.length,
-      saved: Math.max(
-        0,
-        reusedNotices.length * ASSUMED_DIAGNOSIS_TOKENS - spent,
-      ),
+      ...(beatenBy === undefined ? {} : { beatenBy }),
+      reused: count,
+      saved: Math.max(0, count * ASSUMED_DIAGNOSIS_TOKENS - tokens),
     };
   });
 
