@@ -1,8 +1,8 @@
 # antibody design
 
-Status: draft, October 2026. Milestones M1 (core and shared memory) and M2 (the
-Claude Code plugin and the MCP server) are implemented; the Codex CLI and Gemini CLI
-adapters and `antibody watch` are not yet. Statements about
+Status: draft, October 2026. Milestones M1 (core and shared memory), M2 (the
+Claude Code plugin and the MCP server) and M3 (the Gemini CLI and Codex CLI adapters)
+are implemented; `antibody watch` is not yet. Statements about
 other tools' hook APIs come from their public documentation and are marked where
 they still need to be checked against a running copy.
 
@@ -191,8 +191,8 @@ never break or block an agent.
 | Harness | Capture | Inject | Notes |
 | --- | --- | --- | --- |
 | Claude Code | `PostToolUseFailure` (receives `error`), and `PostToolUse` for Bash calls that exit non-zero | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
-| Codex CLI | `PostToolUse` in `~/.codex/hooks.json` (hooks reached general availability in May 2026) | The hook's replacement of the tool result | Payload field names to verify in M3. MCP server for the tools. |
-| Gemini CLI | `AfterTool` | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result | Shipped as an extension. Payload to verify in M3. |
+| Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line; the MCP server is added with `codex mcp add`. |
+| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
 
 ### 5.1 MCP tools

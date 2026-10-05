@@ -2,14 +2,15 @@
 
 **Herd immunity for coding-agent fleets.** When one agent beats an error, every agent running beside it becomes immune.
 
-![Status](https://img.shields.io/badge/status-M2%3A%20Claude%20Code-yellowgreen)
+![Status](https://img.shields.io/badge/status-M3%3A%20Claude%20Code%2C%20Gemini%2C%20Codex-yellowgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> **Status: M2, Claude Code.** antibody installs as a Claude Code plugin. Its hooks
-> capture errors, claims keep two agents from diagnosing the same new one, and a
-> recorded fix reaches the other sessions in the repository at their next tool call.
-> Five MCP tools let agents look errors up and record fixes. Codex CLI, Gemini CLI and
-> the `antibody watch` view come next; the [roadmap](docs/roadmap.md) has the rest.
+> **Status: M3, a mixed fleet.** antibody installs as a Claude Code plugin, and
+> `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture errors, claims
+> keep two agents from diagnosing the same new one, and a recorded fix reaches the
+> other sessions in the repository at their next tool call, whichever CLI they run.
+> Five MCP tools let any agent look errors up and record fixes. The `antibody watch`
+> view comes next; the [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
 
@@ -109,7 +110,9 @@ three seconds it prints nothing. Set `ANTIBODY_DEBUG=1` to see why on stderr.
 the way Claude Code calls it, and CI runs it on every push. Two sessions in two
 worktrees hit the same missing-`.env` error. The fix the first session records reaches
 the second on its next tool call: **48 ms** later on a GitHub Actions runner, and
-about 65 ms later in the development container.
+about 65 ms later in the development container. It then plays the same exchange
+between Claude Code, Gemini CLI and Codex CLI agents in all six directions, and each
+fix arrives about 50 ms after it is recorded.
 
 Each hook call is a separate Node.js process, so most of its cost is starting one. A
 hook loads nothing beyond Node's own start-up: it starts no git process, hashes in
@@ -126,6 +129,57 @@ median hook call takes:
 The roadmap's target is under 50 ms per call. On the runner every kind of call meets
 it; in the development container a failing call is still about 10 ms over.
 
+## Install in Gemini CLI and Codex CLI
+
+Neither CLI can share this repository as a plugin, so `antibody setup` writes
+antibody into their own settings. Clone the repository anywhere, then run setup for
+each CLI you use:
+
+```sh
+git clone https://github.com/Shyboy0499/antibody ~/.local/share/antibody
+node ~/.local/share/antibody/dist/antibody.mjs setup gemini   # ~/.gemini/settings.json
+node ~/.local/share/antibody/dist/antibody.mjs setup codex    # ~/.codex/hooks.json
+```
+
+- **Gemini CLI** gets hooks on `SessionStart`, `BeforeAgent`, `AfterTool` and
+  `SessionEnd`, plus the MCP server. Restart Gemini CLI to load them.
+- **Codex CLI** gets hooks on `SessionStart`, `UserPromptSubmit`, `PostToolUse` and
+  `SessionEnd`. Codex runs new hooks once you trust them in `/hooks`, and setup prints
+  the `codex mcp add` command for the MCP server. Codex gives a hook a shell command's
+  output but not its exit code, so antibody counts a command as failed only when its
+  output ends in an error line, and never for commands that only display text (`cat`,
+  `grep`, `git log` and the like).
+
+Run setup again after moving the clone. `--remove` takes antibody out again,
+`--print` shows the result without writing it, and a settings file with comments is
+never rewritten.
+
+### Other agents
+
+Any agent that speaks MCP can use the tools. It pulls fixes instead of having them
+pushed. Point it at the server, named after the agent:
+
+```json
+{
+  "mcpServers": {
+    "antibody": {
+      "command": "node",
+      "args": ["/path/to/antibody/dist/antibody.mjs", "mcp", "cursor"]
+    }
+  }
+}
+```
+
+and add one line to the project's `AGENTS.md`:
+
+```markdown
+When a command fails with an error you have not seen, call antibody_lookup before
+diagnosing it; when you get past it, record the fix with antibody_record.
+```
+
+The server finds the repository from the directory it starts in, so configure it per
+project.
+
 ## See it
 
 `antibody watch` (milestone M4) will be the live fleet view, in your terminal next
@@ -141,12 +195,13 @@ back to paying for the same diagnosis over and over.
 | Agent | How antibody connects | Fix delivery |
 | --- | --- | --- |
 | Claude Code (works today) | Plugin: `PostToolUseFailure`, `PostToolUse`, `SessionStart`, `UserPromptSubmit` and `SessionEnd` hooks, plus an MCP server | Pushed through `additionalContext` |
-| Codex CLI | `PostToolUse` hook (`~/.codex/hooks.json`), plus MCP | Pushed through the hook |
-| Gemini CLI | Extension: `AfterTool` hook, plus MCP | Pushed through `hookSpecificOutput.additionalContext` |
+| Gemini CLI (works today) | `antibody setup gemini`: `SessionStart`, `BeforeAgent`, `AfterTool` and `SessionEnd` hooks plus the MCP server in `~/.gemini/settings.json` | Pushed through `hookSpecificOutput.additionalContext` |
+| Codex CLI (works today) | `antibody setup codex`: `SessionStart`, `UserPromptSubmit`, `PostToolUse` and `SessionEnd` hooks in `~/.codex/hooks.json`, plus `codex mcp add` | Pushed through `hookSpecificOutput.additionalContext`; shell failures inferred from their output |
 | Cursor, OpenCode, Aider and others | MCP server only | Pulled when the agent calls `antibody_lookup` |
 
-Hook payloads for Codex CLI and Gemini CLI are taken from their public docs and get
-verified in milestone M3.
+The Gemini CLI and Codex CLI adapters were written against the payloads in each
+CLI's own source (Gemini CLI 0.62.0, Codex CLI 0.160.1), and the end-to-end check
+plays those payloads in every direction.
 
 It works under any orchestrator, because it only needs the agents' own hooks:
 herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or plain
@@ -171,7 +226,8 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | The Claude Code adapter and the `antibody` command line | `src/claude-code.ts`, `src/cli.ts`, `dist/antibody.mjs` | Built |
 | The five agent tools and the MCP server | `src/tools.ts`, `src/mcp.ts` | Built |
 | The Claude Code plugin | `.claude-plugin/`, `hooks/hooks.json` | Built; validated with `claude plugin validate` |
-| Codex CLI and Gemini CLI adapters | | M3 |
+| The Gemini CLI and Codex CLI adapters | `src/gemini.ts`, `src/codex.ts`, `src/hook-input.ts` | Built; payloads read off each CLI's source |
+| `antibody setup` for Gemini CLI and Codex CLI | `src/setup.ts` | Built |
 | `antibody watch` | `demo/index.html` | M4; simulated demo only |
 
 ## Built on dsh-errkb
