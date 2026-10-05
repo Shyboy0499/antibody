@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Antibody Fleet View</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: one terminal window running `antibody watch`, a full-screen TUI with a status bar, four panes and a key bar.
+   The page around it follows the viewer's theme; the terminal stays dark in both, the way a real terminal does. */
+:root {
+  --bg: #e7e9ef;
+  --ink: #1c1f2e;
+  --muted: #5c6175;
+  --shadow: 0 18px 50px -18px rgba(20, 24, 40, 0.45);
+  --t-bg: #101218;
+  --t-fg: #d5d8e2;
+  --t-dim: #7d8294;
+  --t-border: #343a4c;
+  --t-bar: #222738;
+  --t-title: #eceef5;
+  --t-blue: #84a9ff;
+  --t-red: #ff6b8b;
+  --t-yellow: #f3c96b;
+  --t-green: #82e0a0;
+  --t-cyan: #6cd3dc;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #07080c;
+    --ink: #e3e5ee;
+    --muted: #8f94a8;
+    --shadow: 0 0 0 1px #1d2130;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #07080c;
+  --ink: #e3e5ee;
+  --muted: #8f94a8;
+  --shadow: 0 0 0 1px #1d2130;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--mono); }
+.page { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 20px 40px; display: grid; gap: 14px; }
+.lede { margin: 0; font-size: 13px; color: var(--muted); max-width: 95ch; }
+.lede b { color: var(--ink); font-weight: 700; }
+.lede code { color: var(--ink); }
+
+/* terminal window */
+.term {
+  background: var(--t-bg);
+  color: var(--t-fg);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+  min-width: 0;
+}
+.term:focus { outline: none; }
+.term:focus-visible { outline: 2px solid var(--t-cyan); outline-offset: 3px; }
+.titlebar {
+  display: flex; justify-content: center; align-items: center;
+  padding: 7px 12px;
+  background: #1a1d27;
+  color: var(--t-dim);
+  font-size: 12px;
+  border-bottom: 1px solid #262a38;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.screen { padding: 0 0 6px; display: grid; gap: 14px; min-width: 0; }
+
+/* status bar, tmux style */
+.status {
+  display: flex; flex-wrap: wrap;
+  background: var(--t-bar);
+  color: var(--t-title);
+  font-size: 12.5px;
+}
+.status span { padding: 3px 10px; white-space: nowrap; border-right: 1px solid var(--t-bg); }
+.status .app { background: var(--t-green); color: var(--t-bg); font-weight: 700; }
+.status .app.off { background: var(--t-red); }
+.status .grow { flex: 1; border-right: 0; }
+.status .on { color: var(--t-green); }
+.status .off-t { color: var(--t-red); }
+.status .clock { font-variant-numeric: tabular-nums; }
+
+/* panes */
+.panes { display: grid; gap: 16px 12px; padding-inline: 12px; min-width: 0; }
+.pane {
+  position: relative;
+  border: 1px solid var(--t-border);
+  border-radius: 5px;
+  padding: 12px 12px 9px;
+  min-width: 0;
+}
+.pane > h2 {
+  position: absolute; top: -0.78em; left: 10px;
+  margin: 0; padding: 0 6px;
+  font: 700 12.5px/1.2 var(--mono);
+  background: var(--t-bg);
+  color: var(--t-title);
+}
+.pane > h2 small { color: var(--t-dim); font-weight: 400; font-size: 12px; }
+.pane.hot { border-color: #4a5168; }
+
+.fleet-row {
+  display: grid;
+  grid-template-columns: 9ch 21ch 13ch minmax(0, 1fr);
+  gap: 0 1.5ch;
+  white-space: nowrap;
+}
+.fleet-row > * { overflow: hidden; text-overflow: ellipsis; }
+.fleet-row.head { color: var(--t-dim); font-size: 11.5px; letter-spacing: 0.04em; }
+.who { color: var(--t-blue); font-weight: 700; }
+.dim { color: var(--t-dim); }
+.red { color: var(--t-red); }
+.yellow { color: var(--t-yellow); }
+.green { color: var(--t-green); }
+.cyan { color: var(--t-cyan); }
+.bold { font-weight: 700; }
+
+.kv { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 2ch; }
+.kv .v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kv .note { grid-column: 1 / -1; color: var(--t-dim); font-size: 12px; margin-top: -1px; margin-bottom: 4px; }
+.kv .spark { letter-spacing: 0.06em; color: var(--t-green); white-space: nowrap; overflow: hidden; font-size: 13px; }
+
+.scroll-x { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: inherit; }
+th { text-align: left; color: var(--t-dim); font-weight: 400; font-size: 11.5px; letter-spacing: 0.04em; padding: 0 2ch 2px 0; white-space: nowrap; }
+td { padding: 1px 2ch 1px 0; white-space: nowrap; vertical-align: top; }
+td.num, th.num { text-align: right; padding-right: 0; padding-left: 2ch; font-variant-numeric: tabular-nums; }
+
+.log { height: 15.5em; overflow-y: auto; }
+.line { display: grid; grid-template-columns: 6ch 9ch minmax(0, 1fr); gap: 0 1.5ch; }
+.line .txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* key bar */
+.keys { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 2px 12px 4px; color: var(--t-dim); font-size: 12.5px; }
+.key {
+  font: inherit; color: var(--t-dim);
+  background: none; border: 0; padding: 0; cursor: pointer;
+  display: inline-flex; gap: 6px; align-items: center;
+}
+.key kbd {
+  font: 700 11.5px/1 var(--mono);
+  background: var(--t-bar); color: var(--t-title);
+  padding: 3px 6px; border-radius: 3px;
+}
+.key:hover { color: var(--t-fg); }
+.key:focus-visible { outline: 1px solid var(--t-cyan); outline-offset: 2px; }
+.key .state { color: var(--t-fg); }
+
+.foot { margin: 0; font-size: 12px; color: var(--muted); max-width: 100ch; }
+
+@media (min-width: 900px) {
+  .panes { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
+  .pane.wide { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .fleet-row { grid-template-columns: 9ch 12ch minmax(0, 1fr); }
+  .fleet-row .task { display: none; }
+}
+@media (max-width: 520px) {
+  .page { padding-inline: 16px; }
+  .term { font-size: 12px; }
+  .fleet-row { grid-template-columns: 8ch minmax(0, 1fr); }
+  .fleet-row .detail { grid-column: 2; }
+  .fleet-row.head .detail { display: none; }
+  .line { grid-template-columns: 5.5ch minmax(0, 1fr); }
+  .line .who { display: none; }
+  .status .path { display: none; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+  <p class="lede"><b>antibody</b> gives a fleet of coding agents a shared memory for errors. This is a simulated run of <code>antibody watch</code>: eight agents in parallel worktrees of one repo. Press <code>m</code> (or click the key bar) to turn shared memory off and watch every agent pay for the same diagnosis again.</p>
+
+  <div class="term" id="term" tabindex="0" role="region" aria-label="antibody watch, simulated terminal. Keys: m turns shared memory on or off, space pauses, 1 2 4 set the speed, r restarts.">
+    <div class="titlebar">antibody watch — ~/code/acme-shop — 132×40</div>
+    <div class="screen">
+      <div class="status" id="status"></div>
+      <div class="panes">
+        <section class="pane hot" aria-label="Fleet"><h2>Fleet <small id="fleet-sum"></small></h2><div id="fleet"></div></section>
+        <section class="pane" aria-label="Memory"><h2>Memory</h2><div id="mem"></div></section>
+        <section class="pane wide" aria-label="Antibodies"><h2>Antibodies <small>ANTIBODIES.md</small></h2><div class="scroll-x"><table id="anti"></table></div></section>
+        <section class="pane wide" aria-label="Events"><h2>Events <small>events.jsonl</small></h2><div class="log" id="log"></div></section>
+      </div>
+      <div class="keys">
+        <button class="key" id="k-mem" type="button"><kbd>m</kbd>memory <span class="state" id="k-mem-s">on</span></button>
+        <button class="key" id="k-pause" type="button"><kbd>space</kbd><span id="k-pause-s">pause</span></button>
+        <button class="key" id="k-speed" type="button"><kbd>1</kbd><kbd>2</kbd><kbd>4</kbd>speed <span class="state" id="k-speed-s">2×</span></button>
+        <button class="key" id="k-restart" type="button"><kbd>r</kbd>restart</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">Simulated: the agents, issues and errors are illustrative. Diagnosis costs come from the 800–3,000 token range estimated in dsh-errkb's design, and an injected fix is capped at 120 tokens. Errors are shown the way antibody normalizes them, with ports, paths and timestamps replaced by placeholders, so one fingerprint covers every agent's copy.</p>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const STEP = 0.05;
+  const WARMUP = 30;
+
+  const AGENTS = [
+    ["claude-1", "#412 rate limiter"],
+    ["codex-1", "#420 i18n dates"],
+    ["gemini-1", "#402 search filters"],
+    ["claude-2", "#415 CSV export"],
+    ["codex-2", "#407 webhook retries"],
+    ["gemini-2", "#418 dark mode"],
+    ["claude-3", "#398 flaky auth test"],
+    ["codex-3", "#411 audit log"],
+  ];
+
+  // `from` is the run time in seconds when an error can first appear, so new failures keep arriving for about two minutes.
+  const CATALOG = [
+    { fp: "4be1c09a7f32", cat: "bash", w: 5, from: 0,
+      msg: "connect ECONNREFUSED 127.0.0.1:<port>",
+      fix: "Postgres isn't up in this worktree: docker compose up -d db" },
+    { fp: "a07d3e915c6b", cat: "bash", w: 4, from: 0,
+      msg: "PrismaClientInitializationError: Environment variable not found: DATABASE_URL",
+      fix: "Worktrees skip untracked files: copy .env from the main checkout" },
+    { fp: "9c2f61d0e8a4", cat: "bash", w: 4, from: 0,
+      msg: "listen EADDRINUSE: address already in use :::<port>",
+      fix: "Port 3000 belongs to another agent's dev server: start with PORT=0" },
+    { fp: "1f8b7a2c40de", cat: "git", w: 3, from: 0,
+      msg: "fatal: 'main' is already checked out at '<path>'",
+      fix: "Each worktree needs its own branch: git switch -c <task>" },
+    { fp: "e63a95b1c7f0", cat: "bash", w: 3, from: 6,
+      msg: "Cannot find module '@acme/shared' imported from <path>/export.ts",
+      fix: "Build the workspace package first: pnpm --filter @acme/shared build" },
+    { fp: "57d0c2e9ab18", cat: "bash", w: 2, from: 12,
+      msg: "The engine \"node\" is incompatible with this module. Expected \">=22.13\". Got \"20.11.1\"",
+      fix: "Wrong Node version: fnm use (reads .nvmrc), then pnpm install" },
+    { fp: "c8e41f6a2d93", cat: "bash", w: 2, from: 20,
+      msg: "browserType.launch: Executable doesn't exist at <path>/chrome",
+      fix: "Browsers aren't installed here: pnpm exec playwright install chromium" },
+    { fp: "0d93be47a1c5", cat: "bash", w: 3, from: 28,
+      msg: "ERR_PNPM_OUTDATED_LOCKFILE Cannot install with \"frozen-lockfile\" because pnpm-lock.yaml is not up to date",
+      fix: "Another agent changed package.json: pnpm install, then commit the lockfile" },
+    { fp: "b71e0c3f9a62", cat: "bash", w: 3, from: 38,
+      msg: "error TS2307: Cannot find module './generated/client' or its corresponding type declarations",
+      fix: "Fresh worktrees have no generated client: pnpm prisma generate" },
+    { fp: "6a4f28d1e0b7", cat: "git", w: 2, from: 48,
+      msg: "fatal: Unable to create '<path>/index.lock': File exists",
+      fix: "A git process still holds the lock: wait for it, then retry the commit" },
+    { fp: "f2c85a9037de", cat: "bash", w: 2, from: 60,
+      msg: "Redis connection to 127.0.0.1:<port> failed - connect ECONNREFUSED",
+      fix: "The queue tests need Redis: docker compose up -d redis" },
+    { fp: "38e1d6b0c4fa", cat: "bash", w: 2, from: 74,
+      msg: "Migration \"add_audit_log\" failed: relation \"audit_log\" already exists",
+      fix: "Two agents made the same migration: pnpm db:reset, keep one migration" },
+    { fp: "9b0a7c25e3d1", cat: "bash", w: 2, from: 90,
+      msg: "SyntaxError: Cannot use import statement outside a module",
+      fix: "Run tests through the runner, not node: pnpm test <file>" },
+    { fp: "d45e1f803b9c", cat: "bash", w: 2, from: 108,
+      msg: "Snapshot 'CSV export > header row 1' mismatched",
+      fix: "Snapshots predate the schema change: pnpm test -u, then review the diff" },
+  ];
+
+  const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const BARS = "▁▂▃▄▅▆▇█";
+
+  const $ = (id) => document.getElementById(id);
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const fmt = (n) => Math.round(n).toLocaleString("en-US");
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const clock = (t) => {
+    const s = Math.floor(t);
+    return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+  };
+  const ord = (n) => n + (n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th");
+  const bar = (k, cells) => {
+    const full = Math.round(Math.max(0, Math.min(1, k)) * cells);
+    return "█".repeat(full) + "░".repeat(cells - full);
+  };
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  let rand, S;
+  let running = true;
+  let speed = 2;
+  let hiveOn = true;
+  let dirty = true;
+
+  function reset() {
+    rand = mulberry32(20261005);
+    S = {
+      t: 0,
+      seq: 0,
+      agents: AGENTS.map(([name, task], i) => ({
+        name, task, i, state: "work", next: 1.5 + rand() * 9, err: null, start: 0, dur: 0, cost: 0, notice: 0, saved: 0,
+      })),
+      entries: new Map(),
+      order: [],
+      log: [],
+      windows: [0],
+      stats: { saved: 0, avoided: 0, hits: 0, served: 0, noticeTok: 0, repeatTok: 0, repeats: 0 },
+    };
+  }
+
+  // Errors nobody has met yet are more likely, the way a fleet meets new failures early in a task.
+  function pick() {
+    const pool = CATALOG.filter((c) => c.from <= S.t);
+    const weight = (c) => c.w * (S.entries.has(c.fp) ? 1 : 2.5);
+    let r = rand() * pool.reduce((sum, c) => sum + weight(c), 0);
+    for (const c of pool) { r -= weight(c); if (r <= 0) return c; }
+    return pool[0];
+  }
+
+  function log(kind, who, id, tag, text) {
+    S.log.push({ t: S.t, kind, who, id, tag, text });
+    if (S.log.length > 80) S.log.shift();
+    dirty = true;
+  }
+
+  function addSaved(n) {
+    S.stats.saved += n;
+    S.windows[S.windows.length - 1] += n;
+  }
+
+  function nextWork(a) {
+    a.state = "work"; a.err = null; a.next = S.t + 9 + rand() * 13;
+  }
+
+  function becomeImmune(a, e, viaHold) {
+    a.state = "immune"; a.err = e; a.start = S.t; a.dur = 1.6;
+    a.notice = 88 + Math.floor(rand() * 32);
+    a.saved = Math.max(0, e.cost - a.notice);
+    e.reused += 1; e.saved += a.saved;
+    addSaved(a.saved);
+    S.stats.avoided += 1; S.stats.served += 1; S.stats.noticeTok += a.notice;
+    log("immune", a.name, e.id, "immune",
+      (viaHold ? e.by + "'s fix arrived while holding" : "fix injected (" + a.notice + " tok), solved in one step") +
+      " · saved " + fmt(a.saved));
+  }
+
+  function startDiag(a, e) {
+    a.state = "diag"; a.err = e; a.start = S.t; a.dur = 5 + rand() * 4;
+    a.cost = Math.round((1100 + rand() * 1700) / 10) * 10;
+    e.diagCount += 1;
+    if (hiveOn) e.diagnoser = a.i;
+  }
+
+  function hit(a, forced) {
+    const c = forced || pick();
+    S.stats.hits += 1;
+    let e = S.entries.get(c.fp);
+    if (!e) {
+      S.seq += 1;
+      e = { id: "E-" + String(S.seq).padStart(4, "0"), fp: c.fp, cat: c.cat, msg: c.msg, fixText: c.fix,
+            fix: null, by: null, cost: 0, reused: 0, saved: 0, diagnoser: null, diagCount: 0 };
+      S.entries.set(c.fp, e);
+      S.order.push(e);
+    }
+    if (hiveOn && e.fix) {
+      becomeImmune(a, e, false);
+    } else if (hiveOn && e.diagnoser !== null && e.diagnoser !== a.i) {
+      a.state = "hold"; a.err = e; a.start = S.t;
+      log("hold", a.name, e.id, "holding", S.agents[e.diagnoser].name + " is already diagnosing it");
+    } else {
+      startDiag(a, e);
+      if (e.diagCount === 1) log("new", a.name, e.id, "new error", e.msg);
+      else log("again", a.name, e.id, "diagnosing again", ord(e.diagCount) + " diagnosis of this error · nothing shared the last fix");
+    }
+  }
+
+  function finishDiag(a) {
+    const e = a.err;
+    if (e.diagCount > 1 && (!hiveOn || e.fix)) { S.stats.repeatTok += a.cost; S.stats.repeats += 1; }
+    if (hiveOn) {
+      if (!e.fix) {
+        e.fix = e.fixText; e.by = a.name; e.cost = a.cost;
+        log("antibody", a.name, e.id, "antibody stored", e.fix + " (" + fmt(a.cost) + " tok to find)");
+      }
+      e.diagnoser = null;
+      S.agents.forEach((b) => { if (b.state === "hold" && b.err === e) becomeImmune(b, e, true); });
+    } else {
+      log("beat", a.name, e.id, "fixed alone", "spent " + fmt(a.cost) + " tok · memory is off, the fix stays with this agent");
+    }
+    nextWork(a);
+  }
+
+  function step(dt) {
+    const before = Math.floor(S.t / 4);
+    S.t += dt;
+    if (Math.floor(S.t / 4) !== before) { S.windows.push(0); if (S.windows.length > 40) S.windows.shift(); }
+    for (const a of S.agents) {
+      if (a.state === "work" && S.t >= a.next) hit(a);
+      else if (a.state === "diag" && S.t >= a.start + a.dur) finishDiag(a);
+      else if (a.state === "immune" && S.t >= a.start + a.dur) nextWork(a);
+    }
+  }
+
+  // Fast-forward so the page opens mid-run, then start one fresh diagnosis so the first screen shows one.
+  function warm() {
+    for (let i = 0; i < WARMUP / STEP; i++) step(STEP);
+    const unseen = CATALOG.find((c) => c.from <= S.t && !S.entries.has(c.fp));
+    const idle = S.agents.filter((a) => a.state === "work").sort((x, y) => x.next - y.next)[0];
+    if (unseen && idle && !S.agents.some((a) => a.state === "diag")) hit(idle, unseen);
+    dirty = true;
+  }
+
+  function setHive(on) {
+    hiveOn = on;
+    if (!on) {
+      S.entries.forEach((e) => { e.diagnoser = null; });
+      S.agents.forEach((b) => { if (b.state === "hold") startDiag(b, b.err); });
+      log("system", "", "", "memory off", "every agent now diagnoses each error from scratch");
+    } else {
+      S.agents.forEach((b) => { if (b.state === "diag" && b.err.diagnoser === null && !b.err.fix) b.err.diagnoser = b.i; });
+      log("system", "", "", "memory on", "stored fixes are injected again, new ones are shared");
+    }
+    renderAll();
+  }
+
+  /* ---------- rendering ---------- */
+  function renderStatus() {
+    const busy = S.agents.filter((a) => a.state === "diag").length;
+    $("status").innerHTML =
+      '<span class="app' + (hiveOn ? "" : " off") + '">antibody</span>' +
+      '<span class="path">~/code/acme-shop · main</span>' +
+      "<span>8 agents</span>" +
+      "<span>memory " + (hiveOn ? '<b class="on">● on</b>' : '<b class="off-t">○ off</b>') + "</span>" +
+      "<span>" + busy + " diagnosing</span>" +
+      '<span class="grow"></span>' +
+      "<span>" + (running ? speed + "×" : "paused") + "</span>" +
+      '<span class="clock">' + clock(S.t) + "</span>";
+  }
+
+  function renderFleet(now) {
+    const frame = reduceMotion.matches ? 0 : Math.floor(now * 12) % SPIN.length;
+    const counts = { work: 0, diag: 0, hold: 0, immune: 0 };
+    let html = '<div class="fleet-row head"><span>AGENT</span><span class="task">TASK</span><span>STATE</span><span class="detail">DETAIL</span></div>';
+    for (const a of S.agents) {
+      counts[a.state] += 1;
+      let state, detail;
+      if (a.state === "work") {
+        state = '<span class="dim">· working</span>';
+        detail = '<span class="dim">editing, running tests</span>';
+      } else if (a.state === "diag") {
+        const k = Math.min(1, (S.t - a.start) / a.dur);
+        state = '<span class="yellow">' + (reduceMotion.matches ? "◐" : SPIN[(frame + a.i) % SPIN.length]) + " diagnosing</span>";
+        detail = '<span class="cyan">' + a.err.id + '</span> <span class="yellow">' + bar(k, 10) + "</span> " +
+                 '<span class="red">' + fmt(a.cost * k) + " tok</span>";
+      } else if (a.state === "hold") {
+        state = '<span class="yellow">◌ holding</span>';
+        detail = '<span class="cyan">' + a.err.id + '</span> <span class="dim">' + esc(S.agents[a.err.diagnoser].name) + " is on it</span>";
+      } else {
+        state = '<span class="green">✓ immune</span>';
+        detail = '<span class="cyan">' + a.err.id + '</span> <span class="green">saved ' + fmt(a.saved) + " tok</span>";
+      }
+      html += '<div class="fleet-row"><span class="who">' + esc(a.name) + '</span><span class="task dim">' + esc(a.task) +
+              "</span><span>" + state + '</span><span class="detail">' + detail + "</span></div>";
+    }
+    $("fleet").innerHTML = html;
+    $("fleet-sum").textContent = counts.work + " working · " + counts.diag + " diagnosing · " + counts.hold + " holding";
+  }
+
+  function renderMemory() {
+    const st = S.stats;
+    const known = S.order.filter((e) => e.fix).length;
+    const imm = st.hits ? st.served / st.hits : 0;
+    const win = S.windows.slice(-24);
+    const max = Math.max(1, ...win);
+    const spark = win.map((v) => (v === 0 ? "▁" : BARS[Math.min(7, 1 + Math.floor((v / max) * 6.99))])).join("");
+    $("mem").innerHTML =
+      '<div class="kv">' +
+      '<span>tokens saved</span><span class="v ' + (hiveOn ? "green" : "dim") + '">' + fmt(st.saved) + "</span>" +
+      '<span class="note">after ' + fmt(st.noticeTok) + " tok of injected fixes</span>" +
+      "<span>re-diagnoses avoided</span><span class=\"v\">" + fmt(st.avoided) + "</span>" +
+      "<span>re-spent with memory off</span><span class=\"v " + (st.repeatTok ? "red" : "dim") + '">' + fmt(st.repeatTok) + "</span>" +
+      "<span>antibodies</span><span class=\"v\">" + known + ' <span class="dim">/ ' + S.order.length + "</span></span>" +
+      '<span class="note">' + (S.order.length - known) + " open · " + S.order.length + " fingerprints seen</span>" +
+      "<span>fleet immunity</span><span class=\"v\">" + Math.round(imm * 100) + "%</span>" +
+      '<span class="note"><span class="green">' + bar(imm, 20) + "</span></span>" +
+      "<span>saved per 4 s</span><span class=\"v dim\">last " + win.length * 4 + " s</span>" +
+      '<span class="note spark">' + spark + "</span>" +
+      "</div>";
+  }
+
+  function renderAntibodies() {
+    const rows = S.order.map((e) => {
+      const busy = S.agents.some((a) => a.state === "diag" && a.err === e);
+      const fix = e.fix ? '<span class="green">' + esc(clip(e.fix, 58)) + "</span>"
+        : busy ? '<span class="yellow">diagnosing…</span>' : '<span class="red">open</span>';
+      return '<tr><td class="cyan bold">' + e.id + '</td><td class="dim">' + e.fp + '</td><td class="dim">' + e.cat +
+        '</td><td title="' + esc(e.msg) + '">' + esc(clip(e.msg, 52)) + "</td><td>" + fix + '</td><td class="who">' +
+        (e.by ? esc(e.by) : '<span class="dim">–</span>') + '</td><td class="num">' + e.reused + '</td><td class="num">' + fmt(e.saved) + "</td></tr>";
+    }).join("");
+    $("anti").innerHTML =
+      '<thead><tr><th>ID</th><th>FINGERPRINT</th><th>TOOL</th><th>ERROR (normalized)</th><th>FIX</th><th>BEATEN BY</th><th class="num">REUSED</th><th class="num">SAVED</th></tr></thead>' +
+      "<tbody>" + (rows || '<tr><td class="dim" colspan="8">no errors yet</td></tr>') + "</tbody>";
+  }
+
+  const TAGS = { new: "red", again: "red", hold: "yellow", antibody: "green", immune: "green", beat: "dim", system: "cyan" };
+  function renderLog() {
+    const box = $("log");
+    const pinned = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+    box.innerHTML = S.log.map((l) =>
+      '<div class="line"><span class="dim">' + clock(l.t) + '</span><span class="who">' + esc(l.who) + '</span><span class="txt">' +
+      (l.id ? '<span class="cyan">' + l.id + "</span> " : "") + '<span class="' + TAGS[l.kind] + '">' + esc(l.tag) + "</span>" +
+      '<span class="dim"> · </span>' + esc(l.text) + "</span></div>").join("");
+    if (pinned) box.scrollTop = box.scrollHeight;
+  }
+
+  function renderKeys() {
+    $("k-mem-s").textContent = hiveOn ? "on" : "off";
+    $("k-mem-s").className = "state " + (hiveOn ? "green" : "red");
+    $("k-pause-s").textContent = running ? "pause" : "resume";
+    $("k-speed-s").textContent = speed + "×";
+  }
+
+  function renderAll() {
+    const now = performance.now() / 1000;
+    renderStatus(); renderFleet(now); renderMemory(); renderAntibodies(); renderLog(); renderKeys();
+    dirty = false;
+  }
+
+  /* ---------- input ---------- */
+  function togglePause() { running = !running; renderStatus(); renderKeys(); }
+  function setSpeed(n) { speed = n; renderStatus(); renderKeys(); }
+  function restart() { hiveOn = true; reset(); warm(); renderAll(); $("log").scrollTop = $("log").scrollHeight; }
+
+  $("k-mem").addEventListener("click", () => setHive(!hiveOn));
+  $("k-pause").addEventListener("click", togglePause);
+  $("k-speed").addEventListener("click", () => setSpeed(speed === 1 ? 2 : speed === 2 ? 4 : 1));
+  $("k-restart").addEventListener("click", restart);
+  $("term").addEventListener("keydown", (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if ((ev.key === " " || ev.key === "Enter") && ev.target.closest && ev.target.closest("button")) return;
+    const k = ev.key.toLowerCase();
+    if (k === "m") setHive(!hiveOn);
+    else if (k === " ") togglePause();
+    else if (k === "1" || k === "2" || k === "4") setSpeed(Number(k));
+    else if (k === "r") restart();
+    else return;
+    ev.preventDefault();
+  });
+
+  /* ---------- loop ---------- */
+  reset();
+  warm();
+  renderAll();
+  $("log").scrollTop = $("log").scrollHeight;
+
+  let last = performance.now(), acc = 0, lastFast = 0;
+  function frame(nowMs) {
+    const dt = Math.min(0.1, (nowMs - last) / 1000);
+    last = nowMs;
+    if (running) {
+      acc += dt * speed;
+      while (acc >= STEP) { step(STEP); acc -= STEP; }
+    }
+    if (nowMs - lastFast > 90) {
+      renderStatus(); renderFleet(nowMs / 1000); renderMemory();
+      if (dirty) { renderAntibodies(); renderLog(); dirty = false; }
+      lastFast = nowMs;
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
