@@ -464,3 +464,47 @@ describe("fleet: turns and session end", () => {
     expect(await fleet("s-z").endSession()).toEqual([]);
   });
 });
+
+describe("fleet: recording a fix", () => {
+  const fleet = (session: string) =>
+    createFleet(memory, `agent-${session}`, session);
+
+  it("stores the fix, releases the claim and logs both", async () => {
+    await fail("s-a");
+    const entry = await fleet("s-a").recordFix("E-0001", `  ${FIX}\n`);
+    expect(entry).toMatchObject({ id: "E-0001", fix: FIX, status: "fixed" });
+    expect(await readFile(filesIn(memory).claims, "utf8")).not.toContain(
+      "agent-s-a",
+    );
+    expect((await events()).slice(-2).map((e) => [e.kind, e.agent])).toEqual([
+      ["fix", "agent-s-a"],
+      ["release", "agent-s-a"],
+    ]);
+  });
+
+  it("hands the fix to the agent that was waiting, and to everyone after", async () => {
+    await fail("s-a");
+    await fail("s-b");
+    await fleet("s-a").recordFix("E-0001", FIX);
+    expect((await fleet("s-b").poll())[0]).toContain(`fix: ${FIX}`);
+    expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
+  });
+
+  it("does not log a release when nobody held the claim", async () => {
+    await fail("s-a");
+    await fleet("s-a").endSession();
+    await fleet("s-b").recordFix("E-0001", FIX);
+    expect((await events()).at(-1)).toMatchObject({
+      kind: "fix",
+      agent: "agent-s-b",
+    });
+  });
+
+  it("returns undefined for an unknown entry, and refuses a blank fix", async () => {
+    expect(await fleet("s-a").recordFix("E-0404", FIX)).toBeUndefined();
+    await expect(fleet("s-a").recordFix("E-0001", " \n ")).rejects.toThrow(
+      RangeError,
+    );
+    expect(await events()).toEqual([]);
+  });
+});
