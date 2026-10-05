@@ -6,6 +6,7 @@ import * as notice from "../src/notice";
 import * as paths from "../src/paths";
 import * as redactPatterns from "../src/redact-patterns";
 import * as redact from "../src/redact";
+import * as resolveDetect from "../src/resolve-detect";
 import * as signature from "../src/signature";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
@@ -23,6 +24,7 @@ describe("public entry point", () => {
     ["capture", capture],
     ["notice", notice],
     ["trust", trust],
+    ["resolve-detect", resolveDetect],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
