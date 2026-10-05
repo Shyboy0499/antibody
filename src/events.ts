@@ -13,7 +13,14 @@
 // or parses to the wrong shape, is skipped and counted, never thrown.
 //
 // Privacy. An event's free text goes through redact() before it is written.
-import { appendFile, mkdir, open } from "node:fs/promises";
+import {
+  appendFileSync,
+  closeSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { clip } from "./notice";
 import type { NoticeKind } from "./notice";
@@ -174,8 +181,11 @@ export async function appendEvent(
   event: NewEvent,
   now: Date = new Date(),
 ): Promise<void> {
-  await mkdir(dirname(file), { recursive: true });
-  await appendFile(file, encodeEvent(event, now), { flag: "a" });
+  // Synchronous for the same reason as nodeStoreFs() in store.ts: the
+  // promise API costs a hook its start-up time. Appends use O_APPEND, so lines
+  // from concurrent writers never interleave.
+  mkdirSync(dirname(file), { recursive: true });
+  appendFileSync(file, encodeEvent(event, now));
 }
 
 /** A read of the log from a byte offset, and where the next read starts. */
@@ -196,21 +206,21 @@ export async function readEventsFrom(
   file: string,
   offset = 0,
 ): Promise<EventTail> {
-  let handle;
+  let fd: number;
   try {
-    handle = await open(file, "r");
+    fd = openSync(file, "r");
   } catch {
     return { events: [], skipped: 0, offset: 0 };
   }
   try {
-    const { size } = await handle.stat();
+    const { size } = fstatSync(fd);
     const start = offset > size ? 0 : offset;
     const buffer = Buffer.alloc(size - start);
-    await handle.read(buffer, 0, buffer.length, start);
+    readSync(fd, buffer, 0, buffer.length, start);
     const complete = buffer.lastIndexOf(0x0a) + 1;
     const batch = parseEvents(buffer.subarray(0, complete).toString("utf8"));
     return { ...batch, offset: start + complete };
   } finally {
-    await handle.close();
+    closeSync(fd);
   }
 }
