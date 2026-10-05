@@ -4,6 +4,7 @@ import * as capture from "../src/capture";
 import * as agent from "../src/agent";
 import * as claims from "../src/claims";
 import * as claudeCode from "../src/claude-code";
+import * as cli from "../src/cli";
 import * as events from "../src/events";
 import * as fleet from "../src/fleet";
 import * as injector from "../src/injector";
@@ -41,6 +42,7 @@ describe("public entry point", () => {
     ["claude-code", claudeCode],
     ["session", session],
     ["fleet", fleet],
+    ["cli", cli],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
