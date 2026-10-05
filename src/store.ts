@@ -1,7 +1,7 @@
 // Ported from dsh-errkb, src/store.ts (MIT, Copyright (c) 2026 jingchangzhao-gif;
 // see NOTICE). Section marks such as §5.1 refer to dsh-errkb's design document.
 //
-// The error document: parse, render, append, update and archive `ERRORS.md`
+// The error document: parse, render, append, update and archive `ANTIBODIES.md`
 // (§8), safely under concurrent writers (§13).
 //
 // The format is parsed into entries, but every block also keeps its exact
@@ -111,7 +111,7 @@ export interface Block {
   source: string;
 }
 
-/** A parsed `ERRORS.md`: everything before the first entry, then the entries. */
+/** A parsed `ANTIBODIES.md`: everything before the first entry, then the entries. */
 export interface ErrorDocument {
   preamble: string;
   blocks: Block[];
@@ -123,14 +123,14 @@ export class ParseError extends Error {
     message: string,
     readonly line: number,
   ) {
-    super(`ERRORS.md line ${line}: ${message}`);
+    super(`ANTIBODIES.md line ${line}: ${message}`);
     this.name = "ParseError";
   }
 }
 
 /** Header of a new document, and of a new archive. */
-export const DOCUMENT_HEADER = "# ERRORS\n";
-export const ARCHIVE_HEADER = "# ERRORS archive\n";
+export const DOCUMENT_HEADER = "# ANTIBODIES\n";
+export const ARCHIVE_HEADER = "# ANTIBODIES archive\n";
 
 const escapeRegExp = (text: string) =>
   text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -679,18 +679,18 @@ export interface ErrorStore {
   archive(id: string, reason?: string): Promise<Entry | undefined>;
 }
 
-const CORRUPT_COPY = /^ERRORS\.corrupt-.*\.md$/;
+const CORRUPT_COPY = /^ANTIBODIES\.corrupt-.*\.md$/;
 
 /**
  * Bind a store to a knowledge base directory.
  *
  * Every write takes `.lock` (created with `wx`; one older than `lockStaleMs`
- * is taken over), reads the current files, and writes `ERRORS.md` to a temp
+ * is taken over), reads the current files, and writes `ANTIBODIES.md` to a temp
  * file that is then renamed over the original. A document that does not parse
- * is saved aside as `ERRORS.corrupt-<ts>.md` once, after which new entries are
+ * is saved aside as `ANTIBODIES.corrupt-<ts>.md` once, after which new entries are
  * only appended to it and updates are refused - it is never rewritten (§13).
  *
- * Archiving appends the oldest blocks to `ERRORS.archive.md` before the
+ * Archiving appends the oldest blocks to `ANTIBODIES.archive.md` before the
  * shortened document replaces the old one, so a crash in between duplicates an
  * entry across the two files rather than losing it.
  *

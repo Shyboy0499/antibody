@@ -6,11 +6,11 @@ import { describe, expect, it } from "vitest";
 import { KB_FILE, corruptFileName, filesIn } from "../src/paths";
 
 describe("file names", () => {
-  it("keeps dsh-errkb's names until antibody renames its own", () => {
+  it("names the files for antibody", () => {
     expect(KB_FILE).toEqual({
-      errors: "ERRORS.md",
-      archive: "ERRORS.archive.md",
-      index: "errors.index.json",
+      errors: "ANTIBODIES.md",
+      archive: "ANTIBODIES.archive.md",
+      index: "antibodies.index.json",
       state: "state.json",
       machine: ".machine.json",
       lock: ".lock",
@@ -20,9 +20,9 @@ describe("file names", () => {
   it("derives every path from the directory", () => {
     const dir = join(resolve("/memory"), "antibody");
     expect(filesIn(dir)).toEqual({
-      errors: join(dir, "ERRORS.md"),
-      archive: join(dir, "ERRORS.archive.md"),
-      index: join(dir, "errors.index.json"),
+      errors: join(dir, "ANTIBODIES.md"),
+      archive: join(dir, "ANTIBODIES.archive.md"),
+      index: join(dir, "antibodies.index.json"),
       state: join(dir, "state.json"),
       machine: join(dir, ".machine.json"),
       lock: join(dir, ".lock"),
@@ -39,7 +39,7 @@ describe("file names", () => {
 
   it("names a corrupt document copy with a Windows-legal stamp", () => {
     const name = corruptFileName(new Date("2026-09-27T01:02:03.004Z"));
-    expect(name).toBe("ERRORS.corrupt-2026-09-27T01-02-03-004Z.md");
+    expect(name).toBe("ANTIBODIES.corrupt-2026-09-27T01-02-03-004Z.md");
     expect(name).not.toContain(":");
     expect(dirname(name)).toBe(".");
   });

@@ -8,9 +8,9 @@ import { join, resolve } from "node:path";
 
 /** The six file names the knowledge base directory holds. */
 export const KB_FILE = {
-  errors: "ERRORS.md",
-  archive: "ERRORS.archive.md",
-  index: "errors.index.json",
+  errors: "ANTIBODIES.md",
+  archive: "ANTIBODIES.archive.md",
+  index: "antibodies.index.json",
   state: "state.json",
   machine: ".machine.json",
   lock: ".lock",
@@ -54,7 +54,7 @@ export function filesIn(dir: string): KbFiles {
  */
 export function corruptFileName(now: Date = new Date()): string {
   const stamp = now.toISOString().replace(/[:.]/g, "-");
-  return `ERRORS.corrupt-${stamp}.md`;
+  return `ANTIBODIES.corrupt-${stamp}.md`;
 }
 
 // ---------------------------------------------------------------------------

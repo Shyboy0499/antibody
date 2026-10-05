@@ -187,7 +187,7 @@ describe("match: exact", () => {
     const seedFile = resolve(
       fileURLToPath(new URL("..", import.meta.url)),
       "seeds",
-      "ERRORS.seed.md",
+      "ANTIBODIES.seed.md",
     );
     const entries = parseDocument(readFileSync(seedFile, "utf8")).blocks.map(
       (b) => b.entry,
@@ -408,7 +408,7 @@ describe("match: entries that must not be injected", () => {
 
   it("reads the flag from a parsed document's machine comment", () => {
     const text = [
-      "# ERRORS",
+      "# ANTIBODIES",
       "",
       "## E-0001 · [tool] boom",
       `<!-- errkb: sig=${signature("tool", "boom")} cat=tool misjudged=true -->`,

@@ -8,18 +8,18 @@ import { describe, expect, it } from "vitest";
 import { signature } from "../src/signature";
 import { formatId, parseDocument, renderEntry } from "../src/store";
 
-// seeds/ERRORS.seed.md is the only memory content this public repository
+// seeds/ANTIBODIES.seed.md is the only memory content this public repository
 // carries. These tests keep it exactly what the store would write;
 // tests/redact.test.ts keeps it exactly what redaction would leave.
 const seedFile = resolve(
   fileURLToPath(new URL("..", import.meta.url)),
   "seeds",
-  "ERRORS.seed.md",
+  "ANTIBODIES.seed.md",
 );
 const text = readFileSync(seedFile, "utf8");
 const document = parseDocument(text);
 
-describe("seeds/ERRORS.seed.md", () => {
+describe("seeds/ANTIBODIES.seed.md", () => {
   it("parses, with two to three entries numbered from E-0001", () => {
     expect(document.blocks.length).toBeGreaterThanOrEqual(2);
     expect(document.blocks.length).toBeLessThanOrEqual(3);
