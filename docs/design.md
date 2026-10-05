@@ -1,6 +1,7 @@
 # antibody design
 
-Status: draft, October 2026. Nothing here is implemented yet. Statements about
+Status: draft, October 2026. Milestone M1 (core and shared memory) is implemented;
+the harness adapters, the MCP server and `antibody watch` are not yet. Statements about
 other tools' hook APIs come from their public documentation and are marked where
 they still need to be checked against a running copy.
 
@@ -134,11 +135,18 @@ On one machine, memory lives in the repository's common git directory:
 
 ```
 $(git rev-parse --git-common-dir)/antibody/
-├── ANTIBODIES.md   human-readable entries, same format as dsh-errkb's ERRORS.md
-├── events.jsonl    append-only event log: hits, claims, fixes, injections
-├── state.json      counters, open claims, trust records
-└── lock            advisory lock for rewrites of the two files above
+├── ANTIBODIES.md          human-readable entries, dsh-errkb's ERRORS.md format
+├── ANTIBODIES.archive.md  entries moved out of the main document, never deleted
+├── events.jsonl           append-only event log: hits, misses, claims, fixes, notices
+├── state.json             hit counters and fix-trust records
+├── claims.json            which agent is diagnosing which entry, with a time to live
+├── .lock                  advisory lock taken by every rewrite
+├── antibodies.index.json  reserved, not written yet
+└── .machine.json          reserved, not written yet
 ```
+
+`memoryDir()` in `src/paths.ts` resolves this directory, and `filesIn()` names the
+files in it.
 
 Every linked worktree reports the same common git directory, so every agent in every
 worktree of the repo sees the same memory with no configuration. The directory is
@@ -150,14 +158,15 @@ Eight agents can fail at the same moment, so writes are designed for contention:
 
 - `events.jsonl` is appended with `O_APPEND`, one JSON line per event, each kept under
   4 KB so appends do not interleave on local filesystems.
-- `ANTIBODIES.md` and `state.json` are rewritten under an advisory lock taken with an
-  exclusive create of `lock`, then written to a temporary file and renamed into
-  place. A lock older than 10 seconds is treated as stale.
+- `ANTIBODIES.md`, `state.json` and `claims.json` are rewritten under an advisory lock
+  taken with an exclusive create of `.lock`, then written to a temporary file and
+  renamed into place. A lock older than 10 seconds is treated as stale.
 - Claims carry a time to live (10 minutes by default) and are released early when the
   claiming session ends, so a crashed agent cannot hold an entry forever.
 
-The milestone M1 acceptance test runs eight writer processes against one memory
-directory and checks that no event is lost and no file is corrupted.
+The milestone M1 acceptance test, `tests/concurrency.test.ts`, runs eight writer
+processes against one memory directory and checks that no event, entry number or
+counter increment is lost and that every file still parses.
 
 ### 4.3 Beyond one machine
 
@@ -230,26 +239,29 @@ without the TUI, for scripts and CI.
 
 ## 7. What carries over from dsh-errkb
 
-dsh-errkb's pure layer has no DeepSeek Harness imports:
+dsh-errkb's pure layer had no DeepSeek Harness imports, so it came over almost
+unchanged:
 
-| dsh-errkb file | Role in antibody |
-| --- | --- |
-| `src/signature.ts` | Normalization and fingerprints, unchanged |
-| `src/redact.ts`, `src/redact-patterns.ts` | Mandatory redaction on every write, unchanged |
-| `src/store.ts` | Parse, render, append and archive the markdown store, renamed to `ANTIBODIES.md` |
-| `src/match.ts` | Exact and near matching, closest entries on a miss |
-| `src/state.ts` | Counters and trust, extended with claims |
-| `src/capture.ts` | Classification and the noise rule |
-| `src/resolve-detect.ts` | Resolution detection |
+| dsh-errkb file | antibody file | Changes |
+| --- | --- | --- |
+| `src/signature.ts` | `src/signature.ts` | None |
+| `src/redact.ts`, `src/redact-patterns.ts` | the same | None |
+| `src/paths.ts` | `src/paths.ts` | File layout only; `memoryDir()` replaces the DeepSeek Harness directory tiers |
+| `src/store.ts` | `src/store.ts` | `ANTIBODIES.md` file names; writes `<!-- antibody: … -->` and still reads `<!-- errkb: … -->` |
+| `src/match.ts` | `src/match.ts` | None |
+| `src/capture.ts` | `src/capture.ts` | None |
+| `src/inject.ts` | `src/notice.ts`, `src/trust.ts`, `src/injector.ts` | Split in three; the DeepSeek Harness message source is dropped; notices open with `[antibody]` |
+| `src/resolve-detect.ts` | `src/resolve-detect.ts` | The fix request names `antibody_record` |
+| `src/state.ts` | `src/state.ts` | Imports `TrustRecord` from `src/trust.ts` |
 
-Together these are about 2,600 lines under a 99% coverage gate. The DeepSeek Harness
-wiring (`src/index.ts`, `src/plugin.ts`, `src/tools.ts`, the harness-specific parts
-of `src/inject.ts` and `src/paths.ts`) is replaced by the adapters and the shared
-store.
+New in antibody: `src/events.ts` (the event log), `src/claims.ts` (claims) and
+`memoryDir()`. The DeepSeek Harness wiring (`src/index.ts`, `src/plugin.ts`,
+`src/tools.ts`) stays behind; the harness adapters replace it from M2.
 
-dsh-errkb is MIT licensed, copyright 2026 jingchangzhao-gif. Ported files keep that
-notice. The cleaner long-term option is to extract the pure layer into a package both
-projects depend on, so fixes land in one place. See question Q2.
+dsh-errkb is MIT licensed, copyright 2026 jingchangzhao-gif. Decided under Q2: the
+files are copied, each starting with a comment naming its source, and `NOTICE`
+carries dsh-errkb's licence. Extracting a package both projects depend on stays
+possible later if the two codebases need to share fixes.
 
 ## 8. Cost model
 
@@ -297,9 +309,8 @@ Milestone M5 replaces these estimates with a measured benchmark.
 
 - **Q1 Package name.** `antibody` is taken on npm. Candidates: `antibodies`,
   `@antibody/cli`, or a scoped name under the owner's account.
-- **Q2 Shared core.** Copy dsh-errkb's pure layer with its notice, or extract it into a
-  package both projects depend on. Extraction is cleaner but needs the dsh-errkb
-  owner's agreement.
+- **Q2 Shared core. Decided:** copied, with dsh-errkb's MIT notice in `NOTICE` and a
+  source comment at the top of every ported file (section 7).
 - **Q3 Environment broadcast.** Keep it off, or turn it on by default once M5 measures
   it.
 - **Q4 Claim behaviour.** Should a claim hint only inform, or also suggest the agent
