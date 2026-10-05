@@ -17,6 +17,16 @@ import type {
   FleetView,
 } from "./watch-model";
 
+/** Which events the events pane shows; f cycles through them. */
+export const EVENT_FILTERS = ["all", "failures", "fixes"] as const;
+export type EventFilter = (typeof EVENT_FILTERS)[number];
+
+// The tags each filter keeps.
+const FILTER_TAGS: Record<Exclude<EventFilter, "all">, EventLine["tag"][]> = {
+  failures: ["new", "again", "holding"],
+  fixes: ["antibody", "immune", "resolved"],
+};
+
 /** How the screen is drawn. */
 export interface RenderOptions {
   width: number;
@@ -29,6 +39,8 @@ export interface RenderOptions {
   frozen?: boolean;
   /** Injection is paused: the status line says so. */
   paused?: boolean;
+  /** Which events to show; all by default. */
+  filter?: EventFilter;
   /** The time zone clocks are shown in; the machine's by default. */
   timeZone?: string;
 }
@@ -218,10 +230,15 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     );
 
   const keys = row([
-    " q quit · space freeze or resume · p pause or resume injection",
+    " q quit · space freeze · p pause injection · f filter events · e edit antibodies",
     -1,
     "dim",
   ]);
+  const filter = o.filter ?? "all";
+  const events =
+    filter === "all"
+      ? view.events
+      : view.events.filter((e) => FILTER_TAGS[filter].includes(e.tag));
 
   // Rows: the fixed lines first, then the panes share what is left, the
   // events taking whatever the fleet and the antibodies do not need.
@@ -258,11 +275,11 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     ...(view.antibodies.length === 0
       ? [empty("no errors yet")]
       : view.antibodies.slice(-antibodyRows).map(antibodyRow)),
-    heading("Events"),
-    ...(view.events.length === 0
-      ? [empty("no events yet")]
+    heading("Events", filter === "all" ? "" : `${filter} only`),
+    ...(events.length === 0
+      ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)]
       : // slice(-0) would be every event.
-        view.events.slice(view.events.length - eventRows).map(eventRow)),
+        events.slice(events.length - eventRows).map(eventRow)),
   ];
   const blank = " ".repeat(width);
   const body = lines.slice(0, Math.max(0, o.height - 1));

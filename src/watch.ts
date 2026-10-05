@@ -6,7 +6,9 @@
 // screen, so the shell is left as it was on quit. Keys: q (or Ctrl-C) quits,
 // space freezes the view and resumes it, and p pauses injection for the whole
 // fleet, and resumes it: the hooks go on recording but tell the agents
-// nothing, and fixes held meanwhile are delivered once it resumes.
+// nothing, and fixes held meanwhile are delivered once it resumes. f cycles
+// the events pane through all events, failures and fixes, and e opens
+// ANTIBODIES.md in $VISUAL or $EDITOR, leaving the screen while it runs.
 //
 // `--once` prints one frame without colours or cursor movement and exits, for
 // scripts and for looking at the fleet from a pipe.
@@ -27,8 +29,11 @@ import type { GitRunner } from "./paths";
 import { createStateFile, effectiveEntry } from "./state";
 import { createStore } from "./store";
 import type { Entry } from "./store";
+import { lazyChildProcess } from "./lazy";
+import { shellQuote } from "./setup";
 import { fleetView } from "./watch-model";
-import { renderView } from "./watch-render";
+import { EVENT_FILTERS, renderView } from "./watch-render";
+import type { EventFilter } from "./watch-render";
 
 /** How often the view is redrawn, in milliseconds. */
 export const WATCH_INTERVAL_MS = 500;
@@ -46,6 +51,8 @@ export interface WatchDeps {
   /** Key presses; process.stdin, in raw mode, by default. */
   keys?: NodeJS.ReadableStream;
   intervalMs?: number;
+  /** Runs the editor on a file and waits for it; a shell command by default. */
+  edit?: (command: string) => void;
 }
 
 // Terminal control: the alternate screen, the cursor, home.
@@ -131,6 +138,7 @@ export async function runWatch(
     }));
   const read = memoryReader(memory);
   let frozen = false;
+  let filter: EventFilter = "all";
   let last = await read();
   const frame = (colours: boolean) => {
     const { columns, rows } = size();
@@ -143,6 +151,7 @@ export async function runWatch(
       repo,
       frozen,
       paused: last.paused,
+      filter,
     });
   };
 
@@ -197,8 +206,34 @@ export async function runWatch(
         setInjectionPaused(memory, !last.paused);
         last = { ...last, paused: !last.paused };
         draw();
+      } else if (text.includes("f")) {
+        filter =
+          EVENT_FILTERS[
+            (EVENT_FILTERS.indexOf(filter) + 1) % EVENT_FILTERS.length
+          ] ?? "all";
+        draw();
+      } else if (text.includes("e")) {
+        // Hand the terminal to the editor, then take it back.
+        const editor = io.env.VISUAL || io.env.EDITOR || "vi";
+        io.stdout(LEAVE);
+        if (raw.isTTY === true) raw.setRawMode(false);
+        (deps.edit ?? runEditor)(
+          `${editor} ${shellQuote(filesIn(memory).errors)}`,
+        );
+        if (raw.isTTY === true) raw.setRawMode(true);
+        io.stdout(ENTER);
+        drawn = "";
+        void read().then((data) => {
+          last = data;
+          draw();
+        });
       }
     };
     keys.on("data", onKey);
   });
+}
+
+/** Run an editor command in a shell on this terminal, and wait for it. */
+function runEditor(command: string): void {
+  lazyChildProcess().spawnSync(command, { shell: true, stdio: "inherit" });
 }

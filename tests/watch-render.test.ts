@@ -158,7 +158,7 @@ describe("renderView", () => {
       / 09:59:40 +codex@wt-c +E-0001 +immune +fix pushed \(60 tokens\)/,
     );
     expect(lines.at(-1)).toMatch(
-      /^ q quit · space freeze or resume · p pause or resume injection +$/,
+      /^ q quit · space freeze · p pause injection · f filter events · e edit an/,
     );
   });
 
@@ -222,5 +222,23 @@ describe("renderView", () => {
   it("draws in the machine's time zone by default, and in a narrow terminal", () => {
     const lines = renderView(view, options({ timeZone: undefined, width: 10 }));
     for (const line of lines) expect(cells(line)).toBe(20);
+  });
+
+  it("filters the events pane to failures or fixes", () => {
+    const failures = renderView(view, options({ filter: "failures" })).join(
+      "\n",
+    );
+    expect(failures).toContain(" Events  failures only");
+    expect(failures).toContain("port 3000 in use");
+    expect(failures).toContain("held by claude-code@wt-a");
+    expect(failures).not.toContain("fix pushed");
+    const fixes = renderView(view, options({ filter: "fixes" })).join("\n");
+    expect(fixes).toContain("fix pushed (60 tokens)");
+    expect(fixes).not.toContain("port 3000 in use");
+    const none = renderView(
+      { ...view, events: view.events.slice(0, 1) },
+      options({ filter: "fixes" }),
+    );
+    expect(none.join("\n")).toContain("no fixes yet");
   });
 });
