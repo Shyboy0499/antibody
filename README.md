@@ -108,20 +108,23 @@ three seconds it prints nothing. Set `ANTIBODY_DEBUG=1` to see why on stderr.
 [`scripts/e2e.mjs`](scripts/e2e.mjs) runs the M2 check against the committed bundle,
 the way Claude Code calls it, and CI runs it on every push. Two sessions in two
 worktrees hit the same missing-`.env` error. The fix the first session records reaches
-the second on its next tool call: **53 ms** later on a GitHub Actions runner, and 65
-to 75 ms later in the development container.
+the second on its next tool call: **48 ms** later on a GitHub Actions runner, and
+about 65 ms later in the development container.
 
-Each hook call is a separate Node.js process. The median hook call takes:
+Each hook call is a separate Node.js process, so most of its cost is starting one. A
+hook loads nothing beyond Node's own start-up: it starts no git process, hashes in
+plain JavaScript instead of loading `node:crypto`, and keeps the streams stack out. The
+median hook call takes:
 
 | Call | GitHub Actions runner | Development container |
 | --- | ---: | ---: |
-| A tool call fails | 60 ms | 80 to 85 ms |
-| A tool call succeeds | 44 ms | 54 to 63 ms |
-| Outside a git repository | 36 ms | 47 to 49 ms |
-| `node -e 0`, for scale | 23 ms | 23 to 24 ms |
+| A tool call fails | 47 to 49 ms | 59 to 61 ms |
+| A tool call succeeds | 37 ms | 44 to 46 ms |
+| Outside a git repository | 32 ms | 37 to 38 ms |
+| `node -e 0`, for scale | 23 ms | 26 to 29 ms |
 
-The roadmap's target is under 50 ms per call. It is met for successes on the runner,
-and not yet for failures anywhere.
+The roadmap's target is under 50 ms per call. On the runner every kind of call meets
+it; in the development container a failing call is still about 10 ms over.
 
 ## See it
 

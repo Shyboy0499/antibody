@@ -23,7 +23,7 @@ Each milestone ends with something that can be checked, not just written.
   (`tests/concurrency.test.ts`). The main checkout, every linked worktree and their
   subdirectories resolve the same memory directory (`tests/memory-dir.test.ts`).
 
-## M2 · Claude Code (done, except the latency target)
+## M2 · Claude Code (done)
 
 - The fleet loop (`src/fleet.ts`): claims keyed by fingerprint, claim hints, held
   fixes delivered at the next hook call, fix trust and per-session caps, with
@@ -38,16 +38,18 @@ Each milestone ends with something that can be checked, not just written.
   entry. Both manifests pass `claude plugin validate`, and Claude Code's MCP health
   check connects to the server.
 - **Checked:** `scripts/e2e.mjs`, run in CI, plays the scenario against the bundle.
-  The second session gets the first session's fix 53 ms after it is recorded on a
-  GitHub Actions runner (65 to 75 ms in the development container), well within one
+  The second session gets the first session's fix 48 ms after it is recorded on a
+  GitHub Actions runner (about 65 ms in the development container), well within one
   second.
-- **Open:** the 50 ms hook budget. On a GitHub Actions runner the median hook call
-  takes 60 ms for a failure, 44 ms for a success and 36 ms outside a repository; in
-  the development container 80 to 85, 54 to 63 and 47 to 49 ms. `node -e 0` takes
-  about 23 ms on both. Reading `.git` instead of running git and loading `node:crypto` and
-  `node:child_process` lazily already brought a failure down from 111 ms. The next
-  candidates are a smaller bundle for the hook path and skipping the store for
-  successes that resolve nothing.
+- **Checked:** the 50 ms hook budget, on the runner. The median hook call there takes
+  47 to 49 ms for a failure, 37 ms for a success and 32 ms outside a repository,
+  against 23 ms for `node -e 0`. In the development container a failure still takes
+  59 to 61 ms. A failure took 111 ms before the latency work, which:
+  - reads `.git` instead of running git;
+  - loads `node:child_process` and `node:readline` only when they are needed;
+  - uses synchronous `node:fs` calls, file-descriptor stdio, and `node:fs` without
+    its ES module wrapper, so the streams stack never loads;
+  - hashes with a plain-JavaScript SHA-256 instead of loading `node:crypto`.
 
 ## M3 · Codex CLI, Gemini CLI and MCP-only agents
 
