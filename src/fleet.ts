@@ -107,6 +107,17 @@ export interface Fleet {
    * @returns the fingerprints that were released.
    */
   endSession(): Promise<string[]>;
+  /**
+   * Record the fix for an entry (the `antibody_record` tool): the entry gets the
+   * fix and becomes `fixed`, its claim is released whoever held it, and agents
+   * waiting for it receive it on their next hook call.
+   *
+   * @param id - the entry.
+   * @param fix - the fix, in a sentence or two.
+   * @returns the updated entry, or undefined when the ID is unknown.
+   * @throws RangeError when the fix is blank.
+   */
+  recordFix(id: string, fix: string): Promise<Entry | undefined>;
 }
 
 /** The per-call pieces restored from a session file. */
@@ -369,6 +380,19 @@ export function createFleet(
         await persist(s, rt, before);
         return notices;
       });
+    },
+
+    async recordFix(id, fix) {
+      if (oneLine(fix) === "") throw new RangeError("a fix cannot be blank");
+      const entry = await store.update(id, {
+        fix: fix.trim(),
+        status: "fixed",
+      });
+      if (entry === undefined) return undefined;
+      await log({ kind: "fix", id, text: entry.fix });
+      if (await claims.release(entry.fingerprint))
+        await log({ kind: "release", id, text: "fix recorded" });
+      return entry;
     },
 
     async beginTurn() {
