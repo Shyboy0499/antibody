@@ -1,6 +1,22 @@
 #!/usr/bin/env node
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+//#region src/lazy.ts
+/** node:crypto, loaded on first use. */
+const lazyCrypto = () => process.getBuiltinModule("node:crypto");
+/** node:child_process, loaded on first use. */
+const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
+/** node:readline, loaded on first use. */
+const lazyReadline = () => process.getBuiltinModule("node:readline");
+/**
+* node:fs itself, not its ES module wrapper. An `import … from "node:fs"`
+* builds the named exports by reading every property of the module, and that
+* runs the lazy getters behind fs.promises, the stream classes, Dir and the
+* watchers: about thirty internal modules, the streams stack among them,
+* before the hook does anything. process.getBuiltinModule() returns the module
+* without touching them, and node:fs itself is loaded at start-up anyway.
+*/
+const nodeFs = process.getBuiltinModule("node:fs");
+//#endregion
 //#region src/notice.ts
 /** How every notice introduces itself to the agent. */
 const NOTICE_PREFIX = "[antibody]";
@@ -234,15 +250,8 @@ var CapTracker = class CapTracker {
 	}
 };
 //#endregion
-//#region src/lazy.ts
-/** node:crypto, loaded on first use. */
-const lazyCrypto = () => process.getBuiltinModule("node:crypto");
-/** node:child_process, loaded on first use. */
-const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
-/** node:readline, loaded on first use. */
-const lazyReadline = () => process.getBuiltinModule("node:readline");
-//#endregion
 //#region src/paths.ts
+const { readFileSync: readFileSync$2, realpathSync, statSync: statSync$1 } = nodeFs;
 /** The file names the memory directory holds. */
 const KB_FILE = {
 	errors: "ANTIBODIES.md",
@@ -323,18 +332,18 @@ function findGitDirs(cwd) {
 	let previous;
 	while (dir !== previous) {
 		const dotGit = join(dir, ".git");
-		const stat = statSync(dotGit, { throwIfNoEntry: false });
+		const stat = statSync$1(dotGit, { throwIfNoEntry: false });
 		if (stat?.isDirectory()) return {
 			worktree: dir,
 			commonDir: realpathSync(dotGit)
 		};
 		if (stat?.isFile()) {
-			const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(readFileSync(dotGit, "utf8"));
+			const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(readFileSync$2(dotGit, "utf8"));
 			if (pointer === null) return void 0;
 			const gitdir = resolve(dir, pointer[1]);
 			let common = gitdir;
 			try {
-				common = resolve(gitdir, readFileSync(join(gitdir, "commondir"), "utf8").trim());
+				common = resolve(gitdir, readFileSync$2(join(gitdir, "commondir"), "utf8").trim());
 			} catch {}
 			try {
 				return {
@@ -1111,6 +1120,7 @@ function redactSample(raw, options = {}) {
 }
 //#endregion
 //#region src/store.ts
+const { appendFileSync: appendFileSync$1, mkdirSync: mkdirSync$1, readFileSync: readFileSync$1, readdirSync, renameSync, rmSync, statSync, writeFileSync } = nodeFs;
 /** Entry status values (§8). */
 const ENTRY_STATUSES = [
 	"open",
@@ -1704,7 +1714,7 @@ function nodeStoreFs() {
 	return {
 		async readFile(path) {
 			try {
-				return readFileSync(path, "utf8");
+				return readFileSync$1(path, "utf8");
 			} catch (error) {
 				if (errorCode$1(error) === "ENOENT") return void 0;
 				throw error;
@@ -1714,7 +1724,7 @@ function nodeStoreFs() {
 			writeFileSync(path, data, "utf8");
 		},
 		async appendFile(path, data) {
-			appendFileSync(path, data, "utf8");
+			appendFileSync$1(path, data, "utf8");
 		},
 		async rename(from, to) {
 			renameSync(from, to);
@@ -1751,7 +1761,7 @@ function nodeStoreFs() {
 			}
 		},
 		async mkdir(dir) {
-			mkdirSync(dir, { recursive: true });
+			mkdirSync$1(dir, { recursive: true });
 		}
 	};
 }
@@ -1915,6 +1925,9 @@ function createClaimsFile(files, options = {}, fs = nodeStoreFs(), clock = syste
 		releaseSession: (session) => update((state) => releaseSession(state, session))
 	};
 }
+//#endregion
+//#region src/events.ts
+const { appendFileSync, closeSync, fstatSync: fstatSync$1, mkdirSync, openSync, readSync } = nodeFs;
 /** What an event records. */
 const EVENT_KINDS = [
 	"hit",
@@ -2030,7 +2043,7 @@ async function readEventsFrom(file, offset = 0) {
 		};
 	}
 	try {
-		const { size } = fstatSync(fd);
+		const { size } = fstatSync$1(fd);
 		const start = offset > size ? 0 : offset;
 		const buffer = Buffer.alloc(size - start);
 		readSync(fd, buffer, 0, buffer.length, start);
@@ -3850,6 +3863,7 @@ async function main(argv, io, deps = {}) {
 }
 //#endregion
 //#region src/bin.ts
+const { fstatSync, readFileSync, writeSync } = nodeFs;
 const errorCode = (error) => error.code;
 /** All of stdin as text; nothing when it is a terminal. */
 async function readStdin() {

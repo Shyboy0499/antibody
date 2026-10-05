@@ -20,7 +20,14 @@
 // `StoreClock` are injected, so locking, staleness and corruption handling are
 // testable without racing a real disk. `nodeStoreFs()` and `systemClock()` are
 // the only parts that touch the machine.
-import {
+import { dirname, join } from "node:path";
+import { nodeFs } from "./lazy";
+import { corruptFileName } from "./paths";
+import type { KbFiles } from "./paths";
+import { redact, redactSample } from "./redact";
+import type { Share } from "./redact";
+
+const {
   appendFileSync,
   mkdirSync,
   readFileSync,
@@ -29,12 +36,7 @@ import {
   rmSync,
   statSync,
   writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
-import { corruptFileName } from "./paths";
-import type { KbFiles } from "./paths";
-import { redact, redactSample } from "./redact";
-import type { Share } from "./redact";
+} = nodeFs;
 
 /** Entry status values (§8). */
 export const ENTRY_STATUSES = ["open", "fixed", "wontfix"] as const;

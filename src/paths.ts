@@ -3,9 +3,10 @@
 // from a directory, and the name for a copy of an unparseable document.
 // dsh-errkb's directory tiers locate a DeepSeek Harness home; antibody finds its
 // memory directory through the git common directory instead (memoryDir below).
-import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { lazyChildProcess } from "./lazy";
+import { lazyChildProcess, nodeFs } from "./lazy";
+
+const { readFileSync, realpathSync, statSync } = nodeFs;
 
 /** The file names the memory directory holds. */
 export const KB_FILE = {
