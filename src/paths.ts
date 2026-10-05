@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
-/** The six file names the knowledge base directory holds. */
+/** The file names the memory directory holds. */
 export const KB_FILE = {
   errors: "ANTIBODIES.md",
   archive: "ANTIBODIES.archive.md",
@@ -14,9 +14,10 @@ export const KB_FILE = {
   state: "state.json",
   machine: ".machine.json",
   lock: ".lock",
+  events: "events.jsonl",
 } as const;
 
-/** Absolute paths of the six files inside one knowledge base directory. */
+/** Absolute paths of the files inside one memory directory. */
 export interface KbFiles {
   errors: string;
   archive: string;
@@ -24,10 +25,11 @@ export interface KbFiles {
   state: string;
   machine: string;
   lock: string;
+  events: string;
 }
 
 /**
- * Build the six absolute file paths inside a knowledge base directory.
+ * Build the absolute file paths inside a memory directory.
  *
  * @param dir - the resolved knowledge base directory.
  * @returns the file paths.
@@ -40,6 +42,7 @@ export function filesIn(dir: string): KbFiles {
     state: join(dir, KB_FILE.state),
     machine: join(dir, KB_FILE.machine),
     lock: join(dir, KB_FILE.lock),
+    events: join(dir, KB_FILE.events),
   };
 }
 
