@@ -7,18 +7,27 @@
 // parallel tool calls in one session take turns; the store, state and claims
 // take the memory directory's lock inside it, always in that order.
 //
+// Claims are keyed by fingerprint, not entry ID. Whoever claims a new
+// fingerprint first is the one that diagnoses it and the only one that appends
+// its entry, so two agents meeting a new error at the same moment never write
+// two entries for it; the other agent is told a peer is on it and remembers to
+// wait for the fix.
+//
 // Each hook call is its own process. The engine is created per call, restores
 // the session's budgets, watches and turn from the session file, and saves them
 // back before it returns. Fix-trust records live in state.json, shared by the
 // fleet; only the records this call changed are written back.
 import { TransientCounter, classify } from "./capture";
+import type { CaptureRecord } from "./capture";
+import { CLAIM_TTL_MS, createClaimsFile } from "./claims";
+import type { ClaimOutcome } from "./claims";
 import type { CaptureInput, CaptureOptions } from "./capture";
 import { appendEvent } from "./events";
 import type { NewEvent } from "./events";
 import { Injector } from "./injector";
 import { indexEntries, match } from "./match";
-import type { MatchOptions } from "./match";
-import { CapTracker, estimateTokens } from "./notice";
+import type { Hit, MatchOptions } from "./match";
+import { CapTracker, claimHintText, estimateTokens, oneLine } from "./notice";
 import type { InjectMode, Notice } from "./notice";
 import { filesIn } from "./paths";
 import { ResolutionTracker, callOutcome } from "./resolve-detect";
@@ -40,6 +49,8 @@ export interface FleetOptions {
   capture: Partial<CaptureOptions>;
   /** How long a hook waits for a lock before it gives up. */
   lockTimeoutMs: number;
+  /** How long a claim lasts unless its holder renews or releases it. */
+  claimTtlMs: number;
 }
 
 export const DEFAULT_FLEET_OPTIONS: FleetOptions = {
@@ -47,6 +58,7 @@ export const DEFAULT_FLEET_OPTIONS: FleetOptions = {
   match: {},
   capture: {},
   lockTimeoutMs: 2_000,
+  claimTtlMs: CLAIM_TTL_MS,
 };
 
 /** The machine the loop runs on; injected in tests. */
@@ -99,6 +111,18 @@ export function createFleet(
   const store = createStore(files, lock, fs, clock);
   const state = createStateFile(files, lock, fs, clock);
   const sessionFile = createSessionFile(memory, session, lock, fs, clock);
+  const claims = createClaimsFile(
+    files,
+    { ...lock, ttlMs: o.claimTtlMs },
+    fs,
+    clock,
+  );
+
+  // A claim granted just now, as opposed to the holder renewing its own.
+  const fresh = (outcome: ClaimOutcome) =>
+    outcome.granted &&
+    Date.parse(outcome.claim.expires) - Date.parse(outcome.claim.since) ===
+      o.claimTtlMs;
 
   const log = (event: Omit<NewEvent, "agent" | "session">) =>
     appendEvent(files.events, { ...event, agent, session }, clock.now());
@@ -160,6 +184,106 @@ export function createFleet(
     });
   }
 
+  // Another session holds `fingerprint`: hint once more if the budget allows,
+  // and remember to pass the fix on when it is recorded.
+  async function hold(
+    s: SessionState,
+    rt: Runtime,
+    fingerprint: string,
+    label: string,
+    outcome: Extract<ClaimOutcome, { granted: false }>,
+    notices: string[],
+  ): Promise<void> {
+    if (!s.holding.includes(fingerprint)) s.holding.push(fingerprint);
+    await log({
+      kind: "hold",
+      id: label,
+      text: `held by ${outcome.holder.agent}`,
+    });
+    if (!rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
+    const elapsed = clock.now().getTime() - Date.parse(outcome.holder.since);
+    const text = claimHintText(label, outcome.holder.agent, elapsed);
+    notices.push(text);
+    await log({
+      kind: "notice",
+      id: label,
+      tokens: estimateTokens(text),
+      text,
+    });
+  }
+
+  // A hit: count it, then offer its fix, or claim it when it has none.
+  async function onHit(
+    s: SessionState,
+    rt: Runtime,
+    found: Hit,
+    record: CaptureRecord,
+    notices: string[],
+  ): Promise<void> {
+    const at = formatSeen(clock.now());
+    await state.update((m) => void addHit(m, found.id, at));
+    await log({ kind: "hit", id: found.id, text: record.message });
+    // The notice counts the hit it reports.
+    const entry = {
+      ...found.entry,
+      hits: found.entry.hits + 1,
+      lastSeen: laterSeen(found.entry.lastSeen, at),
+    };
+    if (oneLine(entry.fix) === "" && found.injectable) {
+      const outcome = await claims.claim({
+        id: entry.fingerprint,
+        agent,
+        session,
+      });
+      if (!outcome.granted)
+        return hold(s, rt, entry.fingerprint, found.id, outcome, notices);
+      if (fresh(outcome)) await log({ kind: "claim", id: found.id });
+    }
+    await tell(
+      rt.injector.offer({ kind: "hit", hit: { ...found, entry } }),
+      notices,
+    );
+  }
+
+  // A miss: only the agent that claims the new fingerprint appends its entry.
+  async function onMiss(
+    s: SessionState,
+    rt: Runtime,
+    record: CaptureRecord,
+    notices: string[],
+  ): Promise<string | undefined> {
+    const outcome = await claims.claim({
+      id: record.signature,
+      agent,
+      session,
+    });
+    if (!outcome.granted) {
+      await hold(
+        s,
+        rt,
+        record.signature,
+        `new error ${record.signature}`,
+        outcome,
+        notices,
+      );
+      return undefined;
+    }
+    const { id } = await store.append({
+      title: record.title,
+      signature: record.signature,
+      category: record.displayCategory,
+      meta: {
+        cat: record.category,
+        ...(record.code === undefined ? {} : { code: record.code }),
+      },
+      raw: record.raw,
+    });
+    await log({ kind: "miss", id, text: record.message });
+    await log({ kind: "claim", id });
+    await tell(rt.injector.offer({ kind: "miss", id }), notices);
+    return id;
+  }
+
   return {
     async failure(capture, call) {
       const classified = classify(capture, new TransientCounter(), o.capture);
@@ -184,37 +308,13 @@ export function createFleet(
           indexEntries(await readEntries(machine)),
           o.match,
         );
-        let id: string;
+        let id: string | undefined;
         if (found.matched) {
           id = found.id;
-          const at = formatSeen(clock.now());
-          await state.update((m) => void addHit(m, found.id, at));
-          await log({ kind: "hit", id, text: record.message });
-          // The notice counts the hit it reports.
-          const entry = {
-            ...found.entry,
-            hits: found.entry.hits + 1,
-            lastSeen: laterSeen(found.entry.lastSeen, at),
-          };
-          await tell(
-            rt.injector.offer({ kind: "hit", hit: { ...found, entry } }),
-            notices,
-          );
-        } else {
-          ({ id } = await store.append({
-            title: record.title,
-            signature: record.signature,
-            category: record.displayCategory,
-            meta: {
-              cat: record.category,
-              ...(record.code === undefined ? {} : { code: record.code }),
-            },
-            raw: record.raw,
-          }));
-          await log({ kind: "miss", id, text: record.message });
-          await tell(rt.injector.offer({ kind: "miss", id }), notices);
-        }
-        if (!outcome.ok) rt.tracker.occurred(id, outcome.key);
+          await onHit(s, rt, found, record, notices);
+        } else id = await onMiss(s, rt, record, notices);
+        if (!outcome.ok && id !== undefined)
+          rt.tracker.occurred(id, outcome.key);
         await persist(s, rt, before);
         return notices;
       });
