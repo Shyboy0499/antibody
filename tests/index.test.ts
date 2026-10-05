@@ -26,6 +26,7 @@ import * as tools from "../src/tools";
 import * as mcp from "../src/mcp";
 import * as setup from "../src/setup";
 import * as watchModel from "../src/watch-model";
+import * as watchRender from "../src/watch-render";
 
 // The package entry re-exports each ported module unchanged. Every port adds
 // its module here, so a forgotten export fails the suite.
@@ -56,6 +57,7 @@ describe("public entry point", () => {
     ["mcp", mcp],
     ["setup", setup],
     ["watch-model", watchModel],
+    ["watch-render", watchRender],
     ["cli", cli],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
