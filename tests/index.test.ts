@@ -23,6 +23,7 @@ import * as store from "../src/store";
 import * as trust from "../src/trust";
 import * as tools from "../src/tools";
 import * as mcp from "../src/mcp";
+import * as setup from "../src/setup";
 
 // The package entry re-exports each ported module unchanged. Every port adds
 // its module here, so a forgotten export fails the suite.
@@ -50,6 +51,7 @@ describe("public entry point", () => {
     ["fleet", fleet],
     ["tools", tools],
     ["mcp", mcp],
+    ["setup", setup],
     ["cli", cli],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {

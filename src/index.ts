@@ -22,4 +22,5 @@ export * from "./session";
 export * from "./fleet";
 export * from "./tools";
 export * from "./mcp";
+export * from "./setup";
 export * from "./cli";
