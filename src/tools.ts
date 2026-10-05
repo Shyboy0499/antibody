@@ -14,17 +14,19 @@
 import { CLAIM_TTL_MS, activeClaim, createClaimsFile } from "./claims";
 import type { Claim, ClaimsFile } from "./claims";
 import { extractHeadline, safeErrorText } from "./capture";
-import { appendEvent } from "./events";
+import { appendEvent, readEventsFrom } from "./events";
 import type { NewEvent } from "./events";
 import { createFleet } from "./fleet";
 import type { Fleet, FleetDeps } from "./fleet";
 import { indexEntries, jaccard, match, tokenize } from "./match";
 import type { Hit, IndexedEntry, MatchOptions } from "./match";
-import { clip, elapsedText, oneLine } from "./notice";
+import { FIX_NOTICE_KINDS, clip, elapsedText, oneLine } from "./notice";
+import type { NoticeKind, TrustLevel } from "./notice";
 import { filesIn } from "./paths";
 import type { KbFiles } from "./paths";
 import { normalize, signature } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
+import type { MachineState } from "./state";
 import {
   DEFAULT_STORE_OPTIONS,
   ENTRY_STATUSES,
@@ -35,6 +37,7 @@ import {
   nodeStoreFs,
   systemClock,
 } from "./store";
+import { fixSig, trustLevel } from "./trust";
 import type {
   Entry,
   EntryPatch,
@@ -116,6 +119,16 @@ export const TITLE_MAX_CHARS = 120;
 /** Category of an entry antibody_record creates from a message without one. */
 export const DEFAULT_RECORD_CATEGORY = "agent";
 
+/**
+ * The diagnosis one fix notice is assumed to replace, in tokens. A
+ * re-diagnosis costs 800 to 3,000 tokens of thinking and trial; this takes
+ * the low end, so the estimate errs towards too little.
+ */
+export const ASSUMED_DIAGNOSIS_TOKENS = 800;
+
+/** Scopes antibody_stats counts notices over. */
+export const STATS_SCOPES = ["fleet", "agent"] as const;
+
 /** Entries antibody_list returns when `limit` is not given. */
 export const DEFAULT_LIST_LIMIT = 20;
 
@@ -191,7 +204,11 @@ class ToolError extends Error {}
 
 /** The memory as one call sees it. */
 interface MemoryView {
+  /** The memory directory. */
+  dir: string;
   files: KbFiles;
+  /** state.json: this machine's hit counts and fix trust. */
+  machine(): Promise<MachineState>;
   store: ErrorStore;
   claims: ClaimsFile;
   /** The fleet loop, as this agent: antibody_record writes fixes through it. */
@@ -230,9 +247,11 @@ export function createTools(context: ToolsContext): Tool[] {
       clock,
     );
     return {
+      dir: memory,
       files,
       store,
       claims,
+      machine: async () => (await state.read()).state,
       fleet: createFleet(
         memory,
         context.agent,
@@ -731,5 +750,74 @@ export function createTools(context: ToolsContext): Tool[] {
     },
   );
 
-  return [lookup, list, record, forget];
+  // -------------------------------------------------------------------------
+  // antibody_stats
+
+  const stats = define(
+    "antibody_stats",
+    "Show the fleet's antibody ledger: entries, hits, notices delivered, an estimate of tokens saved, open entries without a fix, which errors agents are diagnosing right now, distrusted fixes and the memory path. Costs no model call.",
+    true,
+    {
+      scope: {
+        type: "string",
+        enum: STATS_SCOPES,
+        description:
+          "Count the notices of the whole fleet or of this agent only (default fleet). Entry figures are always the whole memory.",
+      },
+    },
+    [],
+    async (args, memory) => {
+      const scope =
+        (args.scope as (typeof STATS_SCOPES)[number] | undefined) ?? "fleet";
+      const [entries, machine, live, log] = await Promise.all([
+        memory.entries(),
+        memory.machine(),
+        memory.claims.read(),
+        readEventsFrom(memory.files.events),
+      ]);
+      const now = clock.now();
+
+      const events = log.events.filter(
+        (e) => scope === "fleet" || e.agent === context.agent,
+      );
+      const notices = events.filter((e) => e.kind === "notice");
+      const fixNotices = notices.filter((e) =>
+        FIX_NOTICE_KINDS.includes(e.notice as NoticeKind),
+      ).length;
+      const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+      const net = fixNotices * ASSUMED_DIAGNOSIS_TOKENS - noticeTokens;
+      const agents = new Set(events.map((e) => e.agent)).size;
+
+      const level = (entry: Entry): TrustLevel => {
+        const trust = machine.trust[entry.id];
+        return trust?.fixSig === fixSig(entry.fix)
+          ? trustLevel(trust)
+          : "trusted";
+      };
+      const withFix = entries.filter((e) => oneLine(e.fix) !== "");
+      const ids = (list: Entry[]) =>
+        list.length === 0 ? "none" : list.map((e) => e.id).join(", ");
+
+      const diagnosing = Object.values(live.claims)
+        .filter((c) => activeClaim(live, c.id, now) !== undefined)
+        .map((c) => {
+          const entry = entries.find((e) => e.fingerprint === c.id);
+          const since = elapsedText(now.getTime() - Date.parse(c.since));
+          return `${entry?.id ?? `new error ${c.id}`} by ${c.agent} (${since})`;
+        });
+
+      const where = scope === "fleet" ? "the fleet" : context.agent;
+      return [
+        `Memory: ${memory.dir}`,
+        `Entries: ${entries.length} · hits: ${entries.reduce((sum, e) => sum + e.hits, 0)} · open without a fix: ${entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length}`,
+        `Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
+        `Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × ${ASSUMED_DIAGNOSIS_TOKENS} − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+        `Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
+        `Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
+        `Distrusted fixes, not injected: ${ids(withFix.filter((e) => level(e) === "suppressed"))}`,
+      ].join("\n");
+    },
+  );
+
+  return [lookup, list, record, forget, stats];
 }

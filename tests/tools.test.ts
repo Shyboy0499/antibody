@@ -9,6 +9,8 @@ import { createFleet } from "../src/fleet";
 import { NotInGitRepoError, filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { signature } from "../src/signature";
+import { createStateFile } from "../src/state";
+import { fixSig } from "../src/trust";
 import { createStore, nodeStoreFs, parseDocument } from "../src/store";
 import type { StoreClock, StoreFs } from "../src/store";
 import { checkArgs, createTools } from "../src/tools";
@@ -674,5 +676,116 @@ describe("antibody_forget", () => {
         id: "E-0001",
       }),
     ).toEqual({ text: "antibody_forget: no entry E-0001", isError: true });
+  });
+});
+
+describe("antibody_stats", () => {
+  const stats = async (context: Partial<ToolsContext> = {}, args?: object) => {
+    const result = await tool("antibody_stats", context).call(args);
+    expect(result.isError).toBe(false);
+    return result.text.split("\n");
+  };
+  const fleetOf = (session: string) =>
+    createFleet(memory, `claude-code@${session}`, session, {}, { clock });
+  const notices = async (agent?: string) =>
+    (await readEventsFrom(filesIn(memory).events)).events.filter(
+      (e) => e.kind === "notice" && (agent === undefined || e.agent === agent),
+    );
+  const tokens = async (agent?: string) =>
+    (await notices(agent)).reduce((sum, e) => sum + e.tokens!, 0);
+
+  it("reads an empty memory", async () => {
+    expect(await stats()).toEqual([
+      `Memory: ${memory}`,
+      "Entries: 0 · hits: 0 · open without a fix: 0",
+      "Notices (the fleet): 0, 0 with a fix, 0 tokens, across 0 agents",
+      "Estimated tokens saved: 0 (estimate: 0 fix notices × 800 − 0 notice tokens)",
+      "Being diagnosed: none",
+      "Doubted fixes, injected with a warning: none",
+      "Distrusted fixes, not injected: none",
+    ]);
+  });
+
+  it("counts the fleet's notices and what they saved", async () => {
+    await fail();
+    now = new Date(now.getTime() + 2 * 60_000);
+    await fail("s-b"); // held: a claim hint, no fix
+    expect((await stats())[4]).toBe(
+      "Being diagnosed: E-0001 by claude-code@s-a (2 min)",
+    );
+    await text("antibody_record", { id: "E-0001", fix: FIX });
+    await fleetOf("s-b").poll(); // the held fix
+    await fail("s-c"); // a hit with the fix
+    const all = await tokens();
+    expect(await stats()).toEqual([
+      `Memory: ${memory}`,
+      "Entries: 1 · hits: 3 · open without a fix: 0",
+      `Notices (the fleet): 3, 2 with a fix, ${all} tokens, across 4 agents`,
+      `Estimated tokens saved: ${1600 - all} (estimate: 2 fix notices × 800 − ${all} notice tokens)`,
+      "Being diagnosed: none",
+      "Doubted fixes, injected with a warning: none",
+      "Distrusted fixes, not injected: none",
+    ]);
+    const mine = await tokens("claude-code@s-b");
+    expect(
+      (await stats({ agent: "claude-code@s-b" }, { scope: "agent" })).slice(
+        2,
+        4,
+      ),
+    ).toEqual([
+      `Notices (claude-code@s-b): 2, 1 with a fix, ${mine} tokens`,
+      `Estimated tokens saved: ${800 - mine} (estimate: 1 fix notice × 800 − ${mine} notice tokens)`,
+    ]);
+  });
+
+  it("shows a cost above the saving as 0, with the arithmetic", async () => {
+    await fail();
+    await fail("s-a");
+    await fail("s-a");
+    const spent = await tokens();
+    expect((await stats())[3]).toBe(
+      `Estimated tokens saved: 0 (estimate: 0 fix notices × 800 − ${spent} notice tokens = −${spent}, shown as 0)`,
+    );
+  });
+
+  it("names an error claimed before its entry is written", async () => {
+    await createClaimsFile(filesIn(memory), {}, undefined, clock).claim({
+      id: "a8f3c1d2e4b5",
+      agent: "codex@wt-c",
+      session: "s-c",
+    });
+    expect((await stats())[4]).toBe(
+      "Being diagnosed: new error a8f3c1d2e4b5 by codex@wt-c (0 s)",
+    );
+  });
+
+  it("lists doubted and distrusted fixes", async () => {
+    await fail();
+    await store().append({
+      title: "[command] pnpm: command not found",
+      signature: signature("command", "pnpm: command not found"),
+      category: "command / Bash",
+      raw: "pnpm: command not found",
+      fix: "Run corepack enable.",
+      status: "fixed",
+    });
+    await store().update("E-0001", { fix: FIX, status: "fixed" });
+    const record = (fix: string, recurred: number) => ({
+      injected: 2,
+      recurredAfterInject: recurred,
+      succeeded: 0,
+      fixSig: fixSig(fix),
+    });
+    await createStateFile(filesIn(memory), {}, undefined, clock).update((m) => {
+      m.trust["E-0001"] = record(FIX, 1);
+      m.trust["E-0002"] = record("Run corepack enable.", 2);
+    });
+    expect((await stats()).slice(5)).toEqual([
+      "Doubted fixes, injected with a warning: E-0001",
+      "Distrusted fixes, not injected: E-0002",
+    ]);
+    // Trust is about one fix text; a new fix starts trusted.
+    await store().update("E-0002", { fix: "Install pnpm globally." });
+    expect((await stats())[6]).toBe("Distrusted fixes, not injected: none");
   });
 });
