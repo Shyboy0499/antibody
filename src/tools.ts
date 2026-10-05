@@ -12,15 +12,18 @@
 // call from outside a git repository comes back as a result with `isError`
 // set and one line naming the tool, never as a thrown error.
 import { CLAIM_TTL_MS, activeClaim, createClaimsFile } from "./claims";
-import type { Claim } from "./claims";
+import type { Claim, ClaimsFile } from "./claims";
 import { extractHeadline, safeErrorText } from "./capture";
-import type { FleetDeps } from "./fleet";
+import { appendEvent } from "./events";
+import type { NewEvent } from "./events";
+import { createFleet } from "./fleet";
+import type { Fleet, FleetDeps } from "./fleet";
 import { indexEntries, jaccard, match, tokenize } from "./match";
 import type { Hit, IndexedEntry, MatchOptions } from "./match";
 import { clip, elapsedText, oneLine } from "./notice";
 import { filesIn } from "./paths";
 import type { KbFiles } from "./paths";
-import { normalize } from "./signature";
+import { normalize, signature } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
 import {
   DEFAULT_STORE_OPTIONS,
@@ -32,7 +35,14 @@ import {
   nodeStoreFs,
   systemClock,
 } from "./store";
-import type { Entry, ErrorStore, StoreClock, StoreFs } from "./store";
+import type {
+  Entry,
+  EntryPatch,
+  EntryStatus,
+  ErrorStore,
+  StoreClock,
+  StoreFs,
+} from "./store";
 
 /** What a tool call returns: one text for the agent. */
 export interface ToolResult {
@@ -102,6 +112,9 @@ export const CLOSEST_COUNT = 3;
 
 /** Titles in a list or a closest list are clipped to this. */
 export const TITLE_MAX_CHARS = 120;
+
+/** Category of an entry antibody_record creates from a message without one. */
+export const DEFAULT_RECORD_CATEGORY = "agent";
 
 /** Entries antibody_list returns when `limit` is not given. */
 export const DEFAULT_LIST_LIMIT = 20;
@@ -180,6 +193,11 @@ class ToolError extends Error {}
 interface MemoryView {
   files: KbFiles;
   store: ErrorStore;
+  claims: ClaimsFile;
+  /** The fleet loop, as this agent: antibody_record writes fixes through it. */
+  fleet: Fleet;
+  /** Append an event as this agent. */
+  log(event: Omit<NewEvent, "agent" | "session">): Promise<void>;
   /** Every entry, with this machine's hit counts added. */
   entries(): Promise<Entry[]>;
   /** The live claim on a fingerprint, if any. */
@@ -200,7 +218,8 @@ export function createTools(context: ToolsContext): Tool[] {
   const idPattern = new RegExp(`^${idPrefix}(\\d+)$`, "i");
 
   function open(): MemoryView {
-    const files = filesIn(context.memory());
+    const memory = context.memory();
+    const files = filesIn(memory);
     const lock = { lockTimeoutMs: o.lockTimeoutMs };
     const store = createStore(files, lock, fs, clock);
     const state = createStateFile(files, lock, fs, clock);
@@ -213,6 +232,20 @@ export function createTools(context: ToolsContext): Tool[] {
     return {
       files,
       store,
+      claims,
+      fleet: createFleet(
+        memory,
+        context.agent,
+        context.session,
+        lock,
+        context.deps,
+      ),
+      log: (event) =>
+        appendEvent(
+          files.events,
+          { ...event, agent: context.agent, session: context.session },
+          clock.now(),
+        ),
       async entries() {
         const [document, machine] = await Promise.all([
           store.read(),
@@ -474,5 +507,192 @@ export function createTools(context: ToolsContext): Tool[] {
     },
   );
 
-  return [lookup, list];
+  // -------------------------------------------------------------------------
+  // antibody_record
+
+  /** Notes with one more line. */
+  const withNote = (notes: string, note: string) =>
+    notes === "" ? note : `${notes}\n${note}`;
+
+  /**
+   * Find the entry a message describes, or append one.
+   *
+   * Only an exact hit names the entry to update. A near hit writes nothing and
+   * comes back as the candidate: a fix recorded on a similar but different
+   * entry would later be injected as its known fix.
+   *
+   * A new entry is appended the way the hooks append one: only by the agent
+   * that claims its fingerprint, so two agents recording the same new error at
+   * once write one entry. The claim only guards the append and is released
+   * straight after.
+   */
+  async function findOrAppend(
+    memory: MemoryView,
+    message: string,
+    category: string | undefined,
+    fields: { fix?: string; status?: EntryStatus; note?: string },
+  ): Promise<{ id: string; created: boolean }> {
+    const hit = matchText(
+      message,
+      indexEntries(await memory.entries()),
+      category,
+    );
+    if (hit !== undefined && hit.via !== "exact")
+      throw new ToolError(
+        `closest match is ${hit.id} (approximate, by ${hit.via}); nothing was written. Call antibody_record with id: "${hit.id}" to confirm, or reword message`,
+      );
+    if (hit !== undefined) return { id: hit.id, created: false };
+
+    const cat = category ?? DEFAULT_RECORD_CATEGORY;
+    const headline = extractHeadline(message);
+    const line = headline.line === "" ? message : headline.line;
+    const sig = signature(cat, line);
+    const outcome = await memory.claims.claim({
+      id: sig,
+      agent: context.agent,
+      session: context.session,
+    });
+    try {
+      // Someone may have appended it between the read and the claim.
+      const index = indexEntries(await memory.entries());
+      const existing = index.find((i) => i.sig === sig);
+      if (existing !== undefined)
+        return { id: existing.entry.id, created: false };
+      if (!outcome.granted)
+        throw new ToolError(
+          `${outcome.holder.agent} is recording this error right now; look it up with antibody_lookup in a moment`,
+        );
+      const { id } = await memory.store.append({
+        title: `[${cat}] ${line}`,
+        signature: sig,
+        category: cat,
+        meta: {
+          cat,
+          ...(headline.code === undefined ? {} : { code: headline.code }),
+        },
+        raw: message,
+        ...(fields.fix === undefined ? {} : { fix: fields.fix }),
+        status: fields.status ?? (fields.fix === undefined ? "open" : "fixed"),
+        ...(fields.note === undefined ? {} : { notes: fields.note }),
+      });
+      await memory.log({ kind: "miss", id, text: line });
+      if (fields.fix !== undefined)
+        await memory.log({ kind: "fix", id, text: fields.fix });
+      return { id, created: true };
+    } finally {
+      if (outcome.granted) await memory.claims.release(sig, context.session);
+    }
+  }
+
+  /** Change an existing entry: the fix through the fleet, then the rest. */
+  async function change(
+    memory: MemoryView,
+    id: string,
+    fields: { fix?: string; status?: EntryStatus; note?: string },
+  ): Promise<Entry | undefined> {
+    let entry: Entry | undefined;
+    if (fields.fix !== undefined) {
+      entry = await memory.fleet.recordFix(id, fields.fix);
+      if (entry === undefined) return undefined;
+    }
+    // An explicit status wins over the `fixed` a fix implies.
+    if (fields.status !== undefined || fields.note !== undefined) {
+      const current = (await memory.store.read()).blocks.find(
+        (b) => b.entry.id === id,
+      )?.entry;
+      if (current === undefined) return undefined;
+      const patch: EntryPatch = {};
+      if (fields.status !== undefined) patch.status = fields.status;
+      if (fields.note !== undefined)
+        patch.notes = withNote(current.notes, fields.note);
+      entry = await memory.store.update(id, patch);
+    }
+    return entry;
+  }
+
+  const record = define(
+    "antibody_record",
+    "Record what you learned about an error in the fleet's shared antibody memory, so every other agent gets it. Give exactly one of id (an existing entry) or message (the error text). A message updates an entry only when it matches exactly; on an approximate match nothing is written and the closest entry's ID is returned, so confirm it with id. A new entry is created when nothing matches. A fix marks the entry fixed and is passed to agents waiting for it.",
+    false,
+    {
+      id: {
+        type: "string",
+        description: `An existing entry, e.g. ${formatId(7, idPrefix, idWidth)}.`,
+      },
+      message: {
+        type: "string",
+        description:
+          "The error text, when you do not know the ID. Only an exact match updates an existing entry.",
+      },
+      fix: {
+        type: "string",
+        description: "What fixed it, in one or two sentences.",
+      },
+      status: {
+        type: "string",
+        enum: ENTRY_STATUSES,
+        description:
+          "fixed, wontfix (never inject it) or open. A fix alone sets fixed.",
+      },
+      note: {
+        type: "string",
+        description: "A line added to the entry's notes.",
+      },
+      category: {
+        type: "string",
+        description: `For message: the category to match and file under, e.g. tool or command. Default: match any; file new entries under ${DEFAULT_RECORD_CATEGORY}.`,
+      },
+    },
+    [],
+    async (args, memory) => {
+      const id = given(args.id);
+      const message = given(args.message);
+      const fix = given(args.fix);
+      const note = given(args.note);
+      const category = given(args.category);
+      const status = args.status as EntryStatus | undefined;
+      if ((id === undefined) === (message === undefined))
+        throw new ToolError("give exactly one of id and message");
+      if (args.fix !== undefined && fix === undefined)
+        throw new ToolError("fix is empty");
+      const fields = {
+        ...(fix === undefined ? {} : { fix }),
+        ...(status === undefined ? {} : { status }),
+        ...(note === undefined ? {} : { note }),
+      };
+
+      let target: { id: string; created: boolean };
+      if (id !== undefined) {
+        if (Object.keys(fields).length === 0)
+          throw new ToolError("nothing to record: give fix, status or note");
+        const found = byId(indexEntries(await memory.entries()), id);
+        if (found === undefined)
+          throw new ToolError(`no entry ${canonicalId(id)}`);
+        target = { id: found.entry.id, created: false };
+      } else {
+        target = await findOrAppend(
+          memory,
+          message as string,
+          category,
+          fields,
+        );
+      }
+
+      let entry: Entry | undefined;
+      if (!target.created) entry = await change(memory, target.id, fields);
+      entry ??= (await memory.entries()).find((e) => e.id === target.id);
+      if (entry === undefined) throw new ToolError(`no entry ${target.id}`);
+      const what = target.created ? "Created" : "Updated";
+      const hasFix = oneLine(entry.fix) !== "";
+      const tail =
+        fix !== undefined && entry.status !== "wontfix"
+          ? " Agents waiting for it get the fix at their next tool call."
+          : !hasFix && entry.status === "open"
+            ? " No fix recorded yet."
+            : "";
+      return `${what} ${entry.id} (status ${entry.status}).${tail}`;
+    },
+  );
+
+  return [lookup, list, record];
 }

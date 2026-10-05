@@ -3,12 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureInput } from "../src/capture";
+import { createClaimsFile, parseClaims } from "../src/claims";
+import { readEventsFrom } from "../src/events";
 import { createFleet } from "../src/fleet";
 import { NotInGitRepoError, filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { signature } from "../src/signature";
-import { createStore } from "../src/store";
-import type { StoreClock } from "../src/store";
+import { createStore, nodeStoreFs, parseDocument } from "../src/store";
+import type { StoreClock, StoreFs } from "../src/store";
 import { checkArgs, createTools } from "../src/tools";
 import type { InputSchema, Tool, ToolsContext } from "../src/tools";
 
@@ -350,5 +352,239 @@ describe("antibody_list", () => {
       text: "antibody_list: limit must be an integer of at least 1",
       isError: true,
     });
+  });
+});
+
+describe("antibody_record", () => {
+  const entry = async (id = "E-0001") =>
+    (await store().read()).blocks.find((b) => b.entry.id === id)?.entry;
+  const events = async () =>
+    (await readEventsFrom(filesIn(memory).events)).events.map((e) => [
+      e.kind,
+      e.agent,
+      e.id,
+    ]);
+  const claims = async () =>
+    parseClaims(await readFile(filesIn(memory).claims, "utf8"))?.claims;
+  // ANTIBODIES.md as the tools read it: the real file for the reads `show`
+  // allows, missing for the others.
+  const flicker = (show: (read: number) => boolean): StoreFs => {
+    const real = nodeStoreFs();
+    let reads = 0;
+    return {
+      ...real,
+      readFile: async (path) =>
+        path === filesIn(memory).errors && !show(reads++)
+          ? undefined
+          : real.readFile(path),
+    };
+  };
+  const recordWith = (fs: StoreFs, args: object) =>
+    tool("antibody_record", { deps: { clock, fs } }).call(args);
+
+  it("records a fix through the fleet, releasing the claim", async () => {
+    await fail();
+    expect(await text("antibody_record", { id: "E-1", fix: ` ${FIX} ` })).toBe(
+      "Updated E-0001 (status fixed). Agents waiting for it get the fix at their next tool call.",
+    );
+    expect(await entry()).toMatchObject({ fix: FIX, status: "fixed" });
+    expect(await claims()).toEqual({});
+    expect((await events()).slice(-2)).toEqual([
+      ["fix", "claude-code@wt-b", "E-0001"],
+      ["release", "claude-code@wt-b", "E-0001"],
+    ]);
+  });
+
+  it("hands the fix to an agent that was waiting for it", async () => {
+    await fail();
+    await fail("s-b");
+    await text("antibody_record", { id: "E-0001", fix: FIX });
+    const [notice] = await createFleet(
+      memory,
+      "claude-code@s-b",
+      "s-b",
+      {},
+      { clock },
+    ).poll();
+    expect(notice).toContain(`fix: ${FIX}`);
+  });
+
+  it("changes status and adds notes, an explicit status winning", async () => {
+    await fail();
+    expect(
+      await text("antibody_record", { id: "E-0001", note: "Seen on CI too." }),
+    ).toBe("Updated E-0001 (status open). No fix recorded yet.");
+    expect(
+      await text("antibody_record", {
+        id: "E-0001",
+        fix: FIX,
+        status: "wontfix",
+        note: "Not ours to fix.",
+      }),
+    ).toBe("Updated E-0001 (status wontfix).");
+    expect(await entry()).toMatchObject({
+      fix: FIX,
+      status: "wontfix",
+      notes: "Seen on CI too.\nNot ours to fix.",
+    });
+    expect(
+      await text("antibody_record", { id: "E-0001", status: "fixed" }),
+    ).toBe("Updated E-0001 (status fixed).");
+  });
+
+  it("updates the entry a message matches exactly", async () => {
+    await fail();
+    expect(await text("antibody_record", { message: MESSAGE, fix: FIX })).toBe(
+      "Updated E-0001 (status fixed). Agents waiting for it get the fix at their next tool call.",
+    );
+  });
+
+  it("writes nothing on an approximate match", async () => {
+    await fail();
+    const result = await run("antibody_record", {
+      message: "ENOENT: no such file or directory, open '.env.local'",
+      fix: FIX,
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(
+      /^antibody_record: closest match is E-0001 \(approximate, by (fuzzy|code)\); nothing was written\. Call antibody_record with id: "E-0001" to confirm, or reword message$/,
+    );
+    expect((await entry())?.fix).toBe("");
+  });
+
+  it("creates an entry for a new error, under agent by default", async () => {
+    expect(
+      await text("antibody_record", {
+        message: "Error: listen EADDRINUSE: address already in use :::3000",
+      }),
+    ).toBe("Created E-0001 (status open). No fix recorded yet.");
+    expect(await entry()).toMatchObject({
+      title: "[agent] Error: listen EADDRINUSE: address already in use :::3000",
+      category: "agent",
+      status: "open",
+      meta: expect.objectContaining({ cat: "agent", code: "EADDRINUSE" }),
+    });
+    expect(await events()).toEqual([["miss", "claude-code@wt-b", "E-0001"]]);
+    expect(await claims()).toEqual({});
+  });
+
+  it("creates a fixed entry under the given category", async () => {
+    expect(
+      await text("antibody_record", {
+        message: "pnpm: command not found",
+        category: "command",
+        fix: "Run corepack enable.",
+        note: "Fresh containers only.",
+      }),
+    ).toBe(
+      "Created E-0001 (status fixed). Agents waiting for it get the fix at their next tool call.",
+    );
+    expect(await entry()).toMatchObject({
+      title: "[command] pnpm: command not found",
+      fix: "Run corepack enable.",
+      notes: "Fresh containers only.",
+    });
+    expect((await events()).map((e) => e[0])).toEqual(["miss", "fix"]);
+    expect(
+      await text("antibody_record", {
+        message: "pnpm: command not found",
+        category: "command",
+        status: "wontfix",
+      }),
+    ).toBe("Updated E-0001 (status wontfix).");
+  });
+
+  it("leaves a new error to the agent already recording it", async () => {
+    const message = "pnpm: command not found";
+    await createClaimsFile(filesIn(memory), {}, undefined, clock).claim({
+      id: signature("agent", message),
+      agent: "codex@wt-c",
+      session: "s-c",
+    });
+    expect(await run("antibody_record", { message })).toEqual({
+      text: "antibody_record: codex@wt-c is recording this error right now; look it up with antibody_lookup in a moment",
+      isError: true,
+    });
+  });
+
+  it("uses an entry appended while it waited for the claim", async () => {
+    // The hook of claude-code@s-a appends E-0001 and still holds its claim.
+    await fail();
+    expect(
+      await recordWith(
+        flicker((read) => read > 0),
+        { message: MESSAGE, category: "tool", fix: FIX },
+      ),
+    ).toEqual({
+      text: "Updated E-0001 (status fixed). Agents waiting for it get the fix at their next tool call.",
+      isError: false,
+    });
+    expect(
+      parseDocument(await readFile(filesIn(memory).errors, "utf8")).blocks,
+    ).toHaveLength(1);
+  });
+
+  it("reports an entry that disappears under it", async () => {
+    await fail();
+    const gone = { text: "antibody_record: no entry E-0001", isError: true };
+    expect(
+      await recordWith(
+        flicker((read) => read === 0),
+        { id: "E-0001", fix: FIX },
+      ),
+    ).toEqual(gone);
+    expect(
+      await recordWith(
+        flicker((read) => read === 0),
+        {
+          id: "E-0001",
+          status: "fixed",
+        },
+      ),
+    ).toEqual(gone);
+    await rm(filesIn(memory).errors);
+    expect(
+      await recordWith(
+        flicker((read) => read === 1),
+        { message: MESSAGE },
+      ),
+    ).toEqual(gone);
+  });
+
+  it("says when the memory is busy", async () => {
+    await fail();
+    await writeFile(filesIn(memory).lock, "someone else");
+    expect(
+      await tool("antibody_record", {
+        options: { lockTimeoutMs: 50 },
+      }).call({ id: "E-0001", fix: FIX }),
+    ).toEqual({
+      text: "antibody_record: the memory is busy; try again",
+      isError: true,
+    });
+  });
+
+  it("refuses incomplete or contradictory arguments", async () => {
+    await fail();
+    const refused = async (args: object) =>
+      (await run("antibody_record", args)).text;
+    expect(await refused({})).toBe(
+      "antibody_record: give exactly one of id and message",
+    );
+    expect(await refused({ id: "E-0001", message: MESSAGE })).toBe(
+      "antibody_record: give exactly one of id and message",
+    );
+    expect(await refused({ id: "E-0001", fix: " " })).toBe(
+      "antibody_record: fix is empty",
+    );
+    expect(await refused({ id: "E-0001", note: "" })).toBe(
+      "antibody_record: nothing to record: give fix, status or note",
+    );
+    expect(await refused({ id: "E-0042", fix: FIX })).toBe(
+      "antibody_record: no entry E-0042",
+    );
+    expect(await refused({ id: "latest", fix: FIX })).toBe(
+      "antibody_record: no entry latest",
+    );
   });
 });
