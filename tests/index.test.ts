@@ -12,6 +12,7 @@ import * as paths from "../src/paths";
 import * as redactPatterns from "../src/redact-patterns";
 import * as redact from "../src/redact";
 import * as resolveDetect from "../src/resolve-detect";
+import * as session from "../src/session";
 import * as signature from "../src/signature";
 import * as state from "../src/state";
 import * as store from "../src/store";
@@ -37,6 +38,7 @@ describe("public entry point", () => {
     ["claims", claims],
     ["agent", agent],
     ["claude-code", claudeCode],
+    ["session", session],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
