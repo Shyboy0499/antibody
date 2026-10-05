@@ -10,7 +10,7 @@
 //
 // Requests are handled as they arrive, so a slow tool call does not hold up a
 // ping; responses may leave in a different order, matched by their ids.
-import { createInterface } from "node:readline";
+import { lazyReadline } from "./lazy";
 import type { Tool } from "./tools";
 
 /** Protocol versions this server speaks, newest first. */
@@ -208,7 +208,8 @@ export async function serveLines(
   write: (line: string) => void,
 ): Promise<void> {
   const pending: Promise<void>[] = [];
-  for await (const line of createInterface({ input, crlfDelay: Infinity })) {
+  const lines = lazyReadline().createInterface({ input, crlfDelay: Infinity });
+  for await (const line of lines) {
     if (line.trim() === "") continue;
     let message: unknown;
     try {
