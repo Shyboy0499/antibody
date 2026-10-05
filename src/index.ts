@@ -13,3 +13,4 @@ export * from "./resolve-detect";
 export * from "./injector";
 export * from "./state";
 export * from "./events";
+export * from "./claims";
