@@ -8,3 +8,4 @@ export * from "./store";
 export * from "./match";
 export * from "./capture";
 export * from "./notice";
+export * from "./trust";
