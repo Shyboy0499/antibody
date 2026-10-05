@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 import { basename, dirname, join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { appendFile, mkdir } from "node:fs/promises";
 //#region src/notice.ts
@@ -232,6 +230,12 @@ var CapTracker = class CapTracker {
 	}
 };
 //#endregion
+//#region src/lazy.ts
+/** node:crypto, loaded on first use. */
+const lazyCrypto = () => process.getBuiltinModule("node:crypto");
+/** node:child_process, loaded on first use. */
+const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
+//#endregion
 //#region src/paths.ts
 /** The file names the memory directory holds. */
 const KB_FILE = {
@@ -277,7 +281,7 @@ function corruptFileName(now = /* @__PURE__ */ new Date()) {
 /** The directory inside the git common directory that holds antibody's memory. */
 const MEMORY_DIR_NAME = "antibody";
 /** The real git, found on PATH. Its error output is discarded. */
-const runGit = (args, cwd) => execFileSync("git", args, {
+const runGit = (args, cwd) => lazyChildProcess().execFileSync("git", args, {
 	cwd,
 	encoding: "utf8",
 	stdio: [
@@ -677,7 +681,7 @@ function normalize(raw) {
 * @returns twelve lowercase hex characters.
 */
 function signature(category, message) {
-	return createHash("sha256").update(`${category}\u0000${normalize(message)}`).digest("hex").slice(0, 12);
+	return lazyCrypto().createHash("sha256").update(`${category}\u0000${normalize(message)}`).digest("hex").slice(0, 12);
 }
 //#endregion
 //#region src/capture.ts
@@ -1473,6 +1477,11 @@ var StoreCorruptError = class extends Error {
 		this.name = "StoreCorruptError";
 	}
 };
+let uniqueCounter = 0;
+function uniqueSuffix() {
+	uniqueCounter++;
+	return `${process.pid}-${uniqueCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 /**
 * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
 * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -1486,7 +1495,7 @@ async function withFileLock(lock, o, fs, clock, fn) {
 		if (await fs.readFile(lock) === held) await fs.remove(lock);
 	}
 	await fs.mkdir(dirname(lock));
-	const token = `${process.pid}-${randomBytes(6).toString("hex")}`;
+	const token = uniqueSuffix();
 	const deadline = clock.now().getTime() + o.lockTimeoutMs;
 	for (;;) {
 		if (await fs.createExclusive(lock, token)) break;
@@ -1508,7 +1517,7 @@ async function withFileLock(lock, o, fs, clock, fn) {
 }
 /** Write `data` to a temp file beside `path`, then rename it over `path`. */
 async function writeFileAtomic(fs, path, data) {
-	const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+	const temp = `${path}.${uniqueSuffix()}.tmp`;
 	await fs.writeFile(temp, data);
 	try {
 		await fs.rename(temp, path);
@@ -2092,7 +2101,7 @@ function memoryTrustStore(initial = { entries: {} }) {
 * @param fix - the entry's fix field.
 */
 function fixSig(fix) {
-	return createHash("sha256").update(oneLine(fix)).digest("hex").slice(0, 12);
+	return lazyCrypto().createHash("sha256").update(oneLine(fix)).digest("hex").slice(0, 12);
 }
 /**
 * The trust level a record gives.
@@ -2437,7 +2446,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 * @param session - the harness's session id.
 */
 function sessionFileName(session) {
-	return `${SAFE_ID.test(session) ? session : createHash("sha256").update(session).digest("hex").slice(0, 32)}.json`;
+	return `${SAFE_ID.test(session) ? session : lazyCrypto().createHash("sha256").update(session).digest("hex").slice(0, 32)}.json`;
 }
 const strings = (value) => Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
 /**

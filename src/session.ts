@@ -10,8 +10,8 @@
 //
 // A missing or unreadable file reads as a fresh session: losing it only resets
 // budgets and watches, it never loses knowledge, which lives in ANTIBODIES.md.
-import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { lazyCrypto } from "./lazy";
 import type { CapSnapshot } from "./notice";
 import type { ResolutionSnapshot } from "./resolve-detect";
 import {
@@ -64,7 +64,11 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 export function sessionFileName(session: string): string {
   const base = SAFE_ID.test(session)
     ? session
-    : createHash("sha256").update(session).digest("hex").slice(0, 32);
+    : lazyCrypto()
+        .createHash("sha256")
+        .update(session)
+        .digest("hex")
+        .slice(0, 32);
   return `${base}.json`;
 }
 

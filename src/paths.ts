@@ -3,9 +3,9 @@
 // from a directory, and the name for a copy of an unparseable document.
 // dsh-errkb's directory tiers locate a DeepSeek Harness home; antibody finds its
 // memory directory through the git common directory instead (memoryDir below).
-import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { lazyChildProcess } from "./lazy";
 
 /** The file names the memory directory holds. */
 export const KB_FILE = {
@@ -80,11 +80,13 @@ export type GitRunner = (args: string[], cwd: string) => string;
 
 /** The real git, found on PATH. Its error output is discarded. */
 export const runGit: GitRunner = (args, cwd) =>
-  execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  }).trim();
+  lazyChildProcess()
+    .execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    .trim();
 
 /** `cwd` is not inside a git working tree, so there is no memory to share. */
 export class NotInGitRepoError extends Error {
