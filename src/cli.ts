@@ -19,7 +19,7 @@ import {
 import type { HookInput } from "./claude-code";
 import { createFleet } from "./fleet";
 import type { Fleet } from "./fleet";
-import { memoryDir, runGit } from "./paths";
+import { memoryDir } from "./paths";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
 
@@ -95,14 +95,17 @@ export async function runHook(
     if (harness !== CLAUDE_CODE) throw new Error(`unknown harness: ${harness}`);
     const input = parseHookInput(await io.readStdin());
     if (input === undefined) return "";
-    const git = deps.git ?? runGit;
     let memory: string;
     try {
-      memory = memoryDir(input.cwd, git);
+      memory = memoryDir(input.cwd, deps.git, io.env);
     } catch {
       return "";
     }
-    const agent = agentName(CLAUDE_CODE, worktreeRoot(input.cwd, git), io.env);
+    const agent = agentName(
+      CLAUDE_CODE,
+      worktreeRoot(input.cwd, deps.git),
+      io.env,
+    );
     const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(
       memory,
       agent,

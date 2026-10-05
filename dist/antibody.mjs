@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { basename, dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { appendFile, mkdir } from "node:fs/promises";
@@ -295,18 +296,70 @@ var NotInGitRepoError = class extends Error {
 	}
 };
 /**
+* Find the repository `cwd` belongs to by reading `.git`, without starting
+* git: a hook runs on every tool call, and two git processes cost more than
+* the rest of the hook. Walking up from `cwd`, a `.git` directory is a main
+* checkout; a `.git` file is a linked worktree (or a submodule) naming its
+* gitdir, whose `commondir` file names the shared directory. The common
+* directory is resolved through symlinks, so every agent computes the same
+* path for it.
+*
+* @param cwd - any directory.
+* @returns the directories, or undefined when `cwd` is in no repository or
+*   its `.git` file cannot be read.
+*/
+function findGitDirs(cwd) {
+	let dir = resolve(cwd);
+	let previous;
+	while (dir !== previous) {
+		const dotGit = join(dir, ".git");
+		const stat = statSync(dotGit, { throwIfNoEntry: false });
+		if (stat?.isDirectory()) return {
+			worktree: dir,
+			commonDir: realpathSync(dotGit)
+		};
+		if (stat?.isFile()) {
+			const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(readFileSync(dotGit, "utf8"));
+			if (pointer === null) return void 0;
+			const gitdir = resolve(dir, pointer[1]);
+			let common = gitdir;
+			try {
+				common = resolve(gitdir, readFileSync(join(gitdir, "commondir"), "utf8").trim());
+			} catch {}
+			try {
+				return {
+					worktree: dir,
+					commonDir: realpathSync(common)
+				};
+			} catch {
+				return;
+			}
+		}
+		previous = dir;
+		dir = dirname(dir);
+	}
+}
+const GIT_DIR_VARIABLES = ["GIT_DIR", "GIT_COMMON_DIR"];
+/**
 * The memory directory for the repository `cwd` belongs to: the same path from
 * the main checkout, from any linked worktree and from any subdirectory.
 *
 * @param cwd - any directory inside the repository.
-* @param git - runs git; injected in tests.
+* @param git - runs git instead of reading `.git`; also used when GIT_DIR or
+*   GIT_COMMON_DIR is set.
+* @param env - the environment.
 * @returns `<git common dir>/antibody`, absolute.
 * @throws NotInGitRepoError when `cwd` is not inside a repository.
 */
-function memoryDir(cwd, git = runGit) {
+function memoryDir(cwd, git, env = process.env) {
+	if (git === void 0 && !GIT_DIR_VARIABLES.some((v) => env[v])) {
+		const found = findGitDirs(cwd);
+		if (found === void 0) throw new NotInGitRepoError(cwd);
+		return join(found.commonDir, MEMORY_DIR_NAME);
+	}
 	let common;
 	try {
-		common = git([
+		common = (git ?? runGit)([
 			"rev-parse",
 			"--path-format=absolute",
 			"--git-common-dir"
@@ -319,11 +372,13 @@ function memoryDir(cwd, git = runGit) {
 }
 /**
 * The root of the worktree `cwd` is in, or `cwd` itself outside a repository.
+* It reads `.git` (findGitDirs()) unless a git runner is given.
 *
 * @param cwd - any directory.
-* @param git - runs git; injected in tests.
+* @param git - runs git instead of reading `.git`.
 */
-function worktreeRoot(cwd, git = runGit) {
+function worktreeRoot(cwd, git) {
+	if (git === void 0) return findGitDirs(cwd)?.worktree ?? cwd;
 	try {
 		return git(["rev-parse", "--show-toplevel"], cwd) || cwd;
 	} catch {
@@ -2967,14 +3022,13 @@ async function runHook(harness, io, deps = {}) {
 		if (harness !== "claude-code") throw new Error(`unknown harness: ${harness}`);
 		const input = parseHookInput(await io.readStdin());
 		if (input === void 0) return "";
-		const git = deps.git ?? runGit;
 		let memory;
 		try {
-			memory = memoryDir(input.cwd, git);
+			memory = memoryDir(input.cwd, deps.git, io.env);
 		} catch {
 			return "";
 		}
-		const agent = agentName(CLAUDE_CODE, worktreeRoot(input.cwd, git), io.env);
+		const agent = agentName(CLAUDE_CODE, worktreeRoot(input.cwd, deps.git), io.env);
 		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(memory, agent, input.sessionId);
 		return hookResponse(input.event, await dispatch(input, fleet));
 	};
