@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as antibody from "../src/index";
 import * as capture from "../src/capture";
 import * as match from "../src/match";
+import * as notice from "../src/notice";
 import * as paths from "../src/paths";
 import * as redactPatterns from "../src/redact-patterns";
 import * as redact from "../src/redact";
@@ -19,6 +20,7 @@ describe("public entry point", () => {
     ["store", store],
     ["match", match],
     ["capture", capture],
+    ["notice", notice],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
