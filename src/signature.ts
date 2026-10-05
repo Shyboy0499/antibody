@@ -13,7 +13,7 @@
 // Deliberately not here (still open in docs/discussions.md §2): picking a
 // headline line out of multi-line output, treating localized OS text as a near
 // hit, and tokenizing CJK text for fuzzy matching. Those belong to the matcher.
-import { lazyCrypto } from "./lazy";
+import { sha256Hex } from "./sha256";
 
 /** The placeholders normalization writes, one per class of run-to-run noise. */
 export const PLACEHOLDER = {
@@ -179,9 +179,8 @@ export function normalize(raw: string): string {
  * @returns twelve lowercase hex characters.
  */
 export function signature(category: string, message: string): string {
-  return lazyCrypto()
-    .createHash("sha256")
-    .update(`${category}\u0000${normalize(message)}`)
-    .digest("hex")
-    .slice(0, SIGNATURE_LENGTH);
+  return sha256Hex(`${category}\u0000${normalize(message)}`).slice(
+    0,
+    SIGNATURE_LENGTH,
+  );
 }
