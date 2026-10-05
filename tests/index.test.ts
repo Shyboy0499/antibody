@@ -19,6 +19,8 @@ import * as signature from "../src/signature";
 import * as state from "../src/state";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
+import * as tools from "../src/tools";
+import * as mcp from "../src/mcp";
 
 // The package entry re-exports each ported module unchanged. Every port adds
 // its module here, so a forgotten export fails the suite.
@@ -42,6 +44,8 @@ describe("public entry point", () => {
     ["claude-code", claudeCode],
     ["session", session],
     ["fleet", fleet],
+    ["tools", tools],
+    ["mcp", mcp],
     ["cli", cli],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {

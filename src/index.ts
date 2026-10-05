@@ -18,4 +18,6 @@ export * from "./agent";
 export * from "./claude-code";
 export * from "./session";
 export * from "./fleet";
+export * from "./tools";
+export * from "./mcp";
 export * from "./cli";
