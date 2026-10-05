@@ -3,7 +3,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { appendFile, mkdir, open } from "node:fs/promises";
-import { createInterface } from "node:readline";
 //#region src/notice.ts
 /** How every notice introduces itself to the agent. */
 const NOTICE_PREFIX = "[antibody]";
@@ -242,6 +241,8 @@ var CapTracker = class CapTracker {
 const lazyCrypto = () => process.getBuiltinModule("node:crypto");
 /** node:child_process, loaded on first use. */
 const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
+/** node:readline, loaded on first use. */
+const lazyReadline = () => process.getBuiltinModule("node:readline");
 //#endregion
 //#region src/paths.ts
 /** The file names the memory directory holds. */
@@ -3196,10 +3197,11 @@ var RpcError = class extends Error {
 */
 async function serveLines(server, input, write) {
 	const pending = [];
-	for await (const line of createInterface({
+	const lines = lazyReadline().createInterface({
 		input,
 		crlfDelay: Infinity
-	})) {
+	});
+	for await (const line of lines) {
 		if (line.trim() === "") continue;
 		let message;
 		try {
