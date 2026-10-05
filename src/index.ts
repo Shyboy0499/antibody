@@ -10,3 +10,4 @@ export * from "./capture";
 export * from "./notice";
 export * from "./trust";
 export * from "./resolve-detect";
+export * from "./injector";

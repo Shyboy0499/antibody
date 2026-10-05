@@ -196,8 +196,13 @@ export function fitNotice(
   return hardClip(render(clip(cause, floor), ""));
 }
 
-// Clip a whole body until it is inside both caps.
-function hardClip(text: string): string {
+/**
+ * Clip a whole body until it is inside both caps.
+ *
+ * @param text - a notice body.
+ * @returns the longest clip of it that fits.
+ */
+export function hardClip(text: string): string {
   const n = largest(0, Array.from(text).length, (m) =>
     withinCaps(clip(text, m)),
   ) as number;
