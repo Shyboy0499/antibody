@@ -694,5 +694,42 @@ export function createTools(context: ToolsContext): Tool[] {
     },
   );
 
-  return [lookup, list, record];
+  // -------------------------------------------------------------------------
+  // antibody_forget
+
+  const forget = define(
+    "antibody_forget",
+    "Remove a misjudged entry from the fleet's shared antibody memory. It moves to ANTIBODIES.archive.md with the reason noted; nothing is deleted. Agents waiting for its fix stop waiting.",
+    false,
+    {
+      id: { type: "string" },
+      reason: { type: "string", description: "Why, kept in the archive." },
+    },
+    ["id"],
+    async (args, memory) => {
+      const id = given(args.id);
+      if (id === undefined) throw new ToolError("id is empty");
+      const found = byId(indexEntries(await memory.entries()), id);
+      if (found === undefined)
+        throw new ToolError(`no entry ${canonicalId(id)}`);
+      const reason = given(args.reason);
+      const archived = await memory.store.archive(found.entry.id, reason);
+      if (archived === undefined)
+        throw new ToolError(`no entry ${found.entry.id}`);
+      await memory.log({
+        kind: "forget",
+        id: archived.id,
+        ...(reason === undefined ? {} : { text: reason }),
+      });
+      if (await memory.claims.release(archived.fingerprint))
+        await memory.log({
+          kind: "release",
+          id: archived.id,
+          text: "forgotten",
+        });
+      return `Archived ${archived.id} to ANTIBODIES.archive.md.`;
+    },
+  );
+
+  return [lookup, list, record, forget];
 }
