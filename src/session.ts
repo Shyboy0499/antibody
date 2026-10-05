@@ -113,8 +113,13 @@ export function parseSession(
 export interface SessionFile {
   /** The state; a missing or unreadable file reads as a fresh session. */
   read(): Promise<SessionState>;
-  /** Change the state under the session's lock and write it back atomically. */
-  update<T>(mutate: (state: SessionState) => T): Promise<T>;
+  /**
+   * Change the state under the session's lock and write it back atomically.
+   * `mutate` may be async: the lock is held until it settles, so work that
+   * reads and writes other memory files stays one at a time per session. The
+   * lock order is always the session's lock, then the memory directory's.
+   */
+  update<T>(mutate: (state: SessionState) => T | Promise<T>): Promise<T>;
   /** Forget the session, when it ends. */
   remove(): Promise<void>;
 }
@@ -152,7 +157,7 @@ export function createSessionFile(
     update: (mutate) =>
       withFileLock(lock, o, fs, clock, async () => {
         const state = await read();
-        const result = mutate(state);
+        const result = await mutate(state);
         await writeFileAtomic(fs, file, `${JSON.stringify(state)}\n`);
         return result;
       }),
