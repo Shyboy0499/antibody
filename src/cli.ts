@@ -6,6 +6,7 @@
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody setup gemini       add the hooks and MCP server to Gemini CLI
 //   antibody setup codex        add the hooks to Codex CLI
+//   antibody stats              print the memory's ledger, for people and scripts
 //   antibody --version          print the version
 //
 // A hook must never break or block the agent it runs in, so `hook` fails open:
@@ -28,6 +29,7 @@ import type { GitRunner } from "./paths";
 import { runSetup } from "./setup";
 import type { SetupDeps } from "./setup";
 import { createTools } from "./tools";
+import type { Tool } from "./tools";
 
 /** The version `antibody --version` prints. */
 export const VERSION = "0.0.0";
@@ -175,6 +177,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
+       antibody stats              print the memory's ledger for this repository
        antibody --version
 `;
 
@@ -216,6 +219,40 @@ export async function runMcp(
 }
 
 /**
+ * `antibody stats`: print the antibody_stats ledger for the repository the
+ * working directory is in: entries, hits, notices and the tokens they saved,
+ * what is being diagnosed, distrusted fixes.
+ *
+ * @param args - the arguments after `stats`; none are taken.
+ * @param io - stdout for the ledger, stderr for errors, the environment.
+ * @param deps - the working directory and git; injected in tests.
+ * @returns 0, 1 when the memory cannot be read, 2 on usage.
+ */
+export async function runStats(
+  args: readonly string[],
+  io: CliIo,
+  deps: McpDeps = {},
+): Promise<number> {
+  if (args.length > 0) {
+    io.stderr(`antibody: stats takes no arguments\n${USAGE}`);
+    return 2;
+  }
+  const cwd = deps.cwd ?? process.cwd();
+  const [stats] = createTools({
+    memory: () => memoryDir(cwd, deps.git, io.env),
+    agent: agentName("cli", worktreeRoot(cwd, deps.git), io.env),
+    session: `cli-${deps.pid ?? process.pid}`,
+  }).filter((tool) => tool.name === "antibody_stats");
+  const result = await (stats as Tool).call({});
+  if (result.isError) {
+    io.stderr(`antibody: ${result.text.replace(/^antibody_stats: /, "")}\n`);
+    return 1;
+  }
+  io.stdout(`${result.text}\n`);
+  return 0;
+}
+
+/**
  * The command line's entry point.
  *
  * @param argv - the arguments after the program name.
@@ -232,6 +269,7 @@ export async function main(
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
   if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
   if (command === "setup") return runSetup(rest, io, deps);
+  if (command === "stats") return runStats(rest, io, deps);
   if (command === "--version" || command === "-v") {
     io.stdout(`${VERSION}\n`);
     return 0;
