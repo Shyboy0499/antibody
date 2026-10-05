@@ -1,0 +1,46 @@
+name: Privacy guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ported from dsh-errkb's privacy guard (MIT; see NOTICE). antibody is a
+      # public repository whose fixtures and docs talk about credentials and
+      # machine paths, so every alternative below requires a full, real entity -
+      # a two-segment path, a personal-domain address, or a credential-shaped
+      # token - and prose about credentials cannot trip it.
+      #
+      # tests/redact-patterns.test.ts reads PATTERN from this file and checks it
+      # against src/redact-patterns.ts, so the two cannot drift apart.
+      #
+      # The Windows-path alternative excludes the backtick from its segment
+      # class on purpose: with a plain `[^\\ ]+` it happily spans quoted prose
+      # such as `X:\...` and `\\?\...` on one line and reports a leak that is
+      # not there.
+      #
+      # The e-mail alternative allows zero or more subdomains before the listed
+      # domain. An earlier form demanded at least one (`[A-Za-z0-9.-]+\.gmail\.com`),
+      # so a plain address at gmail.com, qq.com or any other listed provider
+      # passed unnoticed.
+      #
+      # The check is deliberately blunt and local: it catches what a human
+      # forgets to look for. Placeholders such as <repo-root> or <path> are the
+      # intended way to write about a machine-specific location here.
+      - name: Reject personal data and credentials
+        run: |
+          PATTERN='[A-Za-z]:\\[^\\`]+\\|/Users/[A-Za-z0-9._-]+/|/home/[A-Za-z0-9._-]+/|[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)*(edu|edu\.[a-z]{2}|ac\.[a-z]{2}|gmail\.com|outlook\.com|hotmail\.com|qq\.com|163\.com|126\.com)|sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._~+/-]{20,}'
+          if grep -rInE "$PATTERN" --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=lib . ; then
+            echo "::error::Personal data or credential-shaped text found above. Replace machine-specific locations with <repo-root> and remove the rest."
+            exit 1
+          fi
+          echo "No personal data or credential patterns found."
