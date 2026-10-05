@@ -37,6 +37,7 @@ export const EVENT_KINDS = [
   "fix",
   "notice",
   "resolve",
+  "forget",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];

@@ -588,3 +588,91 @@ describe("antibody_record", () => {
     );
   });
 });
+
+describe("antibody_forget", () => {
+  const archive = async () =>
+    parseDocument(await readFile(filesIn(memory).archive, "utf8")).blocks.map(
+      (b) => [b.entry.id, b.entry.notes],
+    );
+  const kinds = async () =>
+    (await readEventsFrom(filesIn(memory).events)).events.map((e) => [
+      e.kind,
+      e.id,
+      e.text,
+    ]);
+
+  it("archives an entry with its reason and releases its claim", async () => {
+    await fail();
+    expect(
+      await text("antibody_forget", { id: "e-1", reason: "Typo in the path." }),
+    ).toBe("Archived E-0001 to ANTIBODIES.archive.md.");
+    expect((await store().read()).blocks).toEqual([]);
+    expect(await archive()).toEqual([
+      ["E-0001", expect.stringContaining("Typo in the path.")],
+    ]);
+    expect((await kinds()).slice(-2)).toEqual([
+      ["forget", "E-0001", "Typo in the path."],
+      ["release", "E-0001", "forgotten"],
+    ]);
+  });
+
+  it("stops an agent waiting for the entry's fix", async () => {
+    await fail();
+    await fail("s-b");
+    await text("antibody_forget", { id: "E-0001" });
+    const waiting = createFleet(
+      memory,
+      "claude-code@s-b",
+      "s-b",
+      {},
+      { clock },
+    );
+    expect(await waiting.poll()).toEqual([]);
+    const session = await readFile(
+      join(memory, "sessions", "s-b.json"),
+      "utf8",
+    );
+    expect(JSON.parse(session).holding).toEqual([]);
+  });
+
+  it("logs no release when nobody held a claim", async () => {
+    await fail();
+    await text("antibody_record", { id: "E-0001", fix: FIX });
+    await text("antibody_forget", { id: "E-0001" });
+    expect((await kinds()).at(-1)).toEqual(["forget", "E-0001", undefined]);
+  });
+
+  it("refuses an unknown or blank ID", async () => {
+    await fail();
+    expect(await run("antibody_forget", { id: "E-0002" })).toEqual({
+      text: "antibody_forget: no entry E-0002",
+      isError: true,
+    });
+    expect(await run("antibody_forget", { id: " " })).toEqual({
+      text: "antibody_forget: id is empty",
+      isError: true,
+    });
+    expect(await run("antibody_forget", {})).toEqual({
+      text: "antibody_forget: id is required",
+      isError: true,
+    });
+  });
+
+  it("reports an entry archived under it", async () => {
+    await fail();
+    const real = nodeStoreFs();
+    let reads = 0;
+    const fs: StoreFs = {
+      ...real,
+      readFile: async (path) =>
+        path === filesIn(memory).errors && reads++ > 0
+          ? undefined
+          : real.readFile(path),
+    };
+    expect(
+      await tool("antibody_forget", { deps: { clock, fs } }).call({
+        id: "E-0001",
+      }),
+    ).toEqual({ text: "antibody_forget: no entry E-0001", isError: true });
+  });
+});
