@@ -3411,6 +3411,26 @@ function createTools(context) {
 		if (full) lines.push("raw:", entry.raw);
 		return lines.join("\n");
 	}
+	/**
+	* The entry whose sample holds every token of a query, the closest first.
+	* An agent that pastes the error line finds the entry a hook recorded with
+	* the command and the exit code around it (`pnpm test → Error: …`), which
+	* neither the signature nor the similarity threshold would find.
+	*/
+	function containing(tokens, index) {
+		if (tokens.size < 3) return void 0;
+		let best;
+		let bestSimilarity = -1;
+		for (const indexed of index) {
+			if (![...tokens].every((t) => indexed.tokens.has(t))) continue;
+			const similarity = jaccard(tokens, indexed.tokens);
+			if (similarity > bestSimilarity) {
+				best = indexed;
+				bestSimilarity = similarity;
+			}
+		}
+		return best;
+	}
 	const lookup = define("antibody_lookup", "Look up an error in the fleet's shared antibody memory by entry ID, 12-hex fingerprint or the error text itself. Returns the entry with its recorded fix, and which agent is diagnosing it when there is no fix yet, or the closest entries when nothing matches.", true, {
 		query: {
 			type: "string",
@@ -3437,6 +3457,8 @@ function createTools(context) {
 		const hit = matchText(q, index);
 		if (hit !== void 0) return describe(memory, hit.entry, hit.via, full);
 		const tokens = tokenize(normalize(q));
+		const contained = containing(tokens, index);
+		if (contained !== void 0) return describe(memory, contained.entry, "contained text", full);
 		const closest = index.map((i, order) => ({
 			i,
 			order,

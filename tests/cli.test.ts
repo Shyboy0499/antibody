@@ -360,7 +360,7 @@ describe("antibody mcp", () => {
         rpc(2, "tools/list"),
         rpc(3, "tools/call", {
           name: "antibody_lookup",
-          arguments: { query: "E-0001" },
+          arguments: { query: "Environment variable not found: DATABASE_URL" },
         }),
         rpc(4, "tools/call", {
           name: "antibody_record",

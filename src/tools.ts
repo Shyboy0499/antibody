@@ -135,6 +135,12 @@ export const DEFAULT_LIST_LIMIT = 20;
 /** The most entries antibody_list returns, whatever `limit` says. */
 export const MAX_LIST_LIMIT = 200;
 
+/**
+ * Fewest distinct tokens a lookup needs before it can match by containment:
+ * fewer, and a query like "error" would match everything.
+ */
+export const CONTAINED_MIN_TOKENS = 3;
+
 /** A query quoted back in a miss is clipped to this. */
 const QUERY_MAX_CHARS = 80;
 
@@ -421,6 +427,30 @@ export function createTools(context: ToolsContext): Tool[] {
     return lines.join("\n");
   }
 
+  /**
+   * The entry whose sample holds every token of a query, the closest first.
+   * An agent that pastes the error line finds the entry a hook recorded with
+   * the command and the exit code around it (`pnpm test → Error: …`), which
+   * neither the signature nor the similarity threshold would find.
+   */
+  function containing(
+    tokens: ReadonlySet<string>,
+    index: readonly IndexedEntry[],
+  ): IndexedEntry | undefined {
+    if (tokens.size < CONTAINED_MIN_TOKENS) return undefined;
+    let best: IndexedEntry | undefined;
+    let bestSimilarity = -1;
+    for (const indexed of index) {
+      if (![...tokens].every((t) => indexed.tokens.has(t))) continue;
+      const similarity = jaccard(tokens, indexed.tokens);
+      if (similarity > bestSimilarity) {
+        best = indexed;
+        bestSimilarity = similarity;
+      }
+    }
+    return best;
+  }
+
   const lookup = define(
     "antibody_lookup",
     "Look up an error in the fleet's shared antibody memory by entry ID, 12-hex fingerprint or the error text itself. Returns the entry with its recorded fix, and which agent is diagnosing it when there is no fix yet, or the closest entries when nothing matches.",
@@ -459,6 +489,10 @@ export function createTools(context: ToolsContext): Tool[] {
       if (hit !== undefined) return describe(memory, hit.entry, hit.via, full);
 
       const tokens = tokenize(normalize(q));
+      const contained = containing(tokens, index);
+      if (contained !== undefined)
+        return describe(memory, contained.entry, "contained text", full);
+
       const closest = index
         .map((i, order) => ({
           i,
