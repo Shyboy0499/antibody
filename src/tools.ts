@@ -24,6 +24,7 @@ import { normalize } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
 import {
   DEFAULT_STORE_OPTIONS,
+  ENTRY_STATUSES,
   LockTimeoutError,
   ParseError,
   createStore,
@@ -101,6 +102,12 @@ export const CLOSEST_COUNT = 3;
 
 /** Titles in a list or a closest list are clipped to this. */
 export const TITLE_MAX_CHARS = 120;
+
+/** Entries antibody_list returns when `limit` is not given. */
+export const DEFAULT_LIST_LIMIT = 20;
+
+/** The most entries antibody_list returns, whatever `limit` says. */
+export const MAX_LIST_LIMIT = 200;
 
 /** A query quoted back in a miss is clipped to this. */
 const QUERY_MAX_CHARS = 80;
@@ -421,5 +428,51 @@ export function createTools(context: ToolsContext): Tool[] {
     },
   );
 
-  return [lookup];
+  // -------------------------------------------------------------------------
+  // antibody_list
+
+  const list = define(
+    "antibody_list",
+    "List the entries in the fleet's shared antibody memory: ID, hits, status and title only, no bodies.",
+    true,
+    {
+      cat: {
+        type: "string",
+        description:
+          "Only this category: tool, command, llm, agent, or a display category such as tool / Bash.",
+      },
+      status: { type: "string", enum: ENTRY_STATUSES },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        description: `At most this many entries (default ${DEFAULT_LIST_LIMIT}, at most ${MAX_LIST_LIMIT}).`,
+      },
+    },
+    [],
+    async (args, memory) => {
+      const limit = Math.min(
+        (args.limit as number | undefined) ?? DEFAULT_LIST_LIMIT,
+        MAX_LIST_LIMIT,
+      );
+      const cat = given(args.cat)?.toLowerCase();
+      const matches = indexEntries(await memory.entries()).filter(
+        (i) =>
+          (cat === undefined ||
+            i.category.toLowerCase() === cat ||
+            i.entry.category.toLowerCase() === cat) &&
+          (args.status === undefined || i.entry.status === args.status),
+      );
+      if (matches.length === 0) return "No entries.";
+      const shown = matches.slice(0, limit);
+      return [
+        ...shown.map(
+          ({ entry }) =>
+            `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(entry.title, TITLE_MAX_CHARS)}`,
+        ),
+        `${shown.length} of ${matches.length} shown.`,
+      ].join("\n");
+    },
+  );
+
+  return [lookup, list];
 }
