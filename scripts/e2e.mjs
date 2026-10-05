@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// The M2 check, end to end, against the committed bundle (docs/roadmap.md):
-// two Claude Code sessions in two worktrees of one repository hit the same
-// missing-.env error, and the second receives the first one's fix within one
-// second of it being recorded. Then it measures how long a hook call takes.
+// The M2 and M3 checks, end to end, against the committed bundle
+// (docs/roadmap.md). M2: two Claude Code sessions in two worktrees of one
+// repository hit the same missing-.env error, and the second receives the
+// first one's fix within one second of it being recorded. M3: the same
+// exchange between Claude Code, Gemini CLI and Codex CLI agents, in every
+// direction. Then it measures how long a hook call takes.
 //
 // It drives dist/antibody.mjs exactly as Claude Code does: one process per
 // hook call with the payload on stdin, and `antibody mcp claude-code` as a
@@ -39,24 +41,27 @@ const git = (...args) =>
 
 const ms = (start) => Number(process.hrtime.bigint() - start) / 1e6;
 
-/** One hook call in its own process, as Claude Code makes it. */
-function hook(event, cwd, session, fields = {}) {
-  const payload = JSON.stringify({
-    hook_event_name: event,
-    session_id: session,
-    cwd,
-    transcript_path: join(root, `${session}.jsonl`),
-    ...fields,
-  });
+/** One hook call in its own process, as the harness makes it. */
+function runHook(harness, payload) {
   const start = process.hrtime.bigint();
-  const out = execFileSync(process.execPath, [BUNDLE, "hook", "claude-code"], {
-    input: payload,
+  const out = execFileSync(process.execPath, [BUNDLE, "hook", harness], {
+    input: JSON.stringify(payload),
   }).toString();
   const elapsed = ms(start);
   const context =
     out === "" ? "" : JSON.parse(out).hookSpecificOutput.additionalContext;
   return { context, ms: elapsed };
 }
+
+/** One Claude Code hook call. */
+const hook = (event, cwd, session, fields = {}) =>
+  runHook("claude-code", {
+    hook_event_name: event,
+    session_id: session,
+    cwd,
+    transcript_path: join(root, `${session}.jsonl`),
+    ...fields,
+  });
 
 // The error a fresh worktree gives: the dev server cannot read its .env.
 const missingEnv = (cwd, session) =>
@@ -72,9 +77,83 @@ const otherCall = (cwd, session, n = 0) =>
     tool_response: "export {};",
   });
 
-/** A stdio MCP client for one `antibody mcp claude-code` server. */
-function mcpClient(cwd, session) {
-  const child = spawn(process.execPath, [BUNDLE, "mcp", "claude-code"], {
+// How each harness reports a failing `pnpm test` and an unrelated next call,
+// in the payload shapes read off their sources (src/gemini.ts, src/codex.ts).
+const HARNESSES = {
+  "claude-code": {
+    fail: (cwd, session, error) => ({
+      hook_event_name: "PostToolUseFailure",
+      session_id: session,
+      cwd,
+      tool_name: "Bash",
+      tool_input: { command: "pnpm test" },
+      error: `Exit code 1\n${error}`,
+    }),
+    next: (cwd, session) => ({
+      hook_event_name: "PostToolUse",
+      session_id: session,
+      cwd,
+      tool_name: "Read",
+      tool_input: { file_path: join(cwd, "README.md") },
+      tool_response: "readme",
+    }),
+  },
+  gemini: {
+    fail: (cwd, session, error) => ({
+      hook_event_name: "AfterTool",
+      session_id: session,
+      cwd,
+      timestamp: new Date().toISOString(),
+      tool_name: "run_shell_command",
+      tool_input: { command: "pnpm test" },
+      tool_response: {
+        llmContent: `<untrusted_context>\nOutput: ${error}\nExit Code: 1\nProcess Group PGID: 4242\n</untrusted_context>`,
+        returnDisplay: error,
+      },
+    }),
+    next: (cwd, session) => ({
+      hook_event_name: "AfterTool",
+      session_id: session,
+      cwd,
+      timestamp: new Date().toISOString(),
+      tool_name: "read_file",
+      tool_input: { absolute_path: join(cwd, "README.md") },
+      tool_response: { llmContent: "readme", returnDisplay: "" },
+    }),
+  },
+  codex: {
+    fail: (cwd, session, error) => ({
+      hook_event_name: "PostToolUse",
+      session_id: session,
+      cwd,
+      transcript_path: null,
+      model: "gpt-5.5-codex",
+      permission_mode: "default",
+      turn_id: "t-1",
+      tool_name: "Bash",
+      tool_input: { command: "pnpm test" },
+      tool_response: `${error}\n`,
+      tool_use_id: "call_1",
+    }),
+    next: (cwd, session) => ({
+      hook_event_name: "PostToolUse",
+      session_id: session,
+      cwd,
+      transcript_path: null,
+      model: "gpt-5.5-codex",
+      permission_mode: "default",
+      turn_id: "t-2",
+      tool_name: "Bash",
+      tool_input: { command: "ls" },
+      tool_response: "README.md\n",
+      tool_use_id: "call_2",
+    }),
+  },
+};
+
+/** A stdio MCP client for one `antibody mcp <harness>` server. */
+function mcpClient(cwd, session, harness = "claude-code") {
+  const child = spawn(process.execPath, [BUNDLE, "mcp", harness], {
     cwd,
     env: {
       ...process.env,
@@ -187,6 +266,38 @@ try {
     later.context.includes("Known fix") && later.context.includes(fix),
     `a third agent meeting the error later gets the fix at once: "${later.context}"`,
   );
+
+  console.log(
+    "\nMixed fleet: each harness hands a fix to each of the others\n",
+  );
+  let pair = 0;
+  for (const claimer of Object.keys(HARNESSES))
+    for (const receiver of Object.keys(HARNESSES)) {
+      if (claimer === receiver) continue;
+      pair++;
+      const error = `Error: Environment variable not found: VAR_${pair}.`;
+      const [sa, sb] = [`${claimer}-${pair}`, `${receiver}-${pair}`];
+      const a = HARNESSES[claimer];
+      const b = HARNESSES[receiver];
+      const claimed = runHook(claimer, a.fail(wt("wt-a"), sa, error));
+      const told = runHook(receiver, b.fail(wt("wt-b"), sb, error));
+      const client = mcpClient(wt("wt-a"), sa, claimer);
+      await client.start();
+      const entry = /E-\d+/.exec(told.context)?.[0] ?? "";
+      const pairFix = `Set VAR_${pair} in .env (pair ${pair}).`;
+      await client.call("antibody_record", { id: entry, fix: pairFix });
+      const at = process.hrtime.bigint();
+      await client.stop();
+      const got = runHook(receiver, b.next(wt("wt-b"), sb));
+      const after = ms(at);
+      check(
+        claimed.context === "" &&
+          told.context.includes(`${claimer}@wt-a has been diagnosing this`) &&
+          got.context.includes(pairFix) &&
+          after < DELIVERY_LIMIT_MS,
+        `${claimer} -> ${receiver}: told who is on it, then got the fix ${fmt(after)} after it was recorded`,
+      );
+    }
 
   console.log(`\nHook latency, ${SAMPLES} calls each, through the bundle\n`);
   const times = {
