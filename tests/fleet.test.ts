@@ -87,8 +87,9 @@ describe("fleet: failures", () => {
     expect(notice).toContain("[antibody] E-0001 known (2 hits)");
     expect(notice).toContain(`fix: ${FIX}`);
     expect(notice).toContain("Known fix: try this first");
-    const tokens = (await events()).find((e) => e.kind === "notice")?.tokens;
-    expect(tokens).toBeGreaterThan(0);
+    const logged = (await events()).find((e) => e.kind === "notice");
+    expect(logged?.tokens).toBeGreaterThan(0);
+    expect(logged?.notice).toBe("hit");
   });
 
   it("tells each session about a fixed entry once", async () => {
@@ -197,12 +198,12 @@ describe("fleet: claims", () => {
       await readFile(join(memory, "sessions", "s-b.json"), "utf8"),
     );
     expect(session.holding).toEqual([Object.keys(await claimsFile())[0]]);
-    expect((await events()).map((e) => e.kind)).toEqual([
-      "miss",
-      "claim",
-      "hit",
-      "hold",
-      "notice",
+    expect((await events()).map((e) => [e.kind, e.notice])).toEqual([
+      ["miss", undefined],
+      ["claim", undefined],
+      ["hit", undefined],
+      ["hold", undefined],
+      ["notice", "hold"],
     ]);
   });
 
@@ -226,12 +227,12 @@ describe("fleet: claims", () => {
     expect(Object.values(await claimsFile())[0]).toMatchObject({
       agent: "agent-s-b",
     });
-    expect((await events()).map((e) => e.kind)).toEqual([
-      "miss",
-      "claim",
-      "hit",
-      "claim",
-      "notice",
+    expect((await events()).map((e) => [e.kind, e.notice])).toEqual([
+      ["miss", undefined],
+      ["claim", undefined],
+      ["hit", undefined],
+      ["claim", undefined],
+      ["notice", "no-fix"],
     ]);
   });
 
