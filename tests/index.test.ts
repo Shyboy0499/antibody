@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as antibody from "../src/index";
 import * as capture from "../src/capture";
+import * as injector from "../src/injector";
 import * as match from "../src/match";
 import * as notice from "../src/notice";
 import * as paths from "../src/paths";
@@ -25,6 +26,7 @@ describe("public entry point", () => {
     ["notice", notice],
     ["trust", trust],
     ["resolve-detect", resolveDetect],
+    ["injector", injector],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
