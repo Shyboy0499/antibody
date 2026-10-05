@@ -414,9 +414,7 @@ function agentName(harness, worktree, env = process.env) {
 	return clip(chosen !== "" ? chosen : `${harness}@${basename(worktree) || worktree}`, 64);
 }
 //#endregion
-//#region src/claude-code.ts
-/** The harness name, as agent names and events use it. */
-const CLAUDE_CODE = "claude-code";
+//#region src/hook-input.ts
 /** The hook events antibody handles. */
 const HOOK_EVENTS = [
 	"SessionStart",
@@ -425,71 +423,6 @@ const HOOK_EVENTS = [
 	"PostToolUseFailure",
 	"SessionEnd"
 ];
-const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-const str = (value) => typeof value === "string" ? value : void 0;
-function outputText(value) {
-	if (value === void 0 || value === null) return void 0;
-	if (typeof value === "string") return value;
-	if (isRecord$2(value)) {
-		const streams = [str(value.stdout), str(value.stderr)].filter((s) => s !== void 0 && s !== "");
-		if (streams.length > 0) return streams.join("\n");
-	}
-	return JSON.stringify(value);
-}
-const EXIT_KEYS = [
-	"exitCode",
-	"exit_code",
-	"returnCode",
-	"return_code"
-];
-function outputExitCode(value) {
-	if (!isRecord$2(value)) return void 0;
-	for (const key of EXIT_KEYS) {
-		const n = value[key];
-		if (typeof n === "number" && Number.isInteger(n)) return n;
-	}
-}
-/**
-* Parse a hook's stdin.
-*
-* @param text - the JSON Claude Code wrote.
-* @returns the hook call, or undefined for an event antibody does not handle
-*   or a payload it cannot read.
-*/
-function parseHookInput(text) {
-	let value;
-	try {
-		value = JSON.parse(text);
-	} catch {
-		return;
-	}
-	if (!isRecord$2(value)) return void 0;
-	const event = value.hook_event_name;
-	const sessionId = str(value.session_id);
-	const cwd = str(value.cwd);
-	if (!HOOK_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
-	const input = {
-		event,
-		sessionId,
-		cwd
-	};
-	const agentId = str(value.agent_id);
-	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
-	const toolName = str(value.tool_name);
-	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord$2(value.tool_input)) {
-		const command = str(value.tool_input.command);
-		if (command !== void 0 && command.trim() !== "") input.command = command;
-	}
-	const result = value.tool_output ?? value.tool_response;
-	const output = outputText(result);
-	if (output !== void 0) input.output = output;
-	const exitCode = outputExitCode(result);
-	if (exitCode !== void 0) input.exitCode = exitCode;
-	const error = str(value.error);
-	if (error !== void 0) input.error = error;
-	return input;
-}
 const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
 const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
 /** The exit code and output of a failed shell command, when the call is one. */
@@ -554,6 +487,75 @@ function toToolCall(input) {
 		call.text = input.error ?? "";
 	}
 	return call;
+}
+//#endregion
+//#region src/claude-code.ts
+/** The harness name, as agent names and events use it. */
+const CLAUDE_CODE = "claude-code";
+const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const str = (value) => typeof value === "string" ? value : void 0;
+function outputText(value) {
+	if (value === void 0 || value === null) return void 0;
+	if (typeof value === "string") return value;
+	if (isRecord$2(value)) {
+		const streams = [str(value.stdout), str(value.stderr)].filter((s) => s !== void 0 && s !== "");
+		if (streams.length > 0) return streams.join("\n");
+	}
+	return JSON.stringify(value);
+}
+const EXIT_KEYS = [
+	"exitCode",
+	"exit_code",
+	"returnCode",
+	"return_code"
+];
+function outputExitCode(value) {
+	if (!isRecord$2(value)) return void 0;
+	for (const key of EXIT_KEYS) {
+		const n = value[key];
+		if (typeof n === "number" && Number.isInteger(n)) return n;
+	}
+}
+/**
+* Parse a hook's stdin.
+*
+* @param text - the JSON Claude Code wrote.
+* @returns the hook call, or undefined for an event antibody does not handle
+*   or a payload it cannot read.
+*/
+function parseHookInput(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return;
+	}
+	if (!isRecord$2(value)) return void 0;
+	const event = value.hook_event_name;
+	const sessionId = str(value.session_id);
+	const cwd = str(value.cwd);
+	if (!HOOK_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
+	const input = {
+		event,
+		sessionId,
+		cwd
+	};
+	const agentId = str(value.agent_id);
+	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
+	const toolName = str(value.tool_name);
+	if (toolName !== void 0) input.toolName = toolName;
+	if (isRecord$2(value.tool_input)) {
+		const command = str(value.tool_input.command);
+		if (command !== void 0 && command.trim() !== "") input.command = command;
+	}
+	const result = value.tool_output ?? value.tool_response;
+	const output = outputText(result);
+	if (output !== void 0) input.output = output;
+	const exitCode = outputExitCode(result);
+	if (exitCode !== void 0) input.exitCode = exitCode;
+	const error = str(value.error);
+	if (error !== void 0) input.error = error;
+	return input;
 }
 /** Claude Code caps each additionalContext at this many characters. */
 const ADDITIONAL_CONTEXT_MAX_CHARS = 1e4;

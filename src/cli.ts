@@ -10,14 +10,9 @@
 // leaves Claude Code's behaviour unchanged. ANTIBODY_DEBUG=1 reports errors on
 // stderr.
 import { agentName, worktreeRoot } from "./agent";
-import {
-  CLAUDE_CODE,
-  hookResponse,
-  parseHookInput,
-  toCapture,
-  toToolCall,
-} from "./claude-code";
-import type { HookInput } from "./claude-code";
+import { CLAUDE_CODE, hookResponse, parseHookInput } from "./claude-code";
+import { toCapture, toToolCall } from "./hook-input";
+import type { HookInput } from "./hook-input";
 import { createFleet } from "./fleet";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";

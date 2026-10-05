@@ -15,6 +15,7 @@ export * from "./state";
 export * from "./events";
 export * from "./claims";
 export * from "./agent";
+export * from "./hook-input";
 export * from "./claude-code";
 export * from "./session";
 export * from "./fleet";

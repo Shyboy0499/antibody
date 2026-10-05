@@ -4,6 +4,7 @@ import * as capture from "../src/capture";
 import * as agent from "../src/agent";
 import * as claims from "../src/claims";
 import * as claudeCode from "../src/claude-code";
+import * as hookInput from "../src/hook-input";
 import * as cli from "../src/cli";
 import * as events from "../src/events";
 import * as fleet from "../src/fleet";
@@ -41,6 +42,7 @@ describe("public entry point", () => {
     ["events", events],
     ["claims", claims],
     ["agent", agent],
+    ["hook-input", hookInput],
     ["claude-code", claudeCode],
     ["session", session],
     ["fleet", fleet],
