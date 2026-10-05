@@ -8,18 +8,20 @@ Each milestone ends with something that can be checked, not just written.
 - Design: [design.md](design.md)
 - Simulated `antibody watch` screen: [demo/index.html](../demo/index.html)
 
-## M1 · Core and shared memory
+## M1 · Core and shared memory (done)
 
-- Toolchain matching dsh-errkb: pnpm, TypeScript, tsdown, vitest with a 99% coverage
-  gate, oxlint, prettier, CI on every push and pull request.
-- Bring over dsh-errkb's pure layer (fingerprints, redaction, store, matching, state,
-  capture, resolution detection), either copied with its MIT notice or as a shared
-  package (design Q2).
-- The shared store in the git common directory: `events.jsonl`, `ANTIBODIES.md`,
-  `state.json`, the lock-and-rename rewrite, claims with a time to live.
-- **Done when:** eight writer processes hammering one memory directory lose no event
-  and corrupt no file, and every linked worktree of a test repo resolves the same
-  memory directory.
+- Toolchain: pnpm, TypeScript, tsdown, vitest with a 99% coverage gate, oxlint,
+  prettier, and CI plus a privacy guard on every push and pull request.
+- dsh-errkb's pure layer, copied with its MIT notice: fingerprints, redaction, the
+  markdown store, seed entries, matching, capture, notices, fix trust, the injector,
+  machine-local state and resolution detection (design Q2).
+- The shared memory: `memoryDir()` in the git common directory; `ANTIBODIES.md` with
+  antibody's own machine comment, still reading dsh-errkb documents; the
+  `events.jsonl` event log; claims in `claims.json`.
+- **Checked:** eight writer processes on one memory directory lose no event, entry
+  number or counter increment, and every file still parses
+  (`tests/concurrency.test.ts`). The main checkout, every linked worktree and their
+  subdirectories resolve the same memory directory (`tests/memory-dir.test.ts`).
 
 ## M2 · Claude Code
 
@@ -27,7 +29,8 @@ Each milestone ends with something that can be checked, not just written.
   that are not zero), `SessionStart` and `Stop` to `antibody hook claude-code <event>`.
 - MCP server with `antibody_lookup`, `antibody_record`, `antibody_list`,
   `antibody_stats` and `antibody_forget`.
-- Claims, claim hints, trust, per-session caps.
+- Wire the claims, fix trust and per-session caps built in M1 into the hooks, with
+  claim hints for agents that hit an entry another agent is diagnosing.
 - **Done when:** two Claude Code sessions in two worktrees of one repo hit the same
   missing-`.env` error, and the second session receives the first session's fix within
   one second of it being recorded, with the hook adding under 50 ms per call.
