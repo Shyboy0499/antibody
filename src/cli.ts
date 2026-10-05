@@ -1,6 +1,7 @@
 // The antibody command line.
 //
 //   antibody hook claude-code   handle one Claude Code hook call (stdin JSON)
+//   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody --version          print the version
 //
 // A hook must never break or block the agent it runs in, so `hook` fails open:
@@ -19,9 +20,11 @@ import {
 import type { HookInput } from "./claude-code";
 import { createFleet } from "./fleet";
 import type { Fleet } from "./fleet";
+import { createMcpServer, serveLines } from "./mcp";
 import { memoryDir } from "./paths";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
+import { createTools } from "./tools";
 
 /** The version `antibody --version` prints. */
 export const VERSION = "0.0.0";
@@ -43,6 +46,19 @@ export interface HookDeps {
   deadlineMs?: number;
   fleet?: (memory: string, agent: string, session: string) => Fleet;
 }
+
+/** What the mcp command needs from the machine; injected in tests. */
+export interface McpDeps {
+  git?: GitRunner;
+  /** The message stream; process.stdin by default. */
+  input?: NodeJS.ReadableStream;
+  /** The working directory; process.cwd() by default. */
+  cwd?: string;
+  pid?: number;
+}
+
+/** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
+const HARNESS_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 
 /**
  * Route one hook call into the fleet loop.
@@ -138,24 +154,63 @@ export async function runHook(
 }
 
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody --version
 `;
+
+/**
+ * `antibody mcp [harness]`: serve the agent tools to one agent until stdin
+ * ends. The harness names the agent the way its hooks do, so a fix recorded
+ * through the tools is credited to the same agent in the event log; it
+ * defaults to "mcp".
+ *
+ * Claude Code starts a stdio server in the project directory and passes
+ * CLAUDE_PROJECT_DIR and CLAUDE_CODE_SESSION_ID, so the server finds the same
+ * memory as the hooks and logs under the same session. Other harnesses get
+ * the working directory and a session named after the process.
+ *
+ * @param harness - the harness name, or "" for the default.
+ * @param io - stdout for responses, stderr for usage errors, the environment.
+ * @param deps - the input stream, the directory, git; injected in tests.
+ * @returns the exit code once stdin ends.
+ */
+export async function runMcp(
+  harness: string,
+  io: CliIo,
+  deps: McpDeps = {},
+): Promise<number> {
+  const name = harness === "" ? "mcp" : harness;
+  if (!HARNESS_NAME.test(name)) {
+    io.stderr(`antibody: not a harness name: ${harness}\n${USAGE}`);
+    return 2;
+  }
+  const cwd = deps.cwd ?? (io.env.CLAUDE_PROJECT_DIR || process.cwd());
+  const tools = createTools({
+    memory: () => memoryDir(cwd, deps.git, io.env),
+    agent: agentName(name, worktreeRoot(cwd, deps.git), io.env),
+    session: io.env.CLAUDE_CODE_SESSION_ID || `mcp-${deps.pid ?? process.pid}`,
+  });
+  const server = createMcpServer(tools, { name: "antibody", version: VERSION });
+  await serveLines(server, deps.input ?? process.stdin, io.stdout);
+  return 0;
+}
 
 /**
  * The command line's entry point.
  *
  * @param argv - the arguments after the program name.
  * @param io - stdin, stdout, stderr and the environment.
- * @param deps - passed to the hook command.
+ * @param deps - passed to the hook and mcp commands.
  * @returns the exit code.
  */
 export async function main(
   argv: readonly string[],
   io: CliIo,
-  deps: HookDeps = {},
+  deps: HookDeps & McpDeps = {},
 ): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
+  if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
   if (command === "--version" || command === "-v") {
     io.stdout(`${VERSION}\n`);
     return 0;
