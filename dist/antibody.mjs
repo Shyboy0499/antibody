@@ -1915,6 +1915,7 @@ function encodeEvent(event, now = /* @__PURE__ */ new Date()) {
 	};
 	if (event.id !== void 0) base.id = clip(event.id, 200);
 	if (event.tokens !== void 0) base.tokens = event.tokens;
+	if (event.notice !== void 0) base.notice = event.notice;
 	const line = (text) => `${JSON.stringify(text === void 0 ? base : {
 		...base,
 		text
@@ -2757,7 +2758,8 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			kind: "notice",
 			id: notice.id,
 			tokens: estimateTokens(notice.text),
-			text: notice.text
+			text: notice.text,
+			notice: notice.kind
 		});
 	}
 	async function hold(s, rt, fingerprint, label, outcome, notices) {
@@ -2775,7 +2777,8 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			kind: "notice",
 			id: label,
 			tokens: estimateTokens(text),
-			text
+			text,
+			notice: "hold"
 		});
 	}
 	async function onHit(s, rt, found, record, notices) {

@@ -16,6 +16,7 @@
 import { appendFile, mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 import { clip } from "./notice";
+import type { NoticeKind } from "./notice";
 import { redact } from "./redact";
 
 /** The version every event line carries. */
@@ -56,6 +57,11 @@ export interface MemoryEvent {
   id?: string;
   /** Tokens spent or saved, when known. */
   tokens?: number;
+  /**
+   * For a notice: which one it was, a NoticeKind or `hold` for a claim hint.
+   * Readers accept any string, so a newer writer can add kinds.
+   */
+  notice?: NoticeKind | "hold";
   /** A short description, redacted. */
   text?: string;
 }
@@ -82,6 +88,7 @@ export function isMemoryEvent(value: unknown): value is MemoryEvent {
     typeof e.session === "string" &&
     optionalString("id") &&
     optionalString("text") &&
+    optionalString("notice") &&
     (e.tokens === undefined ||
       (typeof e.tokens === "number" &&
         Number.isFinite(e.tokens) &&
@@ -109,6 +116,7 @@ export function encodeEvent(event: NewEvent, now: Date = new Date()): string {
   };
   if (event.id !== undefined) base.id = clip(event.id, EVENT_LABEL_MAX_CHARS);
   if (event.tokens !== undefined) base.tokens = event.tokens;
+  if (event.notice !== undefined) base.notice = event.notice;
   const line = (text: string | undefined) =>
     `${JSON.stringify(text === undefined ? base : { ...base, text })}\n`;
   if (event.text === undefined) return line(undefined);

@@ -222,6 +222,7 @@ export function createFleet(
       id: notice.id,
       tokens: estimateTokens(notice.text),
       text: notice.text,
+      notice: notice.kind,
     });
   }
 
@@ -250,6 +251,7 @@ export function createFleet(
       id: label,
       tokens: estimateTokens(text),
       text,
+      notice: "hold",
     });
   }
 

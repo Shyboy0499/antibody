@@ -34,6 +34,15 @@ describe("encodeEvent", () => {
     });
   });
 
+  it("records which notice a notice event was", () => {
+    const line = encodeEvent(
+      { ...base, kind: "notice", id: "E-0007", tokens: 40, notice: "hit" },
+      NOW,
+    );
+    expect(decode(line)).toMatchObject({ kind: "notice", notice: "hit" });
+    expect(isMemoryEvent(decode(line))).toBe(true);
+  });
+
   it("keeps a time the event already has, and leaves out absent fields", () => {
     const line = encodeEvent({ ...base, t: "2026-10-01T00:00:00.000Z" }, NOW);
     expect(decode(line)).toEqual({
@@ -95,6 +104,7 @@ describe("isMemoryEvent", () => {
     ["a numeric session", { ...good, session: 7 }],
     ["a numeric id", { ...good, id: 7 }],
     ["a numeric text", { ...good, text: 7 }],
+    ["a numeric notice", { ...good, notice: 7 }],
     ["negative tokens", { ...good, tokens: -1 }],
     ["infinite tokens", { ...good, tokens: Infinity }],
     ["string tokens", { ...good, tokens: "96" }],
