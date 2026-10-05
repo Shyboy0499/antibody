@@ -1,0 +1,19 @@
+{
+  "name": "antibody",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Herd immunity for coding-agent fleets: when one agent beats an error, every agent running beside it gets the fix.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "~5.7.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@11.7.0"
+}
