@@ -492,13 +492,13 @@ function toToolCall(input) {
 //#region src/claude-code.ts
 /** The harness name, as agent names and events use it. */
 const CLAUDE_CODE = "claude-code";
-const isRecord$4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-const str$1 = (value) => typeof value === "string" ? value : void 0;
+const isRecord$5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const str$2 = (value) => typeof value === "string" ? value : void 0;
 function outputText(value) {
 	if (value === void 0 || value === null) return void 0;
 	if (typeof value === "string") return value;
-	if (isRecord$4(value)) {
-		const streams = [str$1(value.stdout), str$1(value.stderr)].filter((s) => s !== void 0 && s !== "");
+	if (isRecord$5(value)) {
+		const streams = [str$2(value.stdout), str$2(value.stderr)].filter((s) => s !== void 0 && s !== "");
 		if (streams.length > 0) return streams.join("\n");
 	}
 	return JSON.stringify(value);
@@ -510,7 +510,7 @@ const EXIT_KEYS = [
 	"return_code"
 ];
 function outputExitCode(value) {
-	if (!isRecord$4(value)) return void 0;
+	if (!isRecord$5(value)) return void 0;
 	for (const key of EXIT_KEYS) {
 		const n = value[key];
 		if (typeof n === "number" && Number.isInteger(n)) return n;
@@ -530,22 +530,22 @@ function parseHookInput(text) {
 	} catch {
 		return;
 	}
-	if (!isRecord$4(value)) return void 0;
+	if (!isRecord$5(value)) return void 0;
 	const event = value.hook_event_name;
-	const sessionId = str$1(value.session_id);
-	const cwd = str$1(value.cwd);
+	const sessionId = str$2(value.session_id);
+	const cwd = str$2(value.cwd);
 	if (!HOOK_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
 	const input = {
 		event,
 		sessionId,
 		cwd
 	};
-	const agentId = str$1(value.agent_id);
+	const agentId = str$2(value.agent_id);
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
-	const toolName = str$1(value.tool_name);
+	const toolName = str$2(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord$4(value.tool_input)) {
-		const command = str$1(value.tool_input.command);
+	if (isRecord$5(value.tool_input)) {
+		const command = str$2(value.tool_input.command);
 		if (command !== void 0 && command.trim() !== "") input.command = command;
 	}
 	const result = value.tool_output ?? value.tool_response;
@@ -553,7 +553,7 @@ function parseHookInput(text) {
 	if (output !== void 0) input.output = output;
 	const exitCode = outputExitCode(result);
 	if (exitCode !== void 0) input.exitCode = exitCode;
-	const error = str$1(value.error);
+	const error = str$2(value.error);
 	if (error !== void 0) input.error = error;
 	return input;
 }
@@ -582,6 +582,130 @@ function hookResponse(event, notices) {
 		hookEventName: event,
 		additionalContext: clip(lines.join("\n"), ADDITIONAL_CONTEXT_MAX_CHARS)
 	} });
+}
+//#endregion
+//#region src/codex.ts
+/** The harness name, as agent names and events use it. */
+const CODEX = "codex";
+/** Codex CLI's hook events antibody handles; they keep Claude Code's names. */
+const CODEX_EVENTS = [
+	"SessionStart",
+	"UserPromptSubmit",
+	"PostToolUse",
+	"SessionEnd"
+];
+const isRecord$4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const str$1 = (value) => typeof value === "string" ? value : void 0;
+/** A tool response as text: a string, content items, or JSON. */
+function responseText(value) {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) return value.map(responseText).join("\n");
+	if (isRecord$4(value)) {
+		if (typeof value.text === "string") return value.text;
+		if (Array.isArray(value.content)) return responseText(value.content);
+	}
+	return value === void 0 || value === null ? "" : JSON.stringify(value);
+}
+const FAILURE_LINES = [
+	/^(?:error|fatal)(?:\[[\w-]+\])?:/i,
+	/^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/,
+	/\bcommand not found\b/,
+	/: No such file or directory\b/,
+	/: Permission denied\b/,
+	/^npm ERR!/,
+	/\bERR_PNPM_\w+/,
+	/\bELIFECYCLE\b/,
+	/^(?:FAIL|FAILED)\b/,
+	/\b\d+ (?:failed|failing)\b/,
+	/^make(?:\[\d+\])?: \*\*\*/
+];
+const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
+	"cat",
+	"less",
+	"more",
+	"head",
+	"tail",
+	"grep",
+	"egrep",
+	"rg",
+	"ag",
+	"sed",
+	"awk",
+	"jq",
+	"find",
+	"ls",
+	"tree",
+	"echo",
+	"printf",
+	"wc",
+	"diff"
+]);
+const DISPLAY_GIT = /* @__PURE__ */ new Set([
+	"log",
+	"show",
+	"diff",
+	"grep",
+	"blame"
+]);
+/**
+* Whether a shell command's output reads like a failure, for a harness that
+* does not report the exit code: its last non-empty line names an error, and
+* the command is not one that only displays text.
+*
+* @param command - the command line, when known.
+* @param output - everything the command printed.
+*/
+function looksFailed(command, output) {
+	const words = (command ?? "").trim().split(/\s+/);
+	const first = words[0] ?? "";
+	if (DISPLAY_COMMANDS.has(first)) return false;
+	if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
+	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
+	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
+}
+/**
+* Parse a Codex CLI hook's stdin.
+*
+* @param text - the JSON Codex wrote.
+* @returns the hook call, or undefined for an event antibody does not handle
+*   or a payload it cannot read.
+*/
+function parseCodexInput(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return;
+	}
+	if (!isRecord$4(value)) return void 0;
+	const event = value.hook_event_name;
+	const sessionId = str$1(value.session_id);
+	const cwd = str$1(value.cwd);
+	if (!CODEX_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
+	const input = {
+		event,
+		sessionId,
+		cwd
+	};
+	if (event !== "PostToolUse") return input;
+	const agentId = str$1(value.agent_id);
+	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
+	const toolName = str$1(value.tool_name);
+	if (toolName !== void 0) input.toolName = toolName;
+	if (isRecord$4(value.tool_input)) {
+		const command = str$1(value.tool_input.command);
+		if (command !== void 0 && command.trim() !== "") input.command = command;
+	}
+	const response = value.tool_response;
+	const output = responseText(response);
+	if (isRecord$4(response) && response.isError === true) {
+		input.event = "PostToolUseFailure";
+		input.error = output;
+		return input;
+	}
+	input.output = output;
+	if (toolName === "Bash" && looksFailed(input.command, output)) input.exitCode = 1;
+	return input;
 }
 //#endregion
 //#region src/sha256.ts
@@ -4137,6 +4261,10 @@ const HOOK_ADAPTERS = {
 	[GEMINI]: {
 		parse: parseGeminiInput,
 		respond: geminiResponse
+	},
+	[CODEX]: {
+		parse: parseCodexInput,
+		respond: hookResponse
 	}
 };
 /** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
@@ -4207,6 +4335,7 @@ async function runHook(harness, io, deps = {}) {
 }
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
        antibody hook gemini        handle one Gemini CLI hook call
+       antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody --version

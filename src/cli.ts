@@ -2,6 +2,7 @@
 //
 //   antibody hook claude-code   handle one Claude Code hook call (stdin JSON)
 //   antibody hook gemini        handle one Gemini CLI hook call (stdin JSON)
+//   antibody hook codex         handle one Codex CLI hook call (stdin JSON)
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody setup gemini       add the hooks and MCP server to Gemini CLI
 //   antibody --version          print the version
@@ -15,6 +16,7 @@ import { agentName, worktreeRoot } from "./agent";
 import { CLAUDE_CODE, hookResponse, parseHookInput } from "./claude-code";
 import { toCapture, toToolCall } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
+import { CODEX, parseCodexInput } from "./codex";
 import { createFleet } from "./fleet";
 import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
@@ -67,6 +69,8 @@ export interface HookAdapter {
 export const HOOK_ADAPTERS: Readonly<Record<string, HookAdapter>> = {
   [CLAUDE_CODE]: { parse: parseHookInput, respond: hookResponse },
   [GEMINI]: { parse: parseGeminiInput, respond: geminiResponse },
+  // Codex answers the way Claude Code does.
+  [CODEX]: { parse: parseCodexInput, respond: hookResponse },
 };
 
 /** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
@@ -166,6 +170,7 @@ export async function runHook(
 
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
        antibody hook gemini        handle one Gemini CLI hook call
+       antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody --version

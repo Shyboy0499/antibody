@@ -543,6 +543,41 @@ describe("antibody hook gemini, beside Claude Code", () => {
     });
   });
 
+  it("lets a Codex CLI agent claim an error a Claude Code agent then meets", async () => {
+    const MISSING = "Error: Cannot find module '@prisma/client'";
+    // codex@wt-gemini: Codex gives the output without the exit code.
+    expect(
+      await hookAs(
+        "codex",
+        JSON.stringify({
+          session_id: "x-1",
+          transcript_path: null,
+          cwd: gem,
+          hook_event_name: "PostToolUse",
+          model: "gpt-5.5-codex",
+          permission_mode: "default",
+          turn_id: "t-1",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm dev" },
+          tool_response: `> next dev\n\n${MISSING}\n`,
+          tool_use_id: "call_9",
+        }),
+      ),
+    ).toBeUndefined();
+    const told = await hookAs(
+      "claude-code",
+      payload(cc, "c-2", {
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm dev" },
+        error: `Exit code 1\n> next dev\n\n${MISSING}`,
+      }),
+    );
+    expect(told.additionalContext).toMatch(
+      /^\[antibody\] E-0002: codex@wt-gemini has been diagnosing this/,
+    );
+  });
+
   it("starts a Gemini turn on BeforeAgent and ends its session", async () => {
     const event = (hook_event_name: string) =>
       JSON.stringify({ session_id: "g-2", cwd: gem, hook_event_name });
