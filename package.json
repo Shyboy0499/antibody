@@ -11,8 +11,12 @@
       "import": "./lib/index.js"
     }
   },
+  "bin": {
+    "antibody": "./dist/antibody.mjs"
+  },
   "files": [
     "lib",
+    "dist",
     "README.md",
     "LICENSE",
     "NOTICE"
