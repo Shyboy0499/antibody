@@ -1,0 +1,12 @@
+# Rewritten by pnpm on every resolution.
+pnpm-lock.yaml
+
+# Generated output. Prettier does not read .gitignore.
+lib/
+coverage/
+
+# Hand-formatted prose and the self-contained demo page. Reformatting them is
+# a separate, reviewable change.
+README.md
+docs/
+demo/
