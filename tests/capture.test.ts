@@ -769,7 +769,7 @@ describe("records feed match() and the store", () => {
     const document = parseDocument(
       [
         `## E-0001 · ${record.title}`,
-        `<!-- errkb: sig=${record.signature} cat=${record.category} code=${record.code} first=2026-10-01T00:00:00Z -->`,
+        `<!-- antibody: sig=${record.signature} cat=${record.category} code=${record.code} first=2026-10-01T00:00:00Z -->`,
         "",
         `- Fingerprint: \`${record.signature}\``,
         `- Category: \`${record.displayCategory}\``,

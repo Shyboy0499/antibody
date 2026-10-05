@@ -13,7 +13,7 @@
 //
 // Labels are presentation (§17 Q2): new blocks are written in English by
 // default, or Chinese with `labels: 'zh'`, and the parser reads both sets
-// whatever the setting. Machine fields live in the `<!-- errkb: ... -->`
+// whatever the setting. Machine fields live in the `<!-- antibody: ... -->`
 // comment and never change language.
 //
 // Like paths.ts, the logic takes its machine as an argument: `StoreFs` and
@@ -90,7 +90,7 @@ export interface Entry {
   id: string;
   /** Header text after the ` · `. */
   title: string;
-  /** Machine fields from the `<!-- errkb: ... -->` comment, in order. */
+  /** Machine fields from the `<!-- antibody: ... -->` comment, in order. */
   meta: Record<string, string>;
   fingerprint: string;
   category: string;
@@ -139,7 +139,11 @@ const headerPattern = (idPrefix: string) =>
   new RegExp(`^## (${escapeRegExp(idPrefix)}\\d+) ·(?: (.*))?$`);
 
 const CONFLICT_MARKER = /^(?:<{7}|>{7})(?: |$)|^={7}$/;
-const META_LINE = /^<!-- errkb:(.*)-->\s*$/;
+// The prefix antibody writes, and the one dsh-errkb wrote. Both parse, so an
+// existing dsh-errkb document reads as it is; a block is only re-rendered, and
+// so only switches prefix, when its entry is updated.
+export const META_PREFIX = "antibody";
+const META_LINE = /^<!-- (?:antibody|errkb):(.*)-->\s*$/;
 const FIELD_LINE = /^- ([^:：]+)[:：] ?(.*)$/;
 
 /**
@@ -295,7 +299,10 @@ function parseBlock(source: string, firstLine: number, header: RegExp): Entry {
     current?.push(dedent(text));
   }
   if (meta === undefined)
-    throw new ParseError("entry has no <!-- errkb: ... --> comment", firstLine);
+    throw new ParseError(
+      "entry has no <!-- antibody: ... --> comment",
+      firstLine,
+    );
 
   const fieldText = (key: FieldKey) =>
     trimBlankLines(fields.get(key)?.lines ?? []).join("\n");
@@ -423,7 +430,7 @@ export function renderEntry(entry: Entry, labels: LabelSet = "en"): string {
     .map((line) => (line === "" ? "" : `  ${line}`));
   return [
     `## ${entry.id} · ${entry.title}`,
-    `<!-- errkb: ${meta} -->`,
+    `<!-- ${META_PREFIX}: ${meta} -->`,
     "",
     ...renderInline(l.fingerprint, wrapCode(entry.fingerprint)),
     ...renderInline(l.category, wrapCode(entry.category)),

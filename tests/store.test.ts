@@ -67,7 +67,7 @@ function entry(overrides: Partial<Entry> = {}): Entry {
 /** The §8 sample of the design document, Chinese labels, verbatim. */
 const DESIGN_SAMPLE = [
   "## E-0007 · [tool:pwsh] EPERM: operation not permitted, rename",
-  "<!-- errkb: sig=3f2a1c9d0b71 cat=tool code=EPERM first=2026-09-14T09:12:33Z device=DESKTOP-A proj=报错的回收再利用 -->",
+  "<!-- antibody: sig=3f2a1c9d0b71 cat=tool code=EPERM first=2026-09-14T09:12:33Z device=DESKTOP-A proj=报错的回收再利用 -->",
   "",
   "- 指纹: `3f2a1c9d0b71`",
   "- 分类: `tool / pwsh`",
@@ -263,12 +263,12 @@ describe("render → parse round-trip", () => {
       "Some notes before the first entry.",
       "",
       "## E-0001 · edited by hand  ",
-      "<!-- errkb: sig=abc -->",
+      "<!-- antibody: sig=abc -->",
       "- Fix: on the same line",
       "",
       "",
       "## E-0002 · crlf\r",
-      "<!-- errkb: sig=def -->\r",
+      "<!-- antibody: sig=def -->\r",
       "- Status: open\r",
     ].join("\n");
     expect(renderDocument(parseDocument(text))).toBe(text);
@@ -294,7 +294,7 @@ describe("parse: what a human may type", () => {
   it("reads a hand-edited fix: same line, continuation lines, bullets, no indent", () => {
     const text = [
       "## E-0001 · x",
-      "<!-- errkb: sig=a -->",
+      "<!-- antibody: sig=a -->",
       "- Fix: restart the daemon",
       "and then:",
       "  - clear the cache",
@@ -314,10 +314,10 @@ describe("parse: what a human may type", () => {
   it("accepts both label sets in one document, and a full-width colon", () => {
     const text = [
       "## E-0001 · en",
-      "<!-- errkb: sig=a -->",
+      "<!-- antibody: sig=a -->",
       "- Fix: english",
       "## E-0002 · zh",
-      "<!-- errkb: sig=b -->",
+      "<!-- antibody: sig=b -->",
       "- 解法： 中文冒号",
       "- 状态： `wontfix`",
     ].join("\n");
@@ -328,7 +328,7 @@ describe("parse: what a human may type", () => {
   });
 
   it("defaults missing fields and reads a status case-insensitively", () => {
-    const parsed = parseDocument("## E-0001 ·\n<!-- errkb: -->\n").blocks[0]
+    const parsed = parseDocument("## E-0001 ·\n<!-- antibody: -->\n").blocks[0]
       ?.entry;
     expect(parsed).toMatchObject({
       title: "",
@@ -340,13 +340,13 @@ describe("parse: what a human may type", () => {
       hits: 0,
     });
     expect(
-      parseDocument("## E-0001 · a\n<!-- errkb: -->\n- Status: Fixed").blocks[0]
-        ?.entry.status,
+      parseDocument("## E-0001 · a\n<!-- antibody: -->\n- Status: Fixed")
+        .blocks[0]?.entry.status,
     ).toBe("fixed");
   });
 
   it("reads a raw message written inline, without a fence", () => {
-    const text = "## E-0001 · a\n<!-- errkb: -->\n- Raw message: plain text";
+    const text = "## E-0001 · a\n<!-- antibody: -->\n- Raw message: plain text";
     expect(parseDocument(text).blocks[0]?.entry.raw).toBe("plain text");
   });
 
@@ -374,7 +374,7 @@ describe("parse: what makes a document unsafe to rewrite", () => {
   const cases: Array<[string, string, number]> = [
     [
       "git conflict marker",
-      "## E-0001 · a\n<!-- errkb: -->\n<<<<<<< HEAD\n",
+      "## E-0001 · a\n<!-- antibody: -->\n<<<<<<< HEAD\n",
       3,
     ],
     ["git conflict separator", "=======\n", 1],
@@ -382,34 +382,38 @@ describe("parse: what makes a document unsafe to rewrite", () => {
     ["no machine comment", "# t\n## E-0001 · a\n- Fix: x\n", 2],
     [
       "second machine comment",
-      "## E-0001 · a\n<!-- errkb: -->\n<!-- errkb: -->\n",
+      "## E-0001 · a\n<!-- antibody: -->\n<!-- antibody: -->\n",
       3,
     ],
-    ["malformed machine field", "## E-0001 · a\n<!-- errkb: sig -->\n", 2],
+    ["malformed machine field", "## E-0001 · a\n<!-- antibody: sig -->\n", 2],
     [
       "duplicate ID",
-      "## E-0001 · a\n<!-- errkb: -->\n## E-0001 · b\n<!-- errkb: -->\n",
+      "## E-0001 · a\n<!-- antibody: -->\n## E-0001 · b\n<!-- antibody: -->\n",
       3,
     ],
     [
       "duplicate field",
-      "## E-0001 · a\n<!-- errkb: -->\n- Fix: a\n- 解法: b\n",
+      "## E-0001 · a\n<!-- antibody: -->\n- Fix: a\n- 解法: b\n",
       4,
     ],
-    ["unknown status", "## E-0001 · a\n<!-- errkb: -->\n- Status: `done`\n", 3],
+    [
+      "unknown status",
+      "## E-0001 · a\n<!-- antibody: -->\n- Status: `done`\n",
+      3,
+    ],
     [
       "malformed seen line",
-      "## E-0001 · a\n<!-- errkb: -->\n- First seen: today\n",
+      "## E-0001 · a\n<!-- antibody: -->\n- First seen: today\n",
       3,
     ],
     [
       "non-numeric hits",
-      "## E-0001 · a\n<!-- errkb: -->\n- First seen: a · Last seen: b · Hits: many\n",
+      "## E-0001 · a\n<!-- antibody: -->\n- First seen: a · Last seen: b · Hits: many\n",
       3,
     ],
     [
       "unterminated fence",
-      "## E-0001 · a\n<!-- errkb: -->\n- Raw message:\n  ```text\n  x\n",
+      "## E-0001 · a\n<!-- antibody: -->\n- Raw message:\n  ```text\n  x\n",
       3,
     ],
   ];
@@ -692,7 +696,7 @@ describe("store: update", () => {
     const { store, fs, text } = memoryStore({ labels: "en" });
     await fs.writeFile(
       files.errors,
-      `${DOCUMENT_HEADER}\n${DESIGN_SAMPLE}\n## E-0008 · hand written\n<!-- errkb: sig=b -->\n- Fix: typed by hand\n`,
+      `${DOCUMENT_HEADER}\n${DESIGN_SAMPLE}\n## E-0008 · hand written\n<!-- antibody: sig=b -->\n- Fix: typed by hand\n`,
     );
     expect((await store.read()).blocks[1]?.entry.fix).toBe("typed by hand");
     await store.update("E-0007", { status: "open" });
@@ -701,21 +705,21 @@ describe("store: update", () => {
     expect(written).not.toContain("- Status:");
     expect(
       written.endsWith(
-        "## E-0008 · hand written\n<!-- errkb: sig=b -->\n- Fix: typed by hand\n",
+        "## E-0008 · hand written\n<!-- antibody: sig=b -->\n- Fix: typed by hand\n",
       ),
     ).toBe(true);
   });
 
   it("writes a block that had no trailing newline with one", async () => {
     const { store, fs, text } = memoryStore();
-    await fs.writeFile(files.errors, "## E-0001 · a\n<!-- errkb: -->");
+    await fs.writeFile(files.errors, "## E-0001 · a\n<!-- antibody: -->");
     await store.update("E-0001", { fix: "x" });
     expect((text(files.errors) as string).endsWith("- Notes:\n")).toBe(true);
   });
 });
 
 describe("store: a corrupt document", () => {
-  const broken = `${DOCUMENT_HEADER}\n## E-0003 · a\n<!-- errkb: -->\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n`;
+  const broken = `${DOCUMENT_HEADER}\n## E-0003 · a\n<!-- antibody: -->\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> other\n`;
 
   it("is saved aside once and then only appended to, never rewritten", async () => {
     const { store, fs, text } = memoryStore();

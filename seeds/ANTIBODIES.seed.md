@@ -10,7 +10,7 @@ tests/seeds.test.ts checks that it still is. Nothing copies these entries into
 shared memory yet.
 
 ## E-0001 · [tool:bash] ENV_NOT_FOUND: an untracked .env is missing from a fresh worktree
-<!-- errkb: sig=608db4a994fb cat=tool code=ENV_NOT_FOUND first=2026-10-05T00:00:00Z -->
+<!-- antibody: sig=608db4a994fb cat=tool code=ENV_NOT_FOUND first=2026-10-05T00:00:00Z -->
 
 - Fingerprint: `608db4a994fb`
 - Category: `tool / bash`
@@ -28,7 +28,7 @@ shared memory yet.
   Seed entry. The variable name varies; the cause is the same for any setting read from an untracked file.
 
 ## E-0002 · [tool:bash] EADDRINUSE: another agent's dev server holds the port
-<!-- errkb: sig=d9d412c44898 cat=tool code=EADDRINUSE first=2026-10-05T00:00:00Z -->
+<!-- antibody: sig=d9d412c44898 cat=tool code=EADDRINUSE first=2026-10-05T00:00:00Z -->
 
 - Fingerprint: `d9d412c44898`
 - Category: `tool / bash`
@@ -46,7 +46,7 @@ shared memory yet.
   Seed entry. The port number is replaced by a placeholder when fingerprinting, so every port matches this entry.
 
 ## E-0003 · [tool:git] WORKTREE_BRANCH: the branch is already checked out in another worktree
-<!-- errkb: sig=73acec6e8980 cat=tool code=WORKTREE_BRANCH first=2026-10-05T00:00:00Z -->
+<!-- antibody: sig=73acec6e8980 cat=tool code=WORKTREE_BRANCH first=2026-10-05T00:00:00Z -->
 
 - Fingerprint: `73acec6e8980`
 - Category: `tool / git`
