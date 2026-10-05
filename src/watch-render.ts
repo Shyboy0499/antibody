@@ -27,6 +27,8 @@ export interface RenderOptions {
   repo: string;
   /** The view is frozen: the status line says so. */
   frozen?: boolean;
+  /** Injection is paused: the status line says so. */
+  paused?: boolean;
   /** The time zone clocks are shown in; the machine's by default. */
   timeZone?: string;
 }
@@ -119,7 +121,7 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
 
   // Status line.
   const diagnosing = view.agents.filter((a) => a.state === "diagnosing").length;
-  const right = `${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
+  const right = `${o.paused === true ? "injection paused  " : ""}${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
   const status = row(
     [" antibody ", 10, "bold", "inverse"],
     [` ${o.repo}`, -1],
@@ -215,7 +217,11 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
       [` ${e.text}`, -1],
     );
 
-  const keys = row([" q quit · space freeze or resume", -1, "dim"]);
+  const keys = row([
+    " q quit · space freeze or resume · p pause or resume injection",
+    -1,
+    "dim",
+  ]);
 
   // Rows: the fixed lines first, then the panes share what is left, the
   // events taking whatever the fleet and the antibodies do not need.

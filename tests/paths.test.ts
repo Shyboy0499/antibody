@@ -3,7 +3,14 @@
 // of src/paths.ts antibody keeps.
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { KB_FILE, corruptFileName, filesIn } from "../src/paths";
+import {
+  KB_FILE,
+  PAUSE_FILE_NAME,
+  corruptFileName,
+  filesIn,
+  injectionPaused,
+  setInjectionPaused,
+} from "../src/paths";
 
 describe("file names", () => {
   it("names the files for antibody", () => {
@@ -46,5 +53,22 @@ describe("file names", () => {
     expect(name).toBe("ANTIBODIES.corrupt-2026-09-27T01-02-03-004Z.md");
     expect(name).not.toContain(":");
     expect(dirname(name)).toBe(".");
+  });
+});
+
+describe("pausing injection", () => {
+  it("is a file in the memory directory, made and removed on demand", async () => {
+    const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const root = mkdtempSync(join(tmpdir(), "antibody-pause-"));
+    const memory = join(root, "not-yet", "antibody");
+    expect(injectionPaused(memory)).toBe(false);
+    setInjectionPaused(memory, true);
+    expect(existsSync(join(memory, PAUSE_FILE_NAME))).toBe(true);
+    expect(injectionPaused(memory)).toBe(true);
+    setInjectionPaused(memory, false);
+    setInjectionPaused(memory, false);
+    expect(injectionPaused(memory)).toBe(false);
+    rmSync(root, { recursive: true, force: true });
   });
 });

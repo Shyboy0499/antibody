@@ -76,6 +76,29 @@ export function corruptFileName(now: Date = new Date()): string {
 /** The directory inside the git common directory that holds antibody's memory. */
 export const MEMORY_DIR_NAME = "antibody";
 
+/**
+ * The file whose presence in the memory directory pauses injection: hooks go
+ * on recording errors, claims and fixes, but tell the agents nothing until it
+ * is removed. `antibody watch` toggles it with p.
+ */
+export const PAUSE_FILE_NAME = "paused";
+
+/** Whether injection is paused for a memory directory. */
+export function injectionPaused(memory: string): boolean {
+  return nodeFs.existsSync(join(memory, PAUSE_FILE_NAME));
+}
+
+/** Pause injection for a memory directory, or resume it. */
+export function setInjectionPaused(memory: string, paused: boolean): void {
+  const file = join(memory, PAUSE_FILE_NAME);
+  if (!paused) {
+    nodeFs.rmSync(file, { force: true });
+    return;
+  }
+  nodeFs.mkdirSync(memory, { recursive: true });
+  nodeFs.writeFileSync(file, "Injection is paused while this file exists.\n");
+}
+
 /** Runs git with `args` in `cwd` and returns its trimmed standard output. */
 export type GitRunner = (args: string[], cwd: string) => string;
 

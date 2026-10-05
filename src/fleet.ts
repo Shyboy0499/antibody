@@ -242,7 +242,8 @@ export function createFleet(
       id: label,
       text: `held by ${outcome.holder.agent}`,
     });
-    if (!rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
+    // With injection off (paused, or the setting), the hint is not shown either.
+    if (o.inject === "off" || !rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
     const elapsed = clock.now().getTime() - Date.parse(outcome.holder.since);
     const text = claimHintText(label, outcome.holder.agent, elapsed);
     notices.push(text);
