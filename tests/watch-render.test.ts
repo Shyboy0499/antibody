@@ -5,6 +5,7 @@ import type { FleetView } from "../src/watch-model";
 
 const NOW = new Date("2026-10-05T10:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000).toISOString();
+// oxlint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*m/g;
 const plain = (line: string) => line.replace(ANSI, "");
 
@@ -117,6 +118,8 @@ describe("cells and fit", () => {
     expect(cells("😀!")).toBe(3);
     expect(cells("é")).toBe(1);
     expect(cells("a\tb")).toBe(2);
+    expect(cells("a\u200db")).toBe(2);
+    expect(cells("\ud55c\uae00")).toBe(4);
   });
 
   it("pad, clip with an ellipsis, and drop controls", () => {

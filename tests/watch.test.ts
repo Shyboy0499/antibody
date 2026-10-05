@@ -14,6 +14,7 @@ import type { ToolCall } from "../src/resolve-detect";
 import { memoryReader, runWatch } from "../src/watch";
 import type { WatchDeps } from "../src/watch";
 
+// oxlint-disable-next-line no-control-regex
 const SGR = /\u001b\[[0-9;]*m/;
 const MESSAGE = "ENOENT: no such file or directory, open '.env'";
 const capture: CaptureInput = {

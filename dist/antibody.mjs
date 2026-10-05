@@ -4468,8 +4468,8 @@ const SGR = {
 	cyan: "36",
 	inverse: "7"
 };
-const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
-const ZERO = /[\u0000-\u001f\u007f-\u009f̀-ͯ​-‏]/u;
+const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+const ZERO = /[\u0000-\u001f\u007f-\u009f\u0300-\u036f\u200b-\u200f]/u;
 /** How many terminal cells a string takes. */
 function cells(text) {
 	let n = 0;

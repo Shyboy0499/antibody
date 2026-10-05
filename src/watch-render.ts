@@ -59,9 +59,12 @@ type Style = keyof typeof SGR;
 // Code points a terminal draws two cells wide: CJK, Hangul, full-width forms
 // and most emoji.
 const WIDE =
-  /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
-// Code points that take no cell: controls and combining marks.
-const ZERO = /[\u0000-\u001f\u007f-\u009f̀-ͯ​-‏]/u;
+  /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+// Code points that take no cell: controls, combining marks and zero-width
+// spaces, joiners and direction marks. Matching control characters and listing
+// combining marks as a range are both the point.
+// oxlint-disable-next-line no-control-regex, no-misleading-character-class
+const ZERO = /[\u0000-\u001f\u007f-\u009f\u0300-\u036f\u200b-\u200f]/u;
 
 /** How many terminal cells a string takes. */
 export function cells(text: string): number {
@@ -77,6 +80,7 @@ export function cells(text: string): number {
  */
 export function fit(text: string, width: number): string {
   if (width <= 0) return "";
+  // oxlint-disable-next-line no-control-regex
   const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   if (cells(clean) <= width) return clean + " ".repeat(width - cells(clean));
   let out = "";
