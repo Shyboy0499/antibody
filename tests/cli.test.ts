@@ -236,7 +236,10 @@ describe("the hook fails open", () => {
       env: { ANTIBODY_DEBUG: "1" },
     };
     expect(await runHook("vim", io)).toBe(0);
-    expect(err).toBe("antibody: unknown harness: vim\n");
+    expect(await runHook("constructor", io)).toBe(0);
+    expect(err).toBe(
+      "antibody: unknown harness: vim\nantibody: unknown harness: constructor\n",
+    );
   });
 
   it("reports a non-Error throw in debug mode", async () => {
@@ -449,5 +452,102 @@ describe("antibody mcp", () => {
     const run = await serve(["Claude Code"], []);
     expect(run.code).toBe(2);
     expect(run.err).toContain("not a harness name: Claude Code");
+  });
+});
+
+describe("antibody hook gemini, beside Claude Code", () => {
+  let fleetRoot: string;
+  let gem: string;
+  let cc: string;
+
+  beforeAll(() => {
+    fleetRoot = realpathSync(mkdtempSync(join(tmpdir(), "antibody-mixed-")));
+    const main = join(fleetRoot, "repo");
+    gem = join(fleetRoot, "wt-gemini");
+    cc = join(fleetRoot, "wt-claude");
+    execFileSync("mkdir", ["-p", main]);
+    git(main, "init", "-q", "-b", "main");
+    writeFileSync(join(main, "README.md"), "fixture\n");
+    git(main, "add", "README.md");
+    git(main, "commit", "-q", "-m", "fixture");
+    git(main, "worktree", "add", "-q", "-b", "g", gem);
+    git(main, "worktree", "add", "-q", "-b", "c", cc);
+  });
+
+  afterAll(() => {
+    rmSync(fleetRoot, { recursive: true, force: true });
+  });
+
+  const hookAs = async (harness: string, stdin: string) => {
+    let out = "";
+    const io: CliIo = {
+      readStdin: async () => stdin,
+      stdout: (t) => void (out += t),
+      stderr: () => undefined,
+      env: {},
+    };
+    expect(await runHook(harness, io)).toBe(0);
+    return out === "" ? undefined : JSON.parse(out).hookSpecificOutput;
+  };
+  const ERROR = "Error: Environment variable not found: DATABASE_URL.";
+  const geminiShell = (session: string, content: string) =>
+    JSON.stringify({
+      session_id: session,
+      transcript_path: "/tmp/gemini/chat.json",
+      cwd: gem,
+      hook_event_name: "AfterTool",
+      timestamp: "2026-10-05T10:00:00.000Z",
+      tool_name: "run_shell_command",
+      tool_input: { command: "pnpm test" },
+      tool_response: { llmContent: content, returnDisplay: "" },
+    });
+
+  it("shares one entry between a Gemini CLI and a Claude Code agent", async () => {
+    // gemini@wt-gemini's shell command fails first and claims the error.
+    expect(
+      await hookAs(
+        "gemini",
+        geminiShell(
+          "g-1",
+          `<untrusted_context>\nOutput: ${ERROR}\nExit Code: 1\nProcess Group PGID: 4242\n</untrusted_context>`,
+        ),
+      ),
+    ).toBeUndefined();
+    // claude-code@wt-claude hits the same error and is told who is on it.
+    const told = await hookAs(
+      "claude-code",
+      payload(cc, "c-1", {
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm test" },
+        error: `Exit code 1\n${ERROR}`,
+      }),
+    );
+    expect(told.additionalContext).toMatch(
+      /^\[antibody\] E-0001: gemini@wt-gemini has been diagnosing this/,
+    );
+    // Gemini's same command then succeeds, and it is asked for the fix, in
+    // Gemini's own event name.
+    const asked = await hookAs(
+      "gemini",
+      geminiShell(
+        "g-1",
+        "<untrusted_context>\nOutput: 12 passed\n</untrusted_context>",
+      ),
+    );
+    expect(asked).toEqual({
+      hookEventName: "AfterTool",
+      additionalContext: expect.stringContaining(
+        "E-0001 looks resolved. Record the fix with antibody_record",
+      ),
+    });
+  });
+
+  it("starts a Gemini turn on BeforeAgent and ends its session", async () => {
+    const event = (hook_event_name: string) =>
+      JSON.stringify({ session_id: "g-2", cwd: gem, hook_event_name });
+    expect(await hookAs("gemini", event("BeforeAgent"))).toBeUndefined();
+    expect(await hookAs("gemini", event("SessionStart"))).toBeUndefined();
+    expect(await hookAs("gemini", event("SessionEnd"))).toBeUndefined();
   });
 });
