@@ -8,7 +8,7 @@
 // entry's fix starts its count again. The state is a plain serializable object
 // behind TrustStore, so it can live in state.json and survive a restart; it is
 // machine-local and never written into the entries document.
-import { lazyCrypto } from "./lazy";
+import { sha256Hex } from "./sha256";
 import { oneLine } from "./notice";
 import type { TrustLevel } from "./notice";
 
@@ -72,11 +72,7 @@ export const SUPPRESS_AFTER = 2;
  * @param fix - the entry's fix field.
  */
 export function fixSig(fix: string): string {
-  return lazyCrypto()
-    .createHash("sha256")
-    .update(oneLine(fix))
-    .digest("hex")
-    .slice(0, 12);
+  return sha256Hex(oneLine(fix)).slice(0, 12);
 }
 
 /**
