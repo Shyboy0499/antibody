@@ -3636,9 +3636,23 @@ const isRecord$1 = (value) => typeof value === "object" && value !== null && !Ar
 function shellQuote(path) {
 	return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'"'"'`)}'`;
 }
-/** Whether a hook definition holds only antibody's hooks. */
-function ours(definition) {
-	return isRecord$1(definition) && Array.isArray(definition.hooks) && definition.hooks.length > 0 && definition.hooks.every((h) => isRecord$1(h) && h.name === "antibody");
+/** Whether a hook definition holds only hooks that pass `isOurs`. */
+function onlyOurs(definition, isOurs) {
+	return isRecord$1(definition) && Array.isArray(definition.hooks) && definition.hooks.length > 0 && definition.hooks.every((h) => isRecord$1(h) && isOurs(h));
+}
+/**
+* A `hooks` section with antibody's definition put on each event, after the
+* definitions it already had, or taken off; empty events are dropped.
+*/
+function withHooks(section, events, isOurs, hook) {
+	const hooks = isRecord$1(section) ? { ...section } : {};
+	for (const event of events) {
+		const kept = (Array.isArray(hooks[event]) ? hooks[event] : []).filter((definition) => !onlyOurs(definition, isOurs));
+		if (hook !== void 0) kept.push({ hooks: [hook] });
+		if (kept.length > 0) hooks[event] = kept;
+		else delete hooks[event];
+	}
+	return hooks;
 }
 /**
 * Gemini CLI settings with antibody's hooks and MCP server added, or taken
@@ -3652,19 +3666,13 @@ function ours(definition) {
 */
 function geminiSettings(settings, bundle, node, remove = false) {
 	const next = { ...settings };
-	const hooks = isRecord$1(settings.hooks) ? { ...settings.hooks } : {};
 	const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${GEMINI}`;
-	for (const event of Object.keys(GEMINI_EVENTS)) {
-		const kept = (Array.isArray(hooks[event]) ? hooks[event] : []).filter((definition) => !ours(definition));
-		if (!remove) kept.push({ hooks: [{
-			type: "command",
-			name: SETUP_NAME,
-			command,
-			timeout: GEMINI_HOOK_TIMEOUT_MS
-		}] });
-		if (kept.length > 0) hooks[event] = kept;
-		else delete hooks[event];
-	}
+	const hooks = withHooks(settings.hooks, Object.keys(GEMINI_EVENTS), (hook) => hook.name === SETUP_NAME, remove ? void 0 : {
+		type: "command",
+		name: SETUP_NAME,
+		command,
+		timeout: GEMINI_HOOK_TIMEOUT_MS
+	});
 	if (Object.keys(hooks).length > 0) next.hooks = hooks;
 	else delete next.hooks;
 	const servers = isRecord$1(settings.mcpServers) ? { ...settings.mcpServers } : {};
@@ -3681,14 +3689,38 @@ function geminiSettings(settings, bundle, node, remove = false) {
 	else delete next.mcpServers;
 	return next;
 }
-const SETUP_USAGE = `usage: antibody setup gemini [--settings <file>] [--remove] [--print]
-  --settings <file>  the settings file (default ~/.gemini/settings.json)
-  --remove           take antibody's hooks and MCP server out again
-  --print            print the new settings instead of writing them
+const CODEX_HOOK = / hook codex$/;
+/**
+* A Codex CLI hooks.json with antibody's hooks added, or taken out. Other
+* hooks, and every other field, are kept as they were.
+*
+* @param file - the parsed hooks.json, or {} when there is none.
+* @param bundle - the absolute path of dist/antibody.mjs.
+* @param node - the Node.js executable the hooks run.
+* @param remove - take antibody's hooks out instead of adding them.
+* @returns the new file; the input is not changed.
+*/
+function codexHooks(file, bundle, node, remove = false) {
+	const next = { ...file };
+	const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${CODEX}`;
+	const hooks = withHooks(file.hooks, CODEX_EVENTS, (hook) => typeof hook.command === "string" && CODEX_HOOK.test(hook.command), remove ? void 0 : {
+		type: "command",
+		command,
+		timeout: 10
+	});
+	if (Object.keys(hooks).length > 0) next.hooks = hooks;
+	else delete next.hooks;
+	return next;
+}
+const SETUP_USAGE = `usage: antibody setup <gemini|codex> [--settings <file>] [--remove] [--print]
+  --settings <file>  the file to change (default ~/.gemini/settings.json,
+                     or ~/.codex/hooks.json)
+  --remove           take antibody's entries out again
+  --print            print the new file instead of writing it
 `;
 /**
-* `antibody setup gemini`: add antibody's hooks and MCP server to Gemini CLI's
-* settings, or take them out.
+* `antibody setup <gemini|codex>`: add antibody's hooks (and, for Gemini CLI,
+* its MCP server) to the harness's settings, or take them out.
 *
 * @param args - the arguments after `setup`.
 * @param io - stdout and stderr, and the environment.
@@ -3715,9 +3747,9 @@ async function runSetup(args, io, deps = {}) {
 		else if (harness === void 0) harness = arg;
 		else return usage(`unexpected argument: ${arg}`);
 	}
-	if (harness !== "gemini") return usage(harness === void 0 ? "setup needs a harness" : `setup does not know ${harness}`);
+	if (harness !== "gemini" && harness !== "codex") return usage(harness === void 0 ? "setup needs a harness" : `setup does not know ${harness}`);
 	const home = deps.home ?? io.env.HOME ?? "";
-	const path = resolve(file ?? join(home, ".gemini", "settings.json"));
+	const path = resolve(file ?? (harness === "gemini" ? join(home, ".gemini", "settings.json") : join(io.env.CODEX_HOME || join(home, ".codex"), "hooks.json")));
 	let settings = {};
 	let text;
 	try {
@@ -3738,12 +3770,12 @@ async function runSetup(args, io, deps = {}) {
 		if (isRecord$1(parsed)) settings = parsed;
 		else if (print) io.stderr(`antibody: ${path} is not plain JSON; printing antibody's entries alone.\n`);
 		else {
-			io.stderr(`antibody: ${path} is not plain JSON (comments, perhaps), so it was left as it was. Run 'antibody setup gemini --print' and merge the entries by hand.\n`);
+			io.stderr(`antibody: ${path} is not plain JSON (comments, perhaps), so it was left as it was. Run 'antibody setup ${harness} --print' and merge the entries by hand.\n`);
 			return 1;
 		}
 	}
 	const bundle = deps.bundle ?? nodeFs.realpathSync(process.argv[1]);
-	const next = geminiSettings(settings, bundle, "node", remove);
+	const next = (harness === "gemini" ? geminiSettings : codexHooks)(settings, bundle, "node", remove);
 	const json = `${JSON.stringify(next, null, 2)}\n`;
 	if (print) {
 		io.stdout(json);
@@ -3753,7 +3785,13 @@ async function runSetup(args, io, deps = {}) {
 	const temp = `${path}.antibody-${process.pid}.tmp`;
 	nodeFs.writeFileSync(temp, json);
 	nodeFs.renameSync(temp, path);
-	io.stdout(remove ? `Removed antibody's hooks and MCP server from ${path}.\n` : `Added antibody's hooks (${Object.keys(GEMINI_EVENTS).join(", ")}) and MCP server to ${path}.\nRestart Gemini CLI to load them.\n`);
+	const lines = harness === "gemini" ? remove ? [`Removed antibody's hooks and MCP server from ${path}.`] : [`Added antibody's hooks (${Object.keys(GEMINI_EVENTS).join(", ")}) and MCP server to ${path}.`, "Restart Gemini CLI to load them."] : remove ? [`Removed antibody's hooks from ${path}.`, `If you added its MCP server, remove it with: codex mcp remove ${SETUP_NAME}`] : [
+		`Added antibody's hooks (${CODEX_EVENTS.join(", ")}) to ${path}.`,
+		"Codex runs new hooks once you trust them: review them with /hooks.",
+		"To add the MCP server too, run",
+		`  codex mcp add ${SETUP_NAME} -- node ${shellQuote(bundle)} mcp ${CODEX}`
+	];
+	io.stdout(`${lines.join("\n")}\n`);
 	return 0;
 }
 //#endregion
@@ -4338,6 +4376,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
+       antibody setup codex        add the hooks to Codex CLI
        antibody --version
 `;
 /**

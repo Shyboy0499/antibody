@@ -5,6 +5,7 @@
 //   antibody hook codex         handle one Codex CLI hook call (stdin JSON)
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody setup gemini       add the hooks and MCP server to Gemini CLI
+//   antibody setup codex        add the hooks to Codex CLI
 //   antibody --version          print the version
 //
 // A hook must never break or block the agent it runs in, so `hook` fails open:
@@ -173,6 +174,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
+       antibody setup codex        add the hooks to Codex CLI
        antibody --version
 `;
 
