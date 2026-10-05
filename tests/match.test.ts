@@ -411,7 +411,7 @@ describe("match: entries that must not be injected", () => {
       "# ANTIBODIES",
       "",
       "## E-0001 · [tool] boom",
-      `<!-- errkb: sig=${signature("tool", "boom")} cat=tool misjudged=true -->`,
+      `<!-- antibody: sig=${signature("tool", "boom")} cat=tool misjudged=true -->`,
       "",
       "- Raw message: boom",
       "",
