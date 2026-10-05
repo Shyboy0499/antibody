@@ -168,6 +168,30 @@ export class FixTrust {
     this.store.save(this.state);
   }
 
+  /**
+   * The entries whose fix was injected in `scope`'s current turn, so a hook
+   * process can save them for the next call in the same turn.
+   *
+   * @param scope - the session.
+   */
+  injectedInTurn(scope = ""): string[] {
+    const prefix = `${scope}\0`;
+    return [...this.injectedThisTurn]
+      .filter((key) => key.startsWith(prefix))
+      .map((key) => key.slice(prefix.length));
+  }
+
+  /**
+   * Carry on `scope`'s current turn from what injectedInTurn() saved.
+   *
+   * @param ids - entries injected earlier in the turn.
+   * @param scope - the session.
+   */
+  restoreTurn(ids: readonly string[], scope = ""): void {
+    for (const id of ids)
+      if (typeof id === "string") this.injectedThisTurn.add(`${scope}\0${id}`);
+  }
+
   /** A copy of the whole state, for persistence or `antibody_stats`. */
   snapshot(): TrustState {
     return structuredClone(this.state);

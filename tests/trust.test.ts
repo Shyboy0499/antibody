@@ -167,3 +167,26 @@ describe("fix trust scopes (T13)", () => {
     expect(trust.record("E-0008", FIX)?.recurredAfterInject).toBe(1);
   });
 });
+
+describe("fix trust across hook calls", () => {
+  it("carries a turn's injections into the next process of the same turn", () => {
+    const first = new FixTrust();
+    first.injected("E-0007", FIX, "s-a");
+    first.injected("E-0008", FIX, "s-b");
+    expect(first.injectedInTurn("s-a")).toEqual(["E-0007"]);
+
+    const next = new FixTrust(memoryTrustStore(first.snapshot()));
+    next.restoreTurn(first.injectedInTurn("s-a"), "s-a");
+    next.seen("E-0007", FIX, "s-a");
+    expect(next.record("E-0007", FIX)?.recurredAfterInject).toBe(1);
+  });
+
+  it("forgets a scope's injections once its turn ends, and ignores junk", () => {
+    const trust = new FixTrust();
+    trust.restoreTurn(["E-0001", 5 as unknown as string], "s");
+    expect(trust.injectedInTurn("s")).toEqual(["E-0001"]);
+    trust.beginTurn("s");
+    expect(trust.injectedInTurn("s")).toEqual([]);
+    expect(trust.injectedInTurn()).toEqual([]);
+  });
+});
