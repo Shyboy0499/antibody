@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 //#region src/notice.ts
 /** How every notice introduces itself to the agent. */
 const NOTICE_PREFIX = "[antibody]";
@@ -1689,7 +1689,7 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 		}
 	};
 }
-const errorCode = (error) => error.code;
+const errorCode$1 = (error) => error.code;
 /**
 * The real filesystem. Every "missing" case (ENOENT) is a value, not an error;
 * anything else - a directory where a file should be, a permission denial -
@@ -1706,7 +1706,7 @@ function nodeStoreFs() {
 			try {
 				return readFileSync(path, "utf8");
 			} catch (error) {
-				if (errorCode(error) === "ENOENT") return void 0;
+				if (errorCode$1(error) === "ENOENT") return void 0;
 				throw error;
 			}
 		},
@@ -1727,7 +1727,7 @@ function nodeStoreFs() {
 				});
 				return true;
 			} catch (error) {
-				if (errorCode(error) === "EEXIST") return false;
+				if (errorCode$1(error) === "EEXIST") return false;
 				throw error;
 			}
 		},
@@ -1735,7 +1735,7 @@ function nodeStoreFs() {
 			try {
 				return statSync(path).mtimeMs;
 			} catch (error) {
-				if (errorCode(error) === "ENOENT") return void 0;
+				if (errorCode$1(error) === "ENOENT") return void 0;
 				throw error;
 			}
 		},
@@ -1746,7 +1746,7 @@ function nodeStoreFs() {
 			try {
 				return readdirSync(dir);
 			} catch (error) {
-				if (errorCode(error) === "ENOENT") return [];
+				if (errorCode$1(error) === "ENOENT") return [];
 				throw error;
 			}
 		},
@@ -3850,20 +3850,39 @@ async function main(argv, io, deps = {}) {
 }
 //#endregion
 //#region src/bin.ts
-const readStdin = async () => {
-	if (process.stdin.isTTY) return "";
-	const chunks = [];
-	for await (const chunk of process.stdin) chunks.push(chunk);
-	return Buffer.concat(chunks).toString("utf8");
+const errorCode = (error) => error.code;
+/** All of stdin as text; nothing when it is a terminal. */
+async function readStdin() {
+	if (fstatSync(0).isCharacterDevice()) return "";
+	try {
+		return readFileSync(0, "utf8");
+	} catch (error) {
+		if (errorCode(error) !== "EAGAIN") throw error;
+		const chunks = [];
+		for await (const chunk of process.stdin) chunks.push(chunk);
+		return Buffer.concat(chunks).toString("utf8");
+	}
+}
+/**
+* A writer for a file descriptor. A full non-blocking pipe is retried; a
+* reader that went away, such as an MCP client that closed its end, ends the
+* process quietly instead of with a stack trace.
+*/
+const writer = (fd) => (text) => {
+	const buffer = Buffer.from(text, "utf8");
+	let written = 0;
+	while (written < buffer.length) try {
+		written += writeSync(fd, buffer, written);
+	} catch (error) {
+		if (errorCode(error) === "EAGAIN") continue;
+		if (errorCode(error) === "EPIPE") process.exit(0);
+		throw error;
+	}
 };
-process.stdout.on("error", (error) => {
-	if (error.code !== "EPIPE") throw error;
-	process.exit(0);
-});
 process.exitCode = await main(process.argv.slice(2), {
 	readStdin,
-	stdout: (text) => process.stdout.write(text),
-	stderr: (text) => process.stderr.write(text),
+	stdout: writer(1),
+	stderr: writer(2),
 	env: process.env
 });
 //#endregion
