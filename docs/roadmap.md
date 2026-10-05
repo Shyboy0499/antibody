@@ -51,13 +51,26 @@ Each milestone ends with something that can be checked, not just written.
     its ES module wrapper, so the streams stack never loads;
   - hashes with a plain-JavaScript SHA-256 instead of loading `node:crypto`.
 
-## M3 · Codex CLI, Gemini CLI and MCP-only agents
+## M3 · Codex CLI, Gemini CLI and MCP-only agents (done)
 
-- Check the `PostToolUse` payload of Codex CLI and the `AfterTool` payload of Gemini
-  CLI against running copies, then write both adapters.
-- One `AGENTS.md` line and the MCP server for Cursor, OpenCode, Aider and others.
-- **Done when:** a mixed fleet (Claude Code, Codex, Gemini) passes the M2 test in every
-  direction.
+- The payloads, read off each CLI's own source rather than its docs: Gemini CLI
+  0.62.0 (`AfterTool`, `BeforeAgent`, `SessionStart`, `SessionEnd`) and Codex CLI
+  0.160.1 (Claude Code's event names, but no `PostToolUseFailure`, and a shell result
+  without its exit code).
+- The adapters (`src/gemini.ts`, `src/codex.ts`) over a shared hook input
+  (`src/hook-input.ts`), so the same failure from any of the three CLIs gets the same
+  fingerprint. `antibody hook gemini` and `antibody hook codex`.
+- `antibody setup gemini` and `antibody setup codex`, which write the hooks (and, for
+  Gemini CLI, the MCP server) into each CLI's own settings.
+- For Cursor, OpenCode, Aider and others: the MCP server and one `AGENTS.md` line, in
+  the README.
+- **Checked:** `scripts/e2e.mjs`, run in CI, plays the M2 exchange between Claude
+  Code, Gemini CLI and Codex CLI agents in all six directions, in the payload shapes
+  read off their sources. Each fix arrives about 50 ms after it is recorded.
+- **Open:** a check against live Gemini CLI and Codex CLI sessions with a model, which
+  this environment cannot run. Codex reports no exit code to hooks, so a shell failure
+  is inferred from the last line of its output; a command that fails quietly, or
+  succeeds with an error-looking last line, is misread.
 
 ## M4 · `antibody watch`
 
