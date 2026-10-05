@@ -25,4 +25,5 @@ export * from "./tools";
 export * from "./mcp";
 export * from "./setup";
 export * from "./watch-model";
+export * from "./watch-render";
 export * from "./cli";
