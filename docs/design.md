@@ -2,7 +2,7 @@
 
 Status: draft, October 2026. Milestones M1 (core and shared memory), M2 (the
 Claude Code plugin and the MCP server) and M3 (the Gemini CLI and Codex CLI adapters)
-are implemented; `antibody watch` is not yet. Statements about
+and M4 (`antibody watch`) are implemented. Statements about
 other tools' hook APIs come from their public documentation and are marked where
 they still need to be checked against a running copy.
 
@@ -230,13 +230,19 @@ tails `events.jsonl` and redraws a few times a second.
   that found it, reuse count and tokens saved.
 - **Events pane:** the live stream.
 
-Keys: `p` pauses injection (useful for an honest with-and-without comparison), `/`
-filters, `enter` opens an entry, `e` edits it in `$EDITOR`, `q` quits.
+Keys: `p` pauses injection (useful for an honest with-and-without comparison), `f`
+cycles the events between all, failures and fixes, `e` opens `ANTIBODIES.md` in
+`$EDITOR`, `space` freezes the view, `q` quits.
 [`demo/index.html`](../demo/index.html) simulates the screen.
 
-Implementation: TypeScript with Ink, which renders React components to the terminal
-and is what Claude Code itself uses. `antibody stats` prints the same numbers once,
-without the TUI, for scripts and CI.
+Implementation (M4): a hand-written renderer instead of Ink, so the committed bundle
+keeps no dependencies. It draws every frame at exactly the terminal's size, in place
+on the alternate screen. Pausing writes a `paused` file to the memory directory,
+which every hook checks: the fleet loop runs with injection off, and fixes held
+meanwhile are delivered when it resumes. Not built yet: the task column and progress
+bar in the fleet pane, the sparkline, the branch in the status bar, and opening a
+single entry. `antibody stats` prints the ledger once, without the screen, for scripts
+and CI.
 
 ## 7. What carries over from dsh-errkb
 
