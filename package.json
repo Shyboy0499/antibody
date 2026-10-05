@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "lint": "oxlint",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
