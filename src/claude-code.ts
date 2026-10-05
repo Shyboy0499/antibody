@@ -14,7 +14,12 @@
 // instead, so this adapter rewrites the one into the other and the command
 // path - headline extraction, keying by command line - works unchanged.
 // Parsing never throws: anything unexpected reads as undefined.
+//
+// Output goes back the documented way: JSON on stdout with
+// `hookSpecificOutput.additionalContext`, which Claude Code shows the model as
+// a system reminder, or nothing at all.
 import type { CaptureInput } from "./capture";
+import { clip } from "./notice";
 import type { ToolCall } from "./resolve-detect";
 
 /** The harness name, as agent names and events use it. */
@@ -196,4 +201,38 @@ export function toToolCall(input: HookInput): ToolCall | undefined {
     call.text = input.error ?? "";
   }
   return call;
+}
+
+/** Claude Code caps each additionalContext at this many characters. */
+export const ADDITIONAL_CONTEXT_MAX_CHARS = 10_000;
+
+/** The events whose hook output can carry additionalContext. */
+const CONTEXT_EVENTS: ReadonlySet<HookEvent> = new Set([
+  "SessionStart",
+  "UserPromptSubmit",
+  "PostToolUse",
+  "PostToolUseFailure",
+]);
+
+/**
+ * The stdout for a hook: the notices as `hookSpecificOutput.additionalContext`,
+ * one per line, or the empty string when there is nothing to say or the event
+ * cannot carry context. An empty stdout with exit code 0 leaves Claude Code's
+ * behaviour unchanged.
+ *
+ * @param event - the event the hook answers.
+ * @param notices - notice bodies, each already inside the notice caps.
+ */
+export function hookResponse(
+  event: HookEvent,
+  notices: readonly string[],
+): string {
+  const lines = notices.filter((n) => n.trim() !== "");
+  if (lines.length === 0 || !CONTEXT_EVENTS.has(event)) return "";
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: event,
+      additionalContext: clip(lines.join("\n"), ADDITIONAL_CONTEXT_MAX_CHARS),
+    },
+  });
 }

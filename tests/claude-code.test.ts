@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { TransientCounter, classify } from "../src/capture";
 import {
+  ADDITIONAL_CONTEXT_MAX_CHARS,
   CLAUDE_CODE,
   HOOK_EVENTS,
+  hookResponse,
   parseHookInput,
   toCapture,
   toToolCall,
@@ -271,5 +273,49 @@ describe("toToolCall", () => {
       isError: true,
       text: "",
     });
+  });
+});
+
+describe("hookResponse", () => {
+  it("wraps notices as additionalContext, one per line", () => {
+    const out = hookResponse("PostToolUseFailure", [
+      "[antibody] E-0001 known",
+      "",
+      "  ",
+      "second",
+    ]);
+    expect(JSON.parse(out)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUseFailure",
+        additionalContext: "[antibody] E-0001 known\nsecond",
+      },
+    });
+  });
+
+  it("says nothing when there is nothing to say", () => {
+    expect(hookResponse("PostToolUse", [])).toBe("");
+    expect(hookResponse("PostToolUse", ["", " "])).toBe("");
+  });
+
+  it("says nothing on an event that cannot carry context", () => {
+    expect(hookResponse("SessionEnd", ["[antibody] bye"])).toBe("");
+  });
+
+  it("answers every event that can carry context", () => {
+    for (const event of [
+      "SessionStart",
+      "UserPromptSubmit",
+      "PostToolUse",
+    ] as const)
+      expect(
+        JSON.parse(hookResponse(event, ["x"])).hookSpecificOutput.hookEventName,
+      ).toBe(event);
+  });
+
+  it("stays inside Claude Code's limit", () => {
+    const out = hookResponse("PostToolUse", ["y".repeat(30_000)]);
+    const context = JSON.parse(out).hookSpecificOutput
+      .additionalContext as string;
+    expect(Array.from(context)).toHaveLength(ADDITIONAL_CONTEXT_MAX_CHARS);
   });
 });
