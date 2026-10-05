@@ -2,15 +2,16 @@
 
 **Herd immunity for coding-agent fleets.** When one agent beats an error, every agent running beside it becomes immune.
 
-![Status](https://img.shields.io/badge/status-M3%3A%20Claude%20Code%2C%20Gemini%2C%20Codex-yellowgreen)
+![Status](https://img.shields.io/badge/status-M4%3A%20fleet%20view-yellowgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> **Status: M3, a mixed fleet.** antibody installs as a Claude Code plugin, and
-> `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture errors, claims
-> keep two agents from diagnosing the same new one, and a recorded fix reaches the
-> other sessions in the repository at their next tool call, whichever CLI they run.
-> Five MCP tools let any agent look errors up and record fixes. The `antibody watch`
-> view comes next; the [roadmap](docs/roadmap.md) has the rest.
+> **Status: M4, a mixed fleet you can watch.** antibody installs as a Claude Code
+> plugin, and `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture
+> errors, claims keep two agents from diagnosing the same new one, and a recorded fix
+> reaches the other sessions in the repository at their next tool call, whichever CLI
+> they run. Five MCP tools let any agent look errors up and record fixes, and
+> `antibody watch` shows the fleet live. A public benchmark comes next; the
+> [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
 
@@ -182,13 +183,33 @@ project.
 
 ## See it
 
-`antibody watch` (milestone M4) will be the live fleet view, in your terminal next
-to the agents: each agent's state, the antibodies in memory, the tokens saved, and the
-event stream as it happens.
+`antibody watch` is the live fleet view, in your terminal next to the agents. Run it
+from any worktree of the repository, with the bundle from your clone:
 
-[`demo/index.html`](demo/index.html) is a simulated run of that screen with eight
-agents. Open it in a browser and press `m` to turn shared memory off: the fleet goes
-back to paying for the same diagnosis over and over.
+```sh
+node ~/.local/share/antibody/dist/antibody.mjs watch
+```
+
+It shows what each agent is doing (diagnosing an error it claimed, holding for a
+peer's fix, immune because a fix was just pushed to it, or working), the tokens saved
+and the re-diagnoses avoided, every antibody with its fix and who found it, and the
+events as they happen. It redraws twice a second, in place, on the terminal's
+alternate screen.
+
+| Key | Does |
+| --- | --- |
+| `q` | Quit |
+| `space` | Freeze the view, and resume it |
+| `p` | Pause injection for the whole fleet, and resume it: hooks keep recording but tell the agents nothing, and fixes held meanwhile arrive once it resumes |
+| `f` | Show all events, failures only, or fixes only |
+| `e` | Open `ANTIBODIES.md` in `$VISUAL` or `$EDITOR` |
+
+`antibody watch --once` prints a single frame for a pipe, sized by `COLUMNS` and
+`LINES`, and `antibody stats` prints the ledger as text for scripts and CI.
+
+[`demo/index.html`](demo/index.html) is a simulated run of the same screen with
+eight agents. Open it in a browser and press `m` to turn shared memory off: the fleet
+goes back to paying for the same diagnosis over and over.
 
 ## Works with
 
@@ -228,7 +249,7 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | The Claude Code plugin | `.claude-plugin/`, `hooks/hooks.json` | Built; validated with `claude plugin validate` |
 | The Gemini CLI and Codex CLI adapters | `src/gemini.ts`, `src/codex.ts`, `src/hook-input.ts` | Built; payloads read off each CLI's source |
 | `antibody setup` for Gemini CLI and Codex CLI | `src/setup.ts` | Built |
-| `antibody watch` | `demo/index.html` | M4; simulated demo only |
+| `antibody watch` and `antibody stats` | `src/watch.ts`, `src/watch-model.ts`, `src/watch-render.ts`, `src/cli.ts` | Built |
 
 ## Built on dsh-errkb
 

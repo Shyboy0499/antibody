@@ -72,14 +72,23 @@ Each milestone ends with something that can be checked, not just written.
   is inferred from the last line of its output; a command that fails quietly, or
   succeeds with an error-looking last line, is misread.
 
-## M4 · `antibody watch`
+## M4 · `antibody watch` (done)
 
-- The terminal fleet view in Ink, following the demo: status bar, fleet, memory,
-  antibodies and events panes.
-- Keys: pause injection, filter, open, edit in `$EDITOR`, quit.
-- `antibody stats` for scripts and CI.
-- **Done when:** the view keeps up with an eight-agent fleet at a few redraws a second
-  without flicker, in an 80-column terminal and a wide one.
+- The terminal fleet view, following the demo: status line, fleet, memory,
+  antibodies and events panes (`src/watch-model.ts` folds the memory into the view,
+  `src/watch-render.ts` lays it out). The renderer is hand-written rather than Ink,
+  so the committed bundle stays free of dependencies.
+- Keys: `q` quits, `space` freezes, `p` pauses injection for the whole fleet through a
+  `paused` file in the memory directory, `f` cycles the events filter, and `e` opens
+  `ANTIBODIES.md` in `$EDITOR`.
+- `antibody stats` and `antibody watch --once` for scripts and CI.
+- **Checked:** a frame of an eight-agent fleet with 5,000 events and 200 entries takes
+  about 2 ms to fold and draw, at 80 columns and at 200, against the 500 ms between
+  redraws (`tests/watch-render.test.ts` fails above 100 ms). Every frame is exactly
+  the terminal's size and is drawn in place, so it does not flicker. The watcher was
+  run with the built bundle in a pseudo-terminal.
+- **Open:** opening one entry on its own (the design's `enter`), the fleet pane's task
+  column and diagnosis progress bar, and the memory pane's sparkline.
 
 ## M5 · Proof
 
