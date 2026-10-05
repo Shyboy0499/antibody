@@ -5,6 +5,7 @@ import * as agent from "../src/agent";
 import * as claims from "../src/claims";
 import * as claudeCode from "../src/claude-code";
 import * as gemini from "../src/gemini";
+import * as codex from "../src/codex";
 import * as hookInput from "../src/hook-input";
 import * as cli from "../src/cli";
 import * as events from "../src/events";
@@ -47,6 +48,7 @@ describe("public entry point", () => {
     ["hook-input", hookInput],
     ["claude-code", claudeCode],
     ["gemini", gemini],
+    ["codex", codex],
     ["session", session],
     ["fleet", fleet],
     ["tools", tools],
