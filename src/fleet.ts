@@ -84,6 +84,15 @@ export interface Fleet {
    * @returns the notices to show the agent; often none.
    */
   poll(): Promise<string[]>;
+  /**
+   * A tool call succeeded. An entry watched under its command or tool is
+   * resolved: its fix gains trust, or, without a fix, the agent is asked once
+   * to record it.
+   *
+   * @param call - the call, from the harness adapter.
+   * @returns the notices to show the agent; often none.
+   */
+  success(call: ToolCall): Promise<string[]>;
 }
 
 /** The per-call pieces restored from a session file. */
@@ -342,6 +351,33 @@ export function createFleet(
         const rt = restore(s, machine.trust);
         rt.injector.beginStep();
         const notices: string[] = [];
+        await deliver(s, rt, machine, notices);
+        await persist(s, rt, before);
+        return notices;
+      });
+    },
+
+    async success(call) {
+      const outcome = callOutcome(call);
+      if (!outcome.ok) return [];
+      return sessionFile.update(async (s) => {
+        const machine = (await state.read()).state;
+        const before = structuredClone(machine.trust);
+        const rt = restore(s, machine.trust);
+        rt.injector.beginStep();
+        const notices: string[] = [];
+        const resolved = rt.tracker.succeeded(outcome.keys);
+        if (resolved.length > 0) {
+          const entries = await readEntries(machine);
+          for (const id of resolved) {
+            const entry = entries.find((e) => e.id === id);
+            if (entry === undefined) continue;
+            await log({ kind: "resolve", id });
+            if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
+            else if (rt.tracker.ask(id))
+              await tell(rt.injector.ask(id), notices);
+          }
+        }
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;

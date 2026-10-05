@@ -1,7 +1,8 @@
 // The event log: events.jsonl in the memory directory.
 //
 // Every agent appends one JSON line per event - an error it hit, a claim, a fix
-// it recorded, a notice it received - and `antibody watch` tails the file. The
+// it recorded, a notice it received, an error it got past - and
+// `antibody watch` tails the file. The
 // log is the live record of the fleet; ANTIBODIES.md and state.json stay the
 // source of truth for entries and counters.
 //
@@ -35,6 +36,7 @@ export const EVENT_KINDS = [
   "release",
   "fix",
   "notice",
+  "resolve",
 ] as const;
 
 export type EventKind = (typeof EVENT_KINDS)[number];
