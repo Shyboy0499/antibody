@@ -93,7 +93,7 @@ describe("Injector", () => {
     expect(by("always")).toMatchObject({
       id: "E-0011",
       kind: "miss",
-      text: "[errkb] recorded as E-0011 (no fix yet).",
+      text: "[antibody] recorded as E-0011 (no fix yet).",
     });
   });
 
@@ -103,7 +103,7 @@ describe("Injector", () => {
     expect(asked).toEqual({
       id: "E-0011",
       kind: "ask-fix",
-      text: "[errkb] E-0011 looks resolved. Record the fix with err_record in one sentence so it can be reused.",
+      text: "[antibody] E-0011 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
     });
     // One notice per step.
     expect(injector.ask("E-0012")).toBeUndefined();

@@ -680,7 +680,7 @@ export interface ErrorStore {
   /** Change fields of an existing entry; undefined when the ID is unknown. */
   update(id: string, patch: EntryPatch): Promise<Entry | undefined>;
   /**
-   * Move one entry to the archive (`err_forget`, T15), with `reason` added to
+   * Move one entry to the archive (`antibody_forget`, T15), with `reason` added to
    * its notes; undefined when the ID is unknown. Nothing is deleted.
    */
   archive(id: string, reason?: string): Promise<Entry | undefined>;

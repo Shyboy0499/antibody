@@ -18,7 +18,7 @@ import {
 describe("askFixText", () => {
   it("is the exact one-shot wording, inside the notice caps", () => {
     expect(askFixText("E-0011")).toBe(
-      "[errkb] E-0011 looks resolved. Record the fix with err_record in one sentence so it can be reused.",
+      "[antibody] E-0011 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
     );
     expect(withinCaps(askFixText("E-0011"))).toBe(true);
   });

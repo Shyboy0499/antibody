@@ -6,12 +6,12 @@
 //
 // Wording:
 //
-//   hit       [errkb] E-0007 known (5 hits) | cause: … | fix: … Known fix: try
+//   hit       [antibody] E-0007 known (5 hits) | cause: … | fix: … Known fix: try
 //             this first, before re-diagnosing or researching.
 //   near hit  … | fix: … Approximate match, verify first.
 //   doubted   … | fix: … This fix failed here last time; verify before applying.
-//   no fix    [errkb] E-0007 seen before (5 hits), no fix recorded yet.
-//   miss      [errkb] recorded as E-0011 (no fix yet).
+//   no fix    [antibody] E-0007 seen before (5 hits), no fix recorded yet.
+//   miss      [antibody] recorded as E-0011 (no fix yet).
 //
 // The hit wording orders the work ("try this first") instead of forbidding any
 // ("do not re-diagnose"). A hit without a fix still speaks, briefly: the agent
@@ -26,6 +26,9 @@
 // antibody hands notices to each harness's hook as plain text, so that part
 // stays behind.
 import type { Hit } from "./match";
+
+/** How every notice introduces itself to the agent. */
+export const NOTICE_PREFIX = "[antibody]";
 
 /** A notice body never exceeds this many characters (§7). */
 export const NOTICE_MAX_CHARS = 400;
@@ -226,7 +229,7 @@ export function noticeText(
   if (event.kind === "miss")
     return {
       kind: "miss",
-      text: hardClip(`[errkb] recorded as ${event.id} (no fix yet).`),
+      text: hardClip(`${NOTICE_PREFIX} recorded as ${event.id} (no fix yet).`),
     };
 
   const { hit } = event;
@@ -237,7 +240,7 @@ export function noticeText(
     return {
       kind: "no-fix",
       text: hardClip(
-        `[errkb] ${id} seen before (${hitsText(entry.hits)}${near}), no fix recorded yet.`,
+        `${NOTICE_PREFIX} ${id} seen before (${hitsText(entry.hits)}${near}), no fix recorded yet.`,
       ),
     };
 
@@ -254,7 +257,7 @@ export function noticeText(
       : "hit";
 
   const cause = oneLine(entry.trigger);
-  const head = `[errkb] ${id} known (${hitsText(entry.hits)})`;
+  const head = `${NOTICE_PREFIX} ${id} known (${hitsText(entry.hits)})`;
   const tail = closing.join(" ");
   const render = (c: string, f: string) =>
     `${head}${c === "" ? "" : ` | cause: ${c}`} | fix: ${f} ${tail}`;

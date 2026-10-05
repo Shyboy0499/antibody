@@ -10,6 +10,7 @@ import {
   ELLIPSIS,
   NOTICE_MAX_CHARS,
   NOTICE_MAX_TOKENS,
+  NOTICE_PREFIX,
   WORDING,
   clip,
   estimateTokens,
@@ -164,7 +165,7 @@ describe("noticeText", () => {
   it("a hit carries cause, fix and the try-first wording", () => {
     expect(noticeText(hit())).toEqual({
       kind: "hit",
-      text: `[errkb] E-0007 known (5 hits) | cause: ${CAUSE} | fix: ${FIX} ${WORDING.hit}`,
+      text: `[antibody] E-0007 known (5 hits) | cause: ${CAUSE} | fix: ${FIX} ${WORDING.hit}`,
     });
   });
 
@@ -183,7 +184,7 @@ describe("noticeText", () => {
 
   it("leaves the cause out when the entry has no trigger", () => {
     expect(noticeText(hit("E-0007", { trigger: "  " })).text).toBe(
-      `[errkb] E-0007 known (5 hits) | fix: ${FIX} ${WORDING.hit}`,
+      `[antibody] E-0007 known (5 hits) | fix: ${FIX} ${WORDING.hit}`,
     );
   });
 
@@ -199,7 +200,7 @@ describe("noticeText", () => {
     const { kind, text } = noticeText(near());
     expect(kind).toBe("near");
     expect(text).toBe(
-      `[errkb] E-0007 known (5 hits) | cause: ${CAUSE} | fix: ${FIX} Approximate match, verify first.`,
+      `[antibody] E-0007 known (5 hits) | cause: ${CAUSE} | fix: ${FIX} Approximate match, verify first.`,
     );
     expect(text).not.toContain(WORDING.hit);
     expect(text).not.toMatch(/re-diagnos/);
@@ -208,10 +209,10 @@ describe("noticeText", () => {
   it("an entry without a fix gets the short notice", () => {
     expect(noticeText(hit("E-0007", { fix: " \n " }))).toEqual({
       kind: "no-fix",
-      text: "[errkb] E-0007 seen before (5 hits), no fix recorded yet.",
+      text: "[antibody] E-0007 seen before (5 hits), no fix recorded yet.",
     });
     expect(noticeText(near("E-0007", { fix: "" })).text).toBe(
-      "[errkb] E-0007 seen before (5 hits, approximate match), no fix recorded yet.",
+      "[antibody] E-0007 seen before (5 hits, approximate match), no fix recorded yet.",
     );
     expect(
       estimateTokens(noticeText(hit("E-0007", { fix: "" })).text),
@@ -221,7 +222,7 @@ describe("noticeText", () => {
   it("a miss is recorded with no fix yet", () => {
     expect(noticeText(miss())).toEqual({
       kind: "miss",
-      text: "[errkb] recorded as E-0011 (no fix yet).",
+      text: "[antibody] recorded as E-0011 (no fix yet).",
     });
   });
 
@@ -358,5 +359,17 @@ describe("CapTracker", () => {
     a.beginTurn();
     a.tryEmit("E-0007");
     expect(b.tryEmit("E-0007")).toBe(true);
+  });
+});
+
+describe("the prefix", () => {
+  it("opens every kind of notice", () => {
+    expect(NOTICE_PREFIX).toBe("[antibody]");
+    const events = [hit(), near(), hit("E-0007", { fix: "" }), miss()];
+    for (const event of events)
+      expect(noticeText(event).text.startsWith(`${NOTICE_PREFIX} `)).toBe(true);
+    expect(
+      noticeText(hit(), "doubted").text.startsWith(`${NOTICE_PREFIX} `),
+    ).toBe(true);
   });
 });
