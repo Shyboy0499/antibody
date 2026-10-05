@@ -11,6 +11,7 @@ import {
   askFixText,
   callOutcome,
 } from "../src/resolve-detect";
+import type { ResolutionSnapshot } from "../src/resolve-detect";
 
 // ---------------------------------------------------------------------------
 // The prompt
@@ -205,5 +206,57 @@ describe("ResolutionTracker: the prompt is taken once", () => {
     expect(t.ask("E-0001")).toBe(true);
     expect(t.ask("E-0001")).toBe(false);
     expect(t.ask("E-0002")).toBe(true);
+  });
+});
+
+describe("ResolutionTracker snapshots", () => {
+  it("carries watches, the turn and the asked set to the next process", () => {
+    const first = new ResolutionTracker();
+    first.beginTurn();
+    first.occurred("E-0001", "command:pnpm test");
+    first.occurred("E-0002", "tool:Read");
+    first.ask("E-0002");
+    const next = ResolutionTracker.restore(
+      JSON.parse(JSON.stringify(first.snapshot())),
+    );
+    expect(next.turn).toBe(1);
+    expect(next.watched()).toEqual(["E-0001", "E-0002"]);
+    expect(next.ask("E-0002")).toBe(false);
+    expect(next.succeeded(["command:pnpm test"])).toEqual(["E-0001"]);
+  });
+
+  it("starts fresh without a snapshot", () => {
+    expect(ResolutionTracker.restore(undefined).snapshot()).toEqual({
+      turn: 0,
+      watches: [],
+      asked: [],
+    });
+  });
+
+  it("drops malformed watches and keeps the newest MAX_WATCHES", () => {
+    const watches = [
+      { id: "bad-turn", key: "k", turn: -1 },
+      { id: 7, key: "k", turn: 0 },
+      null,
+      ...Array.from({ length: MAX_WATCHES }, (_, n) => ({
+        id: `E-${n}`,
+        key: "k",
+        turn: 0,
+      })),
+    ] as unknown as ResolutionSnapshot["watches"];
+    const tracker = ResolutionTracker.restore({
+      turn: "3" as unknown as number,
+      watches,
+      asked: ["E-1", 5 as unknown as string],
+    });
+    expect(tracker.turn).toBe(0);
+    expect(tracker.watched()).toHaveLength(MAX_WATCHES);
+    expect(tracker.watched()[0]).toBe("E-0");
+    expect(tracker.snapshot().asked).toEqual(["E-1"]);
+    expect(
+      ResolutionTracker.restore({
+        watches: {} as unknown as ResolutionSnapshot["watches"],
+      }).watched(),
+    ).toEqual([]);
   });
 });

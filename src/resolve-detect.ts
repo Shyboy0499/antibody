@@ -110,6 +110,19 @@ interface Watch {
   turn: number;
 }
 
+/** ResolutionTracker's state as plain data, so a hook process can save it between calls. */
+export interface ResolutionSnapshot {
+  turn: number;
+  /** Oldest first: the order watches were recorded in. */
+  watches: { id: string; key: string; turn: number }[];
+  asked: string[];
+}
+
+const turnNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+
 /**
  * One session's resolution state: the watched entries, the turn count, and
  * the entries already asked for a fix. Call beginTurn() at every new turn.
@@ -120,6 +133,46 @@ export class ResolutionTracker {
   private current = 0;
   private readonly watches = new Map<string, Watch>();
   private readonly asked = new Set<string>();
+
+  /**
+   * A tracker carrying on from saved state. Malformed watches are dropped and
+   * a malformed turn reads as 0; at most MAX_WATCHES of the newest watches are
+   * kept.
+   *
+   * @param snapshot - what snapshot() returned, or undefined for a new session.
+   */
+  static restore(
+    snapshot: Partial<ResolutionSnapshot> | undefined,
+  ): ResolutionTracker {
+    const tracker = new ResolutionTracker();
+    tracker.current = turnNumber(snapshot?.turn) ?? 0;
+    const watches = Array.isArray(snapshot?.watches) ? snapshot.watches : [];
+    for (const w of watches.slice(-MAX_WATCHES)) {
+      const turn = turnNumber(w?.turn);
+      if (
+        typeof w?.id === "string" &&
+        typeof w.key === "string" &&
+        turn !== undefined
+      )
+        tracker.watches.set(w.id, { key: w.key, turn });
+    }
+    const asked = Array.isArray(snapshot?.asked) ? snapshot.asked : [];
+    for (const id of asked) if (typeof id === "string") tracker.asked.add(id);
+    return tracker;
+  }
+
+  /** The state, for restore() in the next hook process. */
+  snapshot(): ResolutionSnapshot {
+    return {
+      turn: this.current,
+      watches: [...this.watches].map(([id, w]) => ({
+        id,
+        key: w.key,
+        turn: w.turn,
+      })),
+      asked: [...this.asked],
+    };
+  }
 
   /** The turns begun so far; 0 before the first. */
   get turn(): number {
