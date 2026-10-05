@@ -27,7 +27,8 @@
     "test": "vitest run --coverage",
     "lint": "oxlint",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "e2e": "node scripts/e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
