@@ -135,7 +135,8 @@ pnpm run build       # lib/ via tsdown
 ```
 
 CI runs all of these on every push and pull request, plus a privacy guard that rejects
-personal paths, private e-mail addresses and credential-shaped tokens.
+personal paths, private e-mail addresses and credential-shaped tokens. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
 
 ## Documents
 
