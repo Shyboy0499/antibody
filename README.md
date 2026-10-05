@@ -2,14 +2,14 @@
 
 **Herd immunity for coding-agent fleets.** When one agent beats an error, every agent running beside it becomes immune.
 
-![Status](https://img.shields.io/badge/status-M1%20done-yellow)
+![Status](https://img.shields.io/badge/status-M2%3A%20Claude%20Code-yellowgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> **Status: M1 done.** The core and the shared memory are built and tested:
-> fingerprinting, redaction, the `ANTIBODIES.md` store, matching, notices, fix trust,
-> claims and the event log, proven against eight concurrent writer processes. Nothing
-> connects to an agent yet; that is milestone M2, the Claude Code plugin. So there
-> is still nothing to install. The [roadmap](docs/roadmap.md) has the rest.
+> **Status: M2, Claude Code.** antibody installs as a Claude Code plugin. Its hooks
+> capture errors, claims keep two agents from diagnosing the same new one, and a
+> recorded fix reaches the other sessions in the repository at their next tool call.
+> Five MCP tools let agents look errors up and record fixes. Codex CLI, Gemini CLI and
+> the `antibody watch` view come next; the [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
 
@@ -67,11 +67,67 @@ Shared memory lives in the repository's common git directory
 It needs no server, no database and no configuration, and it is never committed
 unless you export it.
 
+## Install in Claude Code
+
+antibody needs Node.js 22.13 or newer on your `PATH`. In Claude Code:
+
+```text
+/plugin marketplace add Shyboy0499/antibody
+/plugin install antibody@antibody
+```
+
+Then restart Claude Code. The plugin is the repository itself: its hooks run the
+committed `dist/antibody.mjs`, so there is nothing to build. From then on every
+session in every git repository takes part. Sessions in different worktrees of one
+repository share a memory, and sessions in different repositories do not.
+
+What happens next is automatic:
+
+- A tool call fails. The hook fingerprints the error. If it is new, this session
+  claims it and records it in `ANTIBODIES.md`, and the agent sees nothing.
+- Another session hits the same error. If the first is still on it, the second is
+  told who is diagnosing it, and waits for the fix instead of starting over. If a fix
+  is known, it is pushed into the agent's context, within 120 tokens.
+- The agent gets past the error. antibody notices the next comparable call succeed
+  and asks once for the fix, which the agent records with `antibody_record`. The
+  sessions that were waiting get it at their next tool call.
+
+The MCP server gives every session five tools: `antibody_lookup`, `antibody_record`,
+`antibody_list`, `antibody_forget` and `antibody_stats`. The memory is plain files
+you can read and edit:
+
+```sh
+cat "$(git rev-parse --git-common-dir)/antibody/ANTIBODIES.md"
+```
+
+A hook never blocks or breaks a session. Outside a repository, on any error, or past
+three seconds it prints nothing. Set `ANTIBODY_DEBUG=1` to see why on stderr.
+
+### Measured
+
+[`scripts/e2e.mjs`](scripts/e2e.mjs) runs the M2 check against the committed bundle,
+the way Claude Code calls it, and CI runs it on every push. Two sessions in two
+worktrees hit the same missing-`.env` error. The fix the first session records reaches
+the second on its next tool call: **53 ms** later on a GitHub Actions runner, and 65
+to 75 ms later in the development container.
+
+Each hook call is a separate Node.js process. The median hook call takes:
+
+| Call | GitHub Actions runner | Development container |
+| --- | ---: | ---: |
+| A tool call fails | 60 ms | 80 to 85 ms |
+| A tool call succeeds | 44 ms | 54 to 63 ms |
+| Outside a git repository | 36 ms | 47 to 49 ms |
+| `node -e 0`, for scale | 23 ms | 23 to 24 ms |
+
+The roadmap's target is under 50 ms per call. It is met for successes on the runner,
+and not yet for failures anywhere.
+
 ## See it
 
-`antibody watch` is the live fleet view, and it runs in your terminal, next to the
-agents. It shows each agent's state, the antibodies in memory, the tokens saved, and
-the event stream as it happens.
+`antibody watch` (milestone M4) will be the live fleet view, in your terminal next
+to the agents: each agent's state, the antibodies in memory, the tokens saved, and the
+event stream as it happens.
 
 [`demo/index.html`](demo/index.html) is a simulated run of that screen with eight
 agents. Open it in a browser and press `m` to turn shared memory off: the fleet goes
@@ -81,7 +137,7 @@ back to paying for the same diagnosis over and over.
 
 | Agent | How antibody connects | Fix delivery |
 | --- | --- | --- |
-| Claude Code | Plugin: `PostToolUseFailure` and `PostToolUse` hooks, plus an MCP server | Pushed through `additionalContext` |
+| Claude Code (works today) | Plugin: `PostToolUseFailure`, `PostToolUse`, `SessionStart`, `UserPromptSubmit` and `SessionEnd` hooks, plus an MCP server | Pushed through `additionalContext` |
 | Codex CLI | `PostToolUse` hook (`~/.codex/hooks.json`), plus MCP | Pushed through the hook |
 | Gemini CLI | Extension: `AfterTool` hook, plus MCP | Pushed through `hookSpecificOutput.additionalContext` |
 | Cursor, OpenCode, Aider and others | MCP server only | Pulled when the agent calls `antibody_lookup` |
@@ -108,7 +164,10 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | The memory directory in the git common directory | `src/paths.ts` | Built |
 | The `events.jsonl` event log | `src/events.ts` | Built |
 | Claims, so only one agent diagnoses a new error | `src/claims.ts` | Built |
-| Claude Code plugin and MCP server | | M2 |
+| The fleet loop: claims, claim hints, held fixes, trust and per-session caps per hook call | `src/fleet.ts`, `src/session.ts` | Built |
+| The Claude Code adapter and the `antibody` command line | `src/claude-code.ts`, `src/cli.ts`, `dist/antibody.mjs` | Built |
+| The five agent tools and the MCP server | `src/tools.ts`, `src/mcp.ts` | Built |
+| The Claude Code plugin | `.claude-plugin/`, `hooks/hooks.json` | Built; validated with `claude plugin validate` |
 | Codex CLI and Gemini CLI adapters | | M3 |
 | `antibody watch` | `demo/index.html` | M4; simulated demo only |
 
@@ -131,8 +190,12 @@ pnpm test            # vitest with the 99% statements and lines gate
 pnpm run typecheck
 pnpm run lint
 pnpm run format:check
-pnpm run build       # lib/ via tsdown
+pnpm run build       # lib/ and the dist/antibody.mjs bundle, via tsdown
+pnpm run e2e         # the M2 exchange end to end, plus hook latency
 ```
+
+`dist/antibody.mjs` is committed, because Claude Code runs the plugin straight from
+git. CI fails when a source change is pushed without the rebuilt bundle.
 
 CI runs all of these on every push and pull request, plus a privacy guard that rejects
 personal paths, private e-mail addresses and credential-shaped tokens. See

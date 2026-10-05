@@ -1,7 +1,8 @@
 # antibody design
 
-Status: draft, October 2026. Milestone M1 (core and shared memory) is implemented;
-the harness adapters, the MCP server and `antibody watch` are not yet. Statements about
+Status: draft, October 2026. Milestones M1 (core and shared memory) and M2 (the
+Claude Code plugin and the MCP server) are implemented; the Codex CLI and Gemini CLI
+adapters and `antibody watch` are not yet. Statements about
 other tools' hook APIs come from their public documentation and are marked where
 they still need to be checked against a running copy.
 
@@ -189,7 +190,7 @@ never break or block an agent.
 
 | Harness | Capture | Inject | Notes |
 | --- | --- | --- | --- |
-| Claude Code | `PostToolUseFailure` (receives `error`), and `PostToolUse` for Bash calls that exit non-zero | `hookSpecificOutput.additionalContext` on both events | Shipped as a plugin with `hooks/hooks.json` and an MCP server. `SessionStart` for the optional environment broadcast, `Stop` to release claims. |
+| Claude Code | `PostToolUseFailure` (receives `error`), and `PostToolUse` for Bash calls that exit non-zero | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
 | Codex CLI | `PostToolUse` in `~/.codex/hooks.json` (hooks reached general availability in May 2026) | The hook's replacement of the tool result | Payload field names to verify in M3. MCP server for the tools. |
 | Gemini CLI | `AfterTool` | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result | Shipped as an extension. Payload to verify in M3. |
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
@@ -255,8 +256,11 @@ unchanged:
 | `src/state.ts` | `src/state.ts` | Imports `TrustRecord` from `src/trust.ts` |
 
 New in antibody: `src/events.ts` (the event log), `src/claims.ts` (claims) and
-`memoryDir()`. The DeepSeek Harness wiring (`src/index.ts`, `src/plugin.ts`,
-`src/tools.ts`) stays behind; the harness adapters replace it from M2.
+`memoryDir()`. The DeepSeek Harness wiring (`src/index.ts`, `src/plugin.ts`) stays
+behind. In M2 `src/tools.ts` came over as harness-neutral tools behind an MCP server
+(`src/mcp.ts`), and the fleet loop (`src/fleet.ts`), the session file
+(`src/session.ts`) and the Claude Code adapter (`src/claude-code.ts`) replace the
+plugin wiring.
 
 dsh-errkb is MIT licensed, copyright 2026 jingchangzhao-gif. Decided under Q2: the
 files are copied, each starting with a comment naming its source, and `NOTICE`

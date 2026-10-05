@@ -23,17 +23,34 @@ Each milestone ends with something that can be checked, not just written.
   (`tests/concurrency.test.ts`). The main checkout, every linked worktree and their
   subdirectories resolve the same memory directory (`tests/memory-dir.test.ts`).
 
-## M2 · Claude Code
+## M2 · Claude Code (done, except the latency target)
 
-- Plugin: `hooks/hooks.json` wiring `PostToolUseFailure`, `PostToolUse` (Bash exits
-  that are not zero), `SessionStart` and `Stop` to `antibody hook claude-code <event>`.
-- MCP server with `antibody_lookup`, `antibody_record`, `antibody_list`,
-  `antibody_stats` and `antibody_forget`.
-- Wire the claims, fix trust and per-session caps built in M1 into the hooks, with
-  claim hints for agents that hit an entry another agent is diagnosing.
-- **Done when:** two Claude Code sessions in two worktrees of one repo hit the same
-  missing-`.env` error, and the second session receives the first session's fix within
-  one second of it being recorded, with the hook adding under 50 ms per call.
+- The fleet loop (`src/fleet.ts`): claims keyed by fingerprint, claim hints, held
+  fixes delivered at the next hook call, fix trust and per-session caps, with
+  each session's budgets and watches kept in `sessions/<id>.json` between hook
+  processes.
+- `antibody hook claude-code` for `PostToolUseFailure`, `PostToolUse`,
+  `SessionStart`, `UserPromptSubmit` and `SessionEnd`. It fails open and stops at a
+  3-second deadline. Bundled as the committed `dist/antibody.mjs`.
+- The MCP server (`antibody mcp claude-code`) with `antibody_lookup`,
+  `antibody_record`, `antibody_list`, `antibody_stats` and `antibody_forget`.
+- The plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json` and a marketplace
+  entry. Both manifests pass `claude plugin validate`, and Claude Code's MCP health
+  check connects to the server.
+- **Checked:** `scripts/e2e.mjs`, run in CI, plays the scenario against the bundle.
+  The second session gets the first session's fix 53 ms after it is recorded on a
+  GitHub Actions runner (65 to 75 ms in the development container), well within one
+  second.
+- **Open:** the 50 ms hook budget. On a GitHub Actions runner the median hook call
+  takes 60 ms for a failure, 44 ms for a success and 36 ms outside a repository; in
+  the development container 80 to 85, 54 to 63 and 47 to 49 ms. `node -e 0` takes
+  about 23 ms on both. Reading `.git` instead of running git and loading `node:crypto` and
+  `node:child_process` lazily already brought a failure down from 111 ms. The next
+  candidates are a smaller bundle for the hook path and skipping the store for
+  successes that resolve nothing.
+- Also open: looking an error up by its bare text misses entries recorded from
+  Bash, because those are signed with the command (`pnpm test → Error: …`). The
+  closest list still names them.
 
 ## M3 · Codex CLI, Gemini CLI and MCP-only agents
 
