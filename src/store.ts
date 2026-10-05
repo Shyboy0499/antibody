@@ -20,7 +20,6 @@
 // `StoreClock` are injected, so locking, staleness and corruption handling are
 // testable without racing a real disk. `nodeStoreFs()` and `systemClock()` are
 // the only parts that touch the machine.
-import { randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { corruptFileName } from "./paths";
@@ -602,6 +601,16 @@ export type LockOptions = Pick<
   "lockStaleMs" | "lockTimeoutMs" | "lockRetryMs"
 >;
 
+// A name part no other writer on this machine is using right now: the process
+// id, a per-process counter and some randomness. Lock tokens and temporary file
+// names only need that; they used node:crypto's randomBytes in dsh-errkb, which
+// costs a hook about 10 ms of start-up time on every write.
+let uniqueCounter = 0;
+function uniqueSuffix(): string {
+  uniqueCounter++;
+  return `${process.pid}-${uniqueCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 /**
  * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
  * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -632,7 +641,7 @@ export async function withFileLock<T>(
   }
 
   await fs.mkdir(dirname(lock));
-  const token = `${process.pid}-${randomBytes(6).toString("hex")}`;
+  const token = uniqueSuffix();
   const deadline = clock.now().getTime() + o.lockTimeoutMs;
   for (;;) {
     if (await fs.createExclusive(lock, token)) break;
@@ -661,7 +670,7 @@ export async function writeFileAtomic(
   path: string,
   data: string,
 ): Promise<void> {
-  const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  const temp = `${path}.${uniqueSuffix()}.tmp`;
   await fs.writeFile(temp, data);
   try {
     await fs.rename(temp, path);
