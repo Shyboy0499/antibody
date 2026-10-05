@@ -121,3 +121,47 @@ describe("createSessionFile", () => {
     await file.remove();
   });
 });
+
+describe("async session updates", () => {
+  let memory: string;
+
+  beforeEach(async () => {
+    memory = join(
+      await mkdtemp(join(tmpdir(), "antibody-session-async-")),
+      "memory",
+    );
+  });
+
+  afterEach(async () => {
+    await rm(join(memory, ".."), { recursive: true, force: true });
+  });
+
+  it("holds the lock until async work settles, so parallel updates stay in order", async () => {
+    const file = createSessionFile(memory, "s-1");
+    const order: string[] = [];
+    await Promise.all(
+      ["a", "b", "c"].map((name) =>
+        file.update(async (s) => {
+          order.push(`start ${name}`);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          s.holding.push(name);
+          order.push(`end ${name}`);
+        }),
+      ),
+    );
+    for (let i = 0; i < order.length; i += 2)
+      expect(order[i + 1]).toBe(order[i]!.replace("start", "end"));
+    expect((await file.read()).holding.sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("writes nothing when async work fails", async () => {
+    const file = createSessionFile(memory, "s-1");
+    await expect(
+      file.update(async (s) => {
+        s.holding.push("lost");
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect((await file.read()).holding).toEqual([]);
+  });
+});
