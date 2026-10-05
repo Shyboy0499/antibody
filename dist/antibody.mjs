@@ -4425,6 +4425,24 @@ function fleetView(events, entries, claims, now) {
 }
 //#endregion
 //#region src/watch-render.ts
+/** Which events the events pane shows; f cycles through them. */
+const EVENT_FILTERS = [
+	"all",
+	"failures",
+	"fixes"
+];
+const FILTER_TAGS = {
+	failures: [
+		"new",
+		"again",
+		"holding"
+	],
+	fixes: [
+		"antibody",
+		"immune",
+		"resolved"
+	]
+};
 const SGR = {
 	bold: "1",
 	dim: "2",
@@ -4590,10 +4608,12 @@ function renderView(view, o) {
 		tagStyle[e.tag]
 	], [` ${e.text}`, -1]);
 	const keys = row([
-		" q quit · space freeze or resume · p pause or resume injection",
+		" q quit · space freeze · p pause injection · f filter events · e edit antibodies",
 		-1,
 		"dim"
 	]);
+	const filter = o.filter ?? "all";
+	const events = filter === "all" ? view.events : view.events.filter((e) => FILTER_TAGS[filter].includes(e.tag));
 	const fixed = 3 + memoryLines.length + 1 + 1 + 1 + 1;
 	const room = Math.max(0, o.height - fixed);
 	const fleetRows = Math.min(Math.max(1, view.agents.length), Math.max(1, Math.floor(room * .35)));
@@ -4612,8 +4632,8 @@ function renderView(view, o) {
 		...memoryLines.map((text) => row([` ${text}`, -1])),
 		heading("Antibodies", view.antibodies.length > antibodyRows ? `${antibodyRows} of ${view.antibodies.length}, newest last` : ""),
 		...view.antibodies.length === 0 ? [empty("no errors yet")] : view.antibodies.slice(-antibodyRows).map(antibodyRow),
-		heading("Events"),
-		...view.events.length === 0 ? [empty("no events yet")] : view.events.slice(view.events.length - eventRows).map(eventRow)
+		heading("Events", filter === "all" ? "" : `${filter} only`),
+		...events.length === 0 ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)] : events.slice(events.length - eventRows).map(eventRow)
 	];
 	const blank = " ".repeat(width);
 	const body = lines.slice(0, Math.max(0, o.height - 1));
@@ -4690,6 +4710,7 @@ async function runWatch(args, io, deps = {}) {
 	}));
 	const read = memoryReader(memory);
 	let frozen = false;
+	let filter = "all";
 	let last = await read();
 	const frame = (colours) => {
 		const { columns, rows } = size();
@@ -4700,7 +4721,8 @@ async function runWatch(args, io, deps = {}) {
 			now: now(),
 			repo,
 			frozen,
-			paused: last.paused
+			paused: last.paused,
+			filter
 		});
 	};
 	if (once) {
@@ -4750,9 +4772,31 @@ async function runWatch(args, io, deps = {}) {
 					paused: !last.paused
 				};
 				draw();
+			} else if (text.includes("f")) {
+				filter = EVENT_FILTERS[(EVENT_FILTERS.indexOf(filter) + 1) % EVENT_FILTERS.length] ?? "all";
+				draw();
+			} else if (text.includes("e")) {
+				const editor = io.env.VISUAL || io.env.EDITOR || "vi";
+				io.stdout(LEAVE);
+				if (raw.isTTY === true) raw.setRawMode(false);
+				(deps.edit ?? runEditor)(`${editor} ${shellQuote(filesIn(memory).errors)}`);
+				if (raw.isTTY === true) raw.setRawMode(true);
+				io.stdout(ENTER);
+				drawn = "";
+				read().then((data) => {
+					last = data;
+					draw();
+				});
 			}
 		};
 		keys.on("data", onKey);
+	});
+}
+/** Run an editor command in a shell on this terminal, and wait for it. */
+function runEditor(command) {
+	lazyChildProcess().spawnSync(command, {
+		shell: true,
+		stdio: "inherit"
 	});
 }
 //#endregion

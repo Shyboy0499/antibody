@@ -166,6 +166,70 @@ describe("antibody watch", () => {
     await done;
   });
 
+  it("cycles the events filter on f", async () => {
+    const { keys, out, done } = watch({});
+    await until(() => out.length > 1);
+    keys.write("f");
+    await until(() => out.some((o) => o.includes("failures only")));
+    keys.write("f");
+    await until(() => out.some((o) => o.includes("fixes only")));
+    keys.write("f");
+    keys.write("q");
+    await done;
+  });
+
+  it("hands the terminal to $EDITOR on e, then takes it back", async () => {
+    const commands: string[] = [];
+    const keys = new PassThrough();
+    const { cli, out } = io({ EDITOR: "nano -w" });
+    const done = runWatch([], cli, {
+      cwd: wtA,
+      size: () => size,
+      intervalMs: 5,
+      keys,
+      edit: (command) => {
+        commands.push(command);
+        out.push("<editor>");
+      },
+    });
+    await until(() => out.length > 1);
+    keys.write("e");
+    await until(() => commands.length === 1);
+    expect(commands[0]).toBe(`nano -w ${filesIn(memoryDir(wtA)).errors}`);
+    const at = out.indexOf("<editor>");
+    expect(out[at - 1]).toBe("\u001b[?25h\u001b[?1049l");
+    expect(out[at + 1]).toBe("\u001b[?1049h\u001b[?25l");
+    await until(() =>
+      out.slice(at + 2).some((o) => o.startsWith("\u001b[2J\u001b[H")),
+    );
+    keys.write("q");
+    await done;
+  });
+
+  it("falls back to $VISUAL, then vi", async () => {
+    for (const [env, editor] of [
+      [{ VISUAL: "code -w", EDITOR: "nano" }, "code -w"],
+      [{}, "vi"],
+    ] as const) {
+      const commands: string[] = [];
+      const keys = new PassThrough();
+      const { cli, out } = io(env);
+      const done = runWatch([], cli, {
+        cwd: wtA,
+        size: () => size,
+        intervalMs: 5,
+        keys,
+        edit: (command) => void commands.push(command),
+      });
+      await until(() => out.length > 1);
+      keys.write("e");
+      await until(() => commands.length === 1);
+      expect(commands[0]?.startsWith(`${editor} `)).toBe(true);
+      keys.write("q");
+      await done;
+    }
+  });
+
   it("clears the screen when the terminal changes size", async () => {
     let columns = 100;
     const { keys, out, done } = watch({ size: () => ({ columns, rows: 30 }) });
