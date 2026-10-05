@@ -248,6 +248,50 @@ describe("antibody_lookup", () => {
     expect(found).toContain("matched by exact");
   });
 
+  it("finds an entry recorded with its command from the bare error line", async () => {
+    const bash = (session: string, command: string, error: string) =>
+      createFleet(
+        memory,
+        `claude-code@${session}`,
+        session,
+        {},
+        { clock },
+      ).failure(
+        {
+          kind: "command",
+          toolName: "Bash",
+          command,
+          text: `${error}\n[exit code: 1]`,
+        },
+        { toolName: "Bash", isError: true, text: error },
+      );
+    await bash(
+      "s-a",
+      "pnpm test",
+      "Error: Environment variable not found: DATABASE_URL.",
+    );
+    await bash(
+      "s-a",
+      "pnpm dev",
+      "Error: Environment variable not found: DATABASE_URL. Check .env.local too.",
+    );
+    expect(await text("antibody_list")).toMatch(/\n2 of 2 shown\.$/);
+    const found = await text("antibody_lookup", {
+      query: "Environment variable not found: DATABASE_URL",
+    });
+    expect(found).toMatch(/^E-0001 · .*pnpm test/);
+    expect(found).toContain("matched by contained text");
+    // Too short to trust, or a token the entry does not have.
+    expect(await text("antibody_lookup", { query: "DATABASE_URL" })).toMatch(
+      /^No entry matches/,
+    );
+    expect(
+      await text("antibody_lookup", {
+        query: "Environment variable not found: REDIS_URL",
+      }),
+    ).toMatch(/^No entry matches/);
+  });
+
   it("returns the raw sample when asked", async () => {
     await fail();
     const found = await text("antibody_lookup", {

@@ -48,9 +48,6 @@ Each milestone ends with something that can be checked, not just written.
   `node:child_process` lazily already brought a failure down from 111 ms. The next
   candidates are a smaller bundle for the hook path and skipping the store for
   successes that resolve nothing.
-- Also open: looking an error up by its bare text misses entries recorded from
-  Bash, because those are signed with the command (`pnpm test → Error: …`). The
-  closest list still names them.
 
 ## M3 · Codex CLI, Gemini CLI and MCP-only agents
 
