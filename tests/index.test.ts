@@ -22,6 +22,7 @@ import * as signature from "../src/signature";
 import * as state from "../src/state";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
+import * as review from "../src/review";
 import * as tools from "../src/tools";
 import * as mcp from "../src/mcp";
 import * as setup from "../src/setup";
@@ -41,6 +42,7 @@ describe("public entry point", () => {
     ["capture", capture],
     ["notice", notice],
     ["trust", trust],
+    ["review", review],
     ["resolve-detect", resolveDetect],
     ["injector", injector],
     ["state", state],

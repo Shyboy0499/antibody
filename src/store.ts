@@ -569,7 +569,12 @@ export interface EntryPatch {
   trigger?: string;
   lastSeen?: string;
   hits?: number;
+  /** Machine fields to set, or to remove with null; the rest are kept. */
+  meta?: Record<string, string | null>;
 }
+
+// A machine field's name: one word, so it cannot split the comment's pairs.
+const META_KEY = /^[A-Za-z][\w-]*$/;
 
 /** Outcome of {@link ErrorStore.append}. */
 export interface AppendResult {
@@ -858,6 +863,15 @@ export function createStore(
           entry.lastSeen = clean(patch.lastSeen);
         if (patch.status !== undefined) entry.status = patch.status;
         if (patch.hits !== undefined) entry.hits = patch.hits;
+        if (patch.meta !== undefined) {
+          entry.meta = { ...entry.meta };
+          for (const [key, value] of Object.entries(patch.meta)) {
+            if (!META_KEY.test(key))
+              throw new RangeError(`not a machine field name: "${key}"`);
+            if (value === null) delete entry.meta[key];
+            else entry.meta[key] = clean(value);
+          }
+        }
 
         rewrite(block, entry);
         await writeAtomic(files.errors, renderDocument(document));

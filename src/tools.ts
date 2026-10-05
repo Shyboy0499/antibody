@@ -24,6 +24,7 @@ import { FIX_NOTICE_KINDS, clip, elapsedText, oneLine } from "./notice";
 import type { NoticeKind, TrustLevel } from "./notice";
 import { filesIn } from "./paths";
 import type { KbFiles } from "./paths";
+import { forAgents } from "./review";
 import { normalize, signature } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
 import type { MachineState } from "./state";
@@ -276,8 +277,9 @@ export function createTools(context: ToolsContext): Tool[] {
           store.read(),
           state.read(),
         ]);
+        // A fix waiting for a person's review is not shown: src/review.ts.
         return document.blocks.map((b) =>
-          effectiveEntry(b.entry, machine.state.entries[b.entry.id]),
+          forAgents(effectiveEntry(b.entry, machine.state.entries[b.entry.id])),
         );
       },
       async claim(fingerprint) {

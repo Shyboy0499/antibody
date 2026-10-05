@@ -195,6 +195,19 @@ describe("antibody_lookup", () => {
     );
   });
 
+  it("hides a fix that waits for a person's review", async () => {
+    await fail();
+    await store().update("E-0001", {
+      fix: FIX,
+      status: "fixed",
+      meta: { review: "pending" },
+    });
+    const found = await text("antibody_lookup", { query: "E-0001" });
+    expect(found).toContain("status: open");
+    expect(found).toContain("fix: (none recorded)");
+    expect(found).not.toContain(FIX);
+  });
+
   it("shows a recorded fix instead of the diagnosis", async () => {
     await fail();
     await store().update("E-0001", { fix: FIX, status: "fixed" });

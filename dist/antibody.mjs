@@ -1762,6 +1762,7 @@ const DEFAULT_STORE_OPTIONS = {
 	lockTimeoutMs: 1e4,
 	lockRetryMs: 10
 };
+const META_KEY = /^[A-Za-z][\w-]*$/;
 /** The lock could not be taken in time. */
 var LockTimeoutError = class extends Error {
 	path;
@@ -1959,6 +1960,14 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 				if (patch.lastSeen !== void 0) entry.lastSeen = clean(patch.lastSeen);
 				if (patch.status !== void 0) entry.status = patch.status;
 				if (patch.hits !== void 0) entry.hits = patch.hits;
+				if (patch.meta !== void 0) {
+					entry.meta = { ...entry.meta };
+					for (const [key, value] of Object.entries(patch.meta)) {
+						if (!META_KEY.test(key)) throw new RangeError(`not a machine field name: "${key}"`);
+						if (value === null) delete entry.meta[key];
+						else entry.meta[key] = clean(value);
+					}
+				}
 				rewrite(block, entry);
 				await writeAtomic(files.errors, renderDocument(document));
 				return entry;
@@ -2820,6 +2829,28 @@ function match(error, index, options = {}) {
 	if (sameCode !== void 0) return hit(sameCode, "code");
 	return { matched: false };
 }
+//#endregion
+//#region src/review.ts
+/** The machine field that marks an entry as waiting for a person. */
+const REVIEW_KEY = "review";
+/** Its value while the entry waits. */
+const REVIEW_PENDING = "pending";
+/** Whether an entry's fix is waiting for a person to approve it. */
+function pendingReview(entry) {
+	return entry.meta[REVIEW_KEY] === REVIEW_PENDING;
+}
+/**
+* An entry as agents may see it: unchanged, or, while its fix waits for a
+* person, without the fix and open again.
+*/
+function forAgents(entry) {
+	if (!pendingReview(entry)) return entry;
+	return {
+		...entry,
+		fix: "",
+		status: entry.status === "fixed" ? "open" : entry.status
+	};
+}
 /** The directory, inside the memory directory, that holds the session files. */
 const SESSIONS_DIR_NAME = "sessions";
 /** A session with nothing remembered yet. */
@@ -3124,7 +3155,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 		session
 	}, clock.now());
 	async function readEntries(machine) {
-		return (await store.read()).blocks.map((b) => effectiveEntry(b.entry, machine.entries[b.entry.id]));
+		return (await store.read()).blocks.map((b) => forAgents(effectiveEntry(b.entry, machine.entries[b.entry.id])));
 	}
 	function restore(s, trust) {
 		const caps = CapTracker.restore(s.caps);
@@ -3300,7 +3331,8 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			if (oneLine(fix) === "") throw new RangeError("a fix cannot be blank");
 			const entry = await store.update(id, {
 				fix: fix.trim(),
-				status: "fixed"
+				status: "fixed",
+				meta: { [REVIEW_KEY]: null }
 			});
 			if (entry === void 0) return void 0;
 			await log({
@@ -3908,7 +3940,7 @@ function createTools(context) {
 			}, clock.now()),
 			async entries() {
 				const [document, machine] = await Promise.all([store.read(), state.read()]);
-				return document.blocks.map((b) => effectiveEntry(b.entry, machine.state.entries[b.entry.id]));
+				return document.blocks.map((b) => forAgents(effectiveEntry(b.entry, machine.state.entries[b.entry.id])));
 			},
 			async claim(fingerprint) {
 				return activeClaim(await claims.read(), fingerprint, clock.now());
