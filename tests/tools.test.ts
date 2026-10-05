@@ -283,3 +283,72 @@ describe("antibody_lookup", () => {
     });
   });
 });
+
+describe("antibody_list", () => {
+  const seed = async (n: number) => {
+    for (let i = 1; i <= n; i++)
+      await store().append({
+        title: `[command] npm test failed (${i})`,
+        signature: signature("command", `npm test failed (${i})`),
+        category: "command / Bash",
+        meta: { cat: "command" },
+        raw: `npm test failed (${i})`,
+        ...(i % 2 === 0
+          ? { fix: "Run pnpm install first.", status: "fixed" as const }
+          : {}),
+      });
+  };
+
+  it("lists entries with their hits and status", async () => {
+    await fail();
+    await fail("s-b");
+    await seed(2);
+    expect(await text("antibody_list")).toBe(
+      [
+        "E-0001 (2 hits, open) [tool:Read] ENOENT: no such file or directory, open '.env'",
+        "E-0002 (1 hit, open) [command] npm test failed (1)",
+        "E-0003 (1 hit, fixed) [command] npm test failed (2)",
+        "3 of 3 shown.",
+      ].join("\n"),
+    );
+  });
+
+  it("filters by category, display category and status", async () => {
+    await fail();
+    await seed(2);
+    const ids = async (args: object) =>
+      (await text("antibody_list", args))
+        .split("\n")
+        .slice(0, -1)
+        .map((line) => line.split(" ")[0]);
+    expect(await ids({ cat: "Tool" })).toEqual(["E-0001"]);
+    expect(await ids({ cat: "command / bash" })).toEqual(["E-0002", "E-0003"]);
+    expect(await ids({ status: "fixed" })).toEqual(["E-0003"]);
+    expect(await ids({ cat: "command", status: "open" })).toEqual(["E-0002"]);
+  });
+
+  it("stops at the limit, and at most at the maximum", async () => {
+    await seed(3);
+    expect(await text("antibody_list", { limit: 2 })).toMatch(
+      /\n2 of 3 shown\.$/,
+    );
+    expect(await text("antibody_list", { limit: 10_000 })).toMatch(
+      /\n3 of 3 shown\.$/,
+    );
+  });
+
+  it("says so when nothing is listed", async () => {
+    expect(await text("antibody_list", {})).toBe("No entries.");
+    await seed(1);
+    expect(await text("antibody_list", { status: "wontfix" })).toBe(
+      "No entries.",
+    );
+  });
+
+  it("refuses a limit below one", async () => {
+    expect(await run("antibody_list", { limit: 0 })).toEqual({
+      text: "antibody_list: limit must be an integer of at least 1",
+      isError: true,
+    });
+  });
+});
