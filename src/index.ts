@@ -17,6 +17,7 @@ export * from "./claims";
 export * from "./agent";
 export * from "./hook-input";
 export * from "./claude-code";
+export * from "./gemini";
 export * from "./session";
 export * from "./fleet";
 export * from "./tools";
