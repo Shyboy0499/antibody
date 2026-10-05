@@ -4,3 +4,4 @@ export * from "./signature";
 export * from "./redact-patterns";
 export * from "./redact";
 export * from "./paths";
+export * from "./store";
