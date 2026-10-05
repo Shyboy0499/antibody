@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureInput } from "../src/capture";
 import { readEventsFrom } from "../src/events";
 import { createFleet } from "../src/fleet";
-import type { FleetOptions } from "../src/fleet";
+import type { FleetDeps, FleetOptions } from "../src/fleet";
+import { parseClaims } from "../src/claims";
+import { nodeStoreFs } from "../src/store";
+import type { StoreClock } from "../src/store";
 import { filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { parseState } from "../src/state";
@@ -51,6 +54,7 @@ describe("fleet: failures", () => {
     expect(document.blocks[0]!.entry.title).toContain("ENOENT");
     expect((await events()).map((e) => [e.kind, e.agent, e.id])).toEqual([
       ["miss", "agent-s-a", "E-0001"],
+      ["claim", "agent-s-a", "E-0001"],
     ]);
   });
 
@@ -62,7 +66,7 @@ describe("fleet: failures", () => {
 
   it("counts a repeat in state.json and says no fix is recorded yet", async () => {
     await fail("s-a");
-    const notices = await fail("s-b");
+    const notices = await fail("s-a");
     expect(notices).toEqual([
       "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
     ]);
@@ -70,6 +74,7 @@ describe("fleet: failures", () => {
     expect(state?.entries["E-0001"]?.hits).toBe(1);
     expect((await events()).map((e) => e.kind)).toEqual([
       "miss",
+      "claim",
       "hit",
       "notice",
     ]);
@@ -126,7 +131,11 @@ describe("fleet: failures", () => {
     await fail("s-a", { inject: "off" });
     await recordFix();
     expect(await fail("s-b", { inject: "off" })).toEqual([]);
-    expect((await events()).map((e) => e.kind)).toEqual(["miss", "hit"]);
+    expect((await events()).map((e) => e.kind)).toEqual([
+      "miss",
+      "claim",
+      "hit",
+    ]);
   });
 
   it("ignores what is not a failure worth recording", async () => {
@@ -144,5 +153,106 @@ describe("fleet: failures", () => {
       [],
     );
     expect(await events()).toEqual([]);
+  });
+});
+
+describe("fleet: claims", () => {
+  let now: number;
+  const clock: StoreClock = {
+    now: () => new Date(now),
+    sleep: (ms) =>
+      new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+    random: Math.random,
+  };
+  const deps: FleetDeps = { fs: nodeStoreFs(), clock };
+  const failAt = (session: string, options: Partial<FleetOptions> = {}) =>
+    createFleet(memory, `agent-${session}`, session, options, deps).failure(
+      capture,
+      call,
+    );
+  const claimsFile = async () =>
+    parseClaims(await readFile(filesIn(memory).claims, "utf8"))!.claims;
+
+  beforeEach(() => {
+    now = Date.parse("2026-10-05T10:00:00.000Z");
+  });
+
+  it("gives the first agent to meet a new error its claim", async () => {
+    await failAt("s-a");
+    const [claim] = Object.values(await claimsFile());
+    expect(claim).toMatchObject({ agent: "agent-s-a", session: "s-a" });
+    const document = parseDocument(
+      await readFile(filesIn(memory).errors, "utf8"),
+    );
+    expect(claim!.id).toBe(document.blocks[0]!.entry.fingerprint);
+  });
+
+  it("tells a second agent who is diagnosing it, and remembers to wait", async () => {
+    await failAt("s-a");
+    now += 40_000;
+    expect(await failAt("s-b")).toEqual([
+      "[antibody] E-0001: agent-s-a has been diagnosing this for 40 s. Its fix will be passed to you when it is recorded.",
+    ]);
+    const session = JSON.parse(
+      await readFile(join(memory, "sessions", "s-b.json"), "utf8"),
+    );
+    expect(session.holding).toEqual([Object.keys(await claimsFile())[0]]);
+    expect((await events()).map((e) => e.kind)).toEqual([
+      "miss",
+      "claim",
+      "hit",
+      "hold",
+      "notice",
+    ]);
+  });
+
+  it("hints at most twice per session, but keeps waiting", async () => {
+    await failAt("s-a");
+    const hints = [
+      await failAt("s-b"),
+      await failAt("s-b"),
+      await failAt("s-b"),
+    ];
+    expect(hints.map((h) => h.length)).toEqual([1, 1, 0]);
+    expect((await events()).filter((e) => e.kind === "hold")).toHaveLength(3);
+  });
+
+  it("lets the next agent take over a claim whose time ran out", async () => {
+    await failAt("s-a", { claimTtlMs: 1_000 });
+    now += 1_000;
+    expect(await failAt("s-b", { claimTtlMs: 1_000 })).toEqual([
+      "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
+    ]);
+    expect(Object.values(await claimsFile())[0]).toMatchObject({
+      agent: "agent-s-b",
+    });
+    expect((await events()).map((e) => e.kind)).toEqual([
+      "miss",
+      "claim",
+      "hit",
+      "claim",
+      "notice",
+    ]);
+  });
+
+  it("renews the holder's own claim without logging it again", async () => {
+    await failAt("s-a");
+    now += 60_000;
+    await failAt("s-a");
+    expect((await events()).filter((e) => e.kind === "claim")).toHaveLength(1);
+    expect(Object.values(await claimsFile())[0]!.expires).toBe(
+      new Date(now + 10 * 60 * 1000).toISOString(),
+    );
+  });
+
+  it("writes one entry when two agents meet a new error at the same moment", async () => {
+    const [a, b] = await Promise.all([failAt("s-a"), failAt("s-b")]);
+    const document = parseDocument(
+      await readFile(filesIn(memory).errors, "utf8"),
+    );
+    expect(document.blocks).toHaveLength(1);
+    const hint = [...a, ...b];
+    expect(hint).toHaveLength(1);
+    expect(hint[0]).toMatch(/has been diagnosing this for 0 s/);
   });
 });
