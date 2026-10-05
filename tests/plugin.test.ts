@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { HOOK_EVENTS } from "../src/claude-code";
+import { HOOK_EVENTS } from "../src/hook-input";
 import { VERSION } from "../src/cli";
 
 // The Claude Code plugin is the repository itself: Claude Code clones it and

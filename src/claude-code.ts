@@ -9,50 +9,19 @@
 //   (older versions call it `tool_response`, sometimes an object);
 // - PostToolUseFailure: `tool_name`, `tool_input` and `error`.
 //
-// A failed Bash command reports `Exit code N` at the start of its error text.
-// The ported capture code looks for dsh-errkb's `[exit code: N]` marker
-// instead, so this adapter rewrites the one into the other and the command
-// path - headline extraction, keying by command line - works unchanged.
+// A failed Bash command reports `Exit code N` at the start of its error text;
+// toCapture() in hook-input.ts turns that into the capture code's marker.
 // Parsing never throws: anything unexpected reads as undefined.
 //
 // Output goes back the documented way: JSON on stdout with
 // `hookSpecificOutput.additionalContext`, which Claude Code shows the model as
 // a system reminder, or nothing at all.
-import type { CaptureInput } from "./capture";
+import { HOOK_EVENTS } from "./hook-input";
+import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
-import type { ToolCall } from "./resolve-detect";
 
 /** The harness name, as agent names and events use it. */
 export const CLAUDE_CODE = "claude-code";
-
-/** The hook events antibody handles. */
-export const HOOK_EVENTS = [
-  "SessionStart",
-  "UserPromptSubmit",
-  "PostToolUse",
-  "PostToolUseFailure",
-  "SessionEnd",
-] as const;
-
-export type HookEvent = (typeof HOOK_EVENTS)[number];
-
-/** One hook call, reduced to what antibody reads. */
-export interface HookInput {
-  event: HookEvent;
-  sessionId: string;
-  cwd: string;
-  /** Set when the hook fired inside a subagent. */
-  agentId?: string;
-  toolName?: string;
-  /** The Bash command line, when the tool ran one. */
-  command?: string;
-  /** PostToolUse: the tool's output as text. */
-  output?: string;
-  /** PostToolUse: an exit code the result reports, when it has one. */
-  exitCode?: number;
-  /** PostToolUseFailure: the error text. */
-  error?: string;
-}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -127,80 +96,6 @@ export function parseHookInput(text: string): HookInput | undefined {
   const error = str(value.error);
   if (error !== undefined) input.error = error;
   return input;
-}
-
-// Claude Code's own wording for a failed shell command.
-const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
-
-// Text in the shape the ported capture code reads: the output, then the marker.
-const withMarker = (body: string, code: number) =>
-  `${body.trimEnd()}\n[exit code: ${code}]`;
-
-/** The exit code and output of a failed shell command, when the call is one. */
-function commandFailure(
-  input: HookInput,
-): { code: number; body: string } | undefined {
-  if (input.event === "PostToolUseFailure") {
-    const match = EXIT_LINE.exec(input.error ?? "");
-    if (match === null) return undefined;
-    return {
-      code: Number(match[1]),
-      body: (input.error ?? "").slice(match[0].length),
-    };
-  }
-  if (
-    input.event === "PostToolUse" &&
-    input.exitCode !== undefined &&
-    input.exitCode !== 0
-  )
-    return { code: input.exitCode, body: input.output ?? "" };
-  return undefined;
-}
-
-/**
- * The capture input for a failed call, or undefined when the call succeeded or
- * the event is not a tool result.
- *
- * @param input - a parsed hook call.
- */
-export function toCapture(input: HookInput): CaptureInput | undefined {
-  const toolName = input.toolName ?? "unknown";
-  const failed = commandFailure(input);
-  if (failed !== undefined) {
-    const capture: CaptureInput = {
-      kind: "command",
-      toolName,
-      text: withMarker(failed.body, failed.code),
-    };
-    if (input.command !== undefined) capture.command = input.command;
-    return capture;
-  }
-  if (input.event !== "PostToolUseFailure") return undefined;
-  return { kind: "tool", toolName, isError: true, message: input.error ?? "" };
-}
-
-/**
- * The tool call resolution detection reads, for a PostToolUse or a
- * PostToolUseFailure; undefined for any other event.
- *
- * @param input - a parsed hook call.
- */
-export function toToolCall(input: HookInput): ToolCall | undefined {
-  if (input.event !== "PostToolUse" && input.event !== "PostToolUseFailure")
-    return undefined;
-  const call: ToolCall = {
-    toolName: input.toolName ?? "unknown",
-    isError: false,
-    text: input.output ?? "",
-  };
-  if (input.command !== undefined) call.command = input.command;
-  const failed = commandFailure(input);
-  if (failed !== undefined) call.text = withMarker(failed.body, failed.code);
-  else if (input.event === "PostToolUseFailure") {
-    call.isError = true;
-    call.text = input.error ?? "";
-  }
-  return call;
 }
 
 /** Claude Code caps each additionalContext at this many characters. */

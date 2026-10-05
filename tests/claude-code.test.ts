@@ -3,13 +3,11 @@ import { TransientCounter, classify } from "../src/capture";
 import {
   ADDITIONAL_CONTEXT_MAX_CHARS,
   CLAUDE_CODE,
-  HOOK_EVENTS,
   hookResponse,
   parseHookInput,
-  toCapture,
-  toToolCall,
 } from "../src/claude-code";
-import type { HookInput } from "../src/claude-code";
+import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
+import type { HookInput } from "../src/hook-input";
 import { callOutcome } from "../src/resolve-detect";
 
 const common = {
