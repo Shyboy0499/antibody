@@ -133,8 +133,9 @@ export async function runWatch(
   const size =
     deps.size ??
     (() => ({
-      columns: process.stdout.columns || 80,
-      rows: process.stdout.rows || 24,
+      // Off a terminal (--once into a pipe), COLUMNS and LINES say the size.
+      columns: process.stdout.columns || Number(io.env.COLUMNS) || 80,
+      rows: process.stdout.rows || Number(io.env.LINES) || 24,
     }));
   const read = memoryReader(memory);
   let frozen = false;

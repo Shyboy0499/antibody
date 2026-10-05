@@ -90,6 +90,14 @@ describe("antibody watch --once", () => {
     expect(text).not.toMatch(SGR);
   });
 
+  it("takes its size from COLUMNS and LINES off a terminal", async () => {
+    const { cli, out } = io({ COLUMNS: "132", LINES: "40" });
+    expect(await runWatch(["--once"], cli, { cwd: wtA })).toBe(0);
+    const lines = out.join("").split("\n");
+    expect(lines).toHaveLength(41);
+    expect(lines[0]).toHaveLength(132);
+  });
+
   it("fails outside a repository, and refuses unknown options", async () => {
     const outside = io();
     expect(await runWatch([], outside.cli, { cwd: root })).toBe(1);

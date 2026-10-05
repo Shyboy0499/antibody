@@ -4388,12 +4388,28 @@ function fleetView(events, entries, claims, now) {
 	const withFix = entries.filter((e) => oneLine(e.fix) !== "");
 	const fixedIds = new Set(withFix.map((e) => e.id));
 	const hitsOnFixed = events.filter((e) => e.kind === "hit" && e.id !== void 0 && fixedIds.has(e.id)).length;
+	const reuse = /* @__PURE__ */ new Map();
+	const fixedBy = /* @__PURE__ */ new Map();
+	for (const e of events) {
+		if (e.id === void 0) continue;
+		if (e.kind === "fix") fixedBy.set(e.id, e.agent);
+		if (!fixNotice(e)) continue;
+		const tally = reuse.get(e.id) ?? {
+			count: 0,
+			tokens: 0
+		};
+		tally.count++;
+		tally.tokens += e.tokens ?? 0;
+		reuse.set(e.id, tally);
+	}
+	const claimOf = new Map(live.map((c) => [c.id, c]));
 	const antibodies = entries.map((entry) => {
-		const reusedNotices = fixNotices.filter((e) => e.id === entry.id);
-		const spent = reusedNotices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-		let fixEvent;
-		for (const e of events) if (e.kind === "fix" && e.id === entry.id) fixEvent = e;
-		const claim = live.find((c) => c.id === entry.fingerprint);
+		const { count, tokens } = reuse.get(entry.id) ?? {
+			count: 0,
+			tokens: 0
+		};
+		const beatenBy = fixedBy.get(entry.id);
+		const claim = claimOf.get(entry.fingerprint);
 		const hasFix = oneLine(entry.fix) !== "";
 		return {
 			id: entry.id,
@@ -4403,9 +4419,9 @@ function fleetView(events, entries, claims, now) {
 			status: entry.status,
 			fix: oneLine(entry.fix),
 			...!hasFix && claim !== void 0 ? { diagnosing: claim.agent } : {},
-			...fixEvent === void 0 ? {} : { beatenBy: fixEvent.agent },
-			reused: reusedNotices.length,
-			saved: Math.max(0, reusedNotices.length * 800 - spent)
+			...beatenBy === void 0 ? {} : { beatenBy },
+			reused: count,
+			saved: Math.max(0, count * 800 - tokens)
 		};
 	});
 	return {
@@ -4503,10 +4519,14 @@ function renderView(view, o) {
 		});
 		return line + " ".repeat(budget);
 	};
-	const clock = (iso) => new Date(iso).toLocaleTimeString("en-GB", {
+	const clockFormat = new Intl.DateTimeFormat("en-GB", {
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
 		hour12: false,
 		...o.timeZone === void 0 ? {} : { timeZone: o.timeZone }
 	});
+	const clock = (iso) => clockFormat.format(new Date(iso));
 	const ago = (iso) => elapsedText(o.now.getTime() - Date.parse(iso));
 	const heading = (title, summary = "") => row([
 		` ${title}  `,
@@ -4705,8 +4725,8 @@ async function runWatch(args, io, deps = {}) {
 	const repo = basename(worktreeRoot(cwd, deps.git));
 	const now = deps.now ?? (() => /* @__PURE__ */ new Date());
 	const size = deps.size ?? (() => ({
-		columns: process.stdout.columns || 80,
-		rows: process.stdout.rows || 24
+		columns: process.stdout.columns || Number(io.env.COLUMNS) || 80,
+		rows: process.stdout.rows || Number(io.env.LINES) || 24
 	}));
 	const read = memoryReader(memory);
 	let frozen = false;
