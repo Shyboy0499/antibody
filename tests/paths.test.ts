@@ -1,0 +1,46 @@
+// Ported from dsh-errkb, tests/paths.test.ts (MIT, Copyright (c) 2026
+// jingchangzhao-gif; see NOTICE): the "file names" cases, which cover the part
+// of src/paths.ts antibody keeps.
+import { dirname, join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { KB_FILE, corruptFileName, filesIn } from "../src/paths";
+
+describe("file names", () => {
+  it("keeps dsh-errkb's names until antibody renames its own", () => {
+    expect(KB_FILE).toEqual({
+      errors: "ERRORS.md",
+      archive: "ERRORS.archive.md",
+      index: "errors.index.json",
+      state: "state.json",
+      machine: ".machine.json",
+      lock: ".lock",
+    });
+  });
+
+  it("derives every path from the directory", () => {
+    const dir = join(resolve("/memory"), "antibody");
+    expect(filesIn(dir)).toEqual({
+      errors: join(dir, "ERRORS.md"),
+      archive: join(dir, "ERRORS.archive.md"),
+      index: join(dir, "errors.index.json"),
+      state: join(dir, "state.json"),
+      machine: join(dir, ".machine.json"),
+      lock: join(dir, ".lock"),
+    });
+  });
+
+  it("keeps every name relative: no drive letter and no separator", () => {
+    for (const name of Object.values(KB_FILE)) {
+      expect(name).not.toMatch(/^[A-Za-z]:/);
+      expect(name).not.toContain("/");
+      expect(name).not.toContain("\\");
+    }
+  });
+
+  it("names a corrupt document copy with a Windows-legal stamp", () => {
+    const name = corruptFileName(new Date("2026-09-27T01:02:03.004Z"));
+    expect(name).toBe("ERRORS.corrupt-2026-09-27T01-02-03-004Z.md");
+    expect(name).not.toContain(":");
+    expect(dirname(name)).toBe(".");
+  });
+});
