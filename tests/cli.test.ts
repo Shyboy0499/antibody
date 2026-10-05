@@ -8,11 +8,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HOOK_DEADLINE_MS, VERSION, main, runHook } from "../src/cli";
-import type { CliIo, HookDeps } from "../src/cli";
+import type { CliIo, HookDeps, McpDeps } from "../src/cli";
+import { readEventsFrom } from "../src/events";
 import type { Fleet } from "../src/fleet";
-import { memoryDir } from "../src/paths";
+import { filesIn, memoryDir } from "../src/paths";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync(
@@ -284,5 +286,168 @@ describe("main", () => {
 
   it("routes hook to the hook command, which never fails", async () => {
     expect((await run("hook")).code).toBe(0);
+  });
+});
+
+describe("antibody mcp", () => {
+  let mcpRoot: string;
+  let wtA: string;
+  let wtB: string;
+
+  beforeAll(() => {
+    mcpRoot = realpathSync(mkdtempSync(join(tmpdir(), "antibody-mcp-")));
+    const main = join(mcpRoot, "repo");
+    wtA = join(mcpRoot, "wt-a");
+    wtB = join(mcpRoot, "wt-b");
+    execFileSync("mkdir", ["-p", main]);
+    git(main, "init", "-q", "-b", "main");
+    writeFileSync(join(main, "README.md"), "fixture\n");
+    git(main, "add", "README.md");
+    git(main, "commit", "-q", "-m", "fixture");
+    git(main, "worktree", "add", "-q", "-b", "a", wtA);
+    git(main, "worktree", "add", "-q", "-b", "b", wtB);
+  });
+
+  afterAll(() => {
+    rmSync(mcpRoot, { recursive: true, force: true });
+  });
+
+  const rpc = (id: number, method: string, params: object = {}) => ({
+    jsonrpc: "2.0",
+    id,
+    method,
+    params,
+  });
+  const serve = async (
+    argv: string[],
+    messages: object[],
+    env: NodeJS.ProcessEnv = {},
+    deps: McpDeps = {},
+  ) => {
+    const input = new PassThrough();
+    let out = "";
+    let err = "";
+    const done = main(
+      ["mcp", ...argv],
+      {
+        readStdin: async () => "",
+        stdout: (t) => void (out += t),
+        stderr: (t) => void (err += t),
+        env,
+      },
+      { input, ...deps },
+    );
+    for (const message of messages) input.write(`${JSON.stringify(message)}\n`);
+    input.end();
+    const code = await done;
+    const responses = out
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as { id: number; result?: any });
+    return { code, err, responses: responses.sort((a, b) => a.id - b.id) };
+  };
+  const textOf = (response: { result?: any }) =>
+    response.result.content[0].text as string;
+
+  it("serves the fleet's memory to another worktree's agent", async () => {
+    // claude-code@wt-a's hook records a new error.
+    expect((await hook(failure(wtA, "s-a"))).out).toBe("");
+    const { code, err, responses } = await serve(
+      ["claude-code"],
+      [
+        rpc(1, "initialize", { protocolVersion: "2025-06-18" }),
+        { jsonrpc: "2.0", method: "notifications/initialized" },
+        rpc(2, "tools/list"),
+        rpc(3, "tools/call", {
+          name: "antibody_lookup",
+          arguments: { query: "E-0001" },
+        }),
+        rpc(4, "tools/call", {
+          name: "antibody_record",
+          arguments: { id: "E-0001", fix: "Copy .env from the main checkout." },
+        }),
+      ],
+      { CLAUDE_CODE_SESSION_ID: "s-b" },
+      { cwd: wtB },
+    );
+    expect({ code, err }).toEqual({ code: 0, err: "" });
+    expect(responses[0]!.result).toMatchObject({
+      protocolVersion: "2025-06-18",
+      serverInfo: { name: "antibody", version: VERSION },
+    });
+    expect(
+      responses[1]!.result.tools.map((t: { name: string }) => t.name),
+    ).toEqual([
+      "antibody_lookup",
+      "antibody_list",
+      "antibody_record",
+      "antibody_forget",
+      "antibody_stats",
+    ]);
+    expect(textOf(responses[2]!)).toContain(
+      "claude-code@wt-a has been diagnosing this",
+    );
+    expect(textOf(responses[3]!)).toBe(
+      "Updated E-0001 (status fixed). Agents waiting for it get the fix at their next tool call.",
+    );
+    const fix = (
+      await readEventsFrom(filesIn(memoryDir(wtA)).events)
+    ).events.find((e) => e.kind === "fix");
+    expect(fix).toMatchObject({ agent: "claude-code@wt-b", session: "s-b" });
+  });
+
+  it("names a harness-less agent and session after itself", async () => {
+    await serve(
+      [],
+      [
+        rpc(1, "tools/call", {
+          name: "antibody_forget",
+          arguments: { id: "E-0001", reason: "test" },
+        }),
+      ],
+      {},
+      { cwd: wtB, pid: 4242 },
+    );
+    const forget = (
+      await readEventsFrom(filesIn(memoryDir(wtA)).events)
+    ).events.find((e) => e.kind === "forget");
+    expect(forget).toMatchObject({ agent: "mcp@wt-b", session: "mcp-4242" });
+  });
+
+  it("finds the project from CLAUDE_PROJECT_DIR, or the working directory", async () => {
+    const fromEnv = await serve(
+      ["cursor"],
+      [rpc(1, "tools/call", { name: "antibody_stats" })],
+      { CLAUDE_PROJECT_DIR: wtA },
+    );
+    expect(textOf(fromEnv.responses[0]!)).toContain(
+      `Memory: ${memoryDir(wtA)}`,
+    );
+    const fromCwd = await serve(["cursor"], [rpc(1, "ping")]);
+    expect(fromCwd.responses).toEqual([{ jsonrpc: "2.0", id: 1, result: {} }]);
+  });
+
+  it("answers outside a repository with a tool error", async () => {
+    const { responses } = await serve(
+      [],
+      [rpc(1, "tools/call", { name: "antibody_list" })],
+      {},
+      { cwd: mcpRoot },
+    );
+    expect(responses[0]!.result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: `antibody_list: not inside a git repository: ${mcpRoot}`,
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  it("refuses a harness name that cannot be part of an agent name", async () => {
+    const run = await serve(["Claude Code"], []);
+    expect(run.code).toBe(2);
+    expect(run.err).toContain("not a harness name: Claude Code");
   });
 });

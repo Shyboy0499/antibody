@@ -2,7 +2,8 @@
 import { basename, dirname, join, resolve } from "node:path";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import * as fsp from "node:fs/promises";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, open } from "node:fs/promises";
+import { createInterface } from "node:readline";
 //#region src/notice.ts
 /** How every notice introduces itself to the agent. */
 const NOTICE_PREFIX = "[antibody]";
@@ -12,6 +13,12 @@ const WORDING = {
 	approximate: "Approximate match, verify first.",
 	doubted: "This fix failed here last time; verify before applying."
 };
+/** The notices that carry an entry's fix. */
+const FIX_NOTICE_KINDS = [
+	"hit",
+	"near",
+	"doubted"
+];
 const NON_ASCII = /[^ -~\t\n\r]/gu;
 /**
 * A conservative token estimate that needs no tokenizer: every non-ASCII code
@@ -412,12 +419,12 @@ const HOOK_EVENTS = [
 	"PostToolUseFailure",
 	"SessionEnd"
 ];
-const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const str = (value) => typeof value === "string" ? value : void 0;
 function outputText(value) {
 	if (value === void 0 || value === null) return void 0;
 	if (typeof value === "string") return value;
-	if (isRecord(value)) {
+	if (isRecord$2(value)) {
 		const streams = [str(value.stdout), str(value.stderr)].filter((s) => s !== void 0 && s !== "");
 		if (streams.length > 0) return streams.join("\n");
 	}
@@ -430,7 +437,7 @@ const EXIT_KEYS = [
 	"return_code"
 ];
 function outputExitCode(value) {
-	if (!isRecord(value)) return void 0;
+	if (!isRecord$2(value)) return void 0;
 	for (const key of EXIT_KEYS) {
 		const n = value[key];
 		if (typeof n === "number" && Number.isInteger(n)) return n;
@@ -450,7 +457,7 @@ function parseHookInput(text) {
 	} catch {
 		return;
 	}
-	if (!isRecord(value)) return void 0;
+	if (!isRecord$2(value)) return void 0;
 	const event = value.hook_event_name;
 	const sessionId = str(value.session_id);
 	const cwd = str(value.cwd);
@@ -464,7 +471,7 @@ function parseHookInput(text) {
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
 	const toolName = str(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord(value.tool_input)) {
+	if (isRecord$2(value.tool_input)) {
 		const command = str(value.tool_input.command);
 		if (command !== void 0 && command.trim() !== "") input.command = command;
 	}
@@ -1896,6 +1903,29 @@ function createClaimsFile(files, options = {}, fs = nodeStoreFs(), clock = syste
 		releaseSession: (session) => update((state) => releaseSession(state, session))
 	};
 }
+/** What an event records. */
+const EVENT_KINDS = [
+	"hit",
+	"miss",
+	"claim",
+	"hold",
+	"release",
+	"fix",
+	"notice",
+	"resolve",
+	"forget"
+];
+/**
+* Whether a parsed value is a well-formed event.
+*
+* @param value - anything JSON.parse returned.
+*/
+function isMemoryEvent(value) {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const e = value;
+	const optionalString = (key) => e[key] === void 0 || typeof e[key] === "string";
+	return e.v === 1 && typeof e.t === "string" && EVENT_KINDS.includes(e.kind) && typeof e.agent === "string" && typeof e.session === "string" && optionalString("id") && optionalString("text") && optionalString("notice") && (e.tokens === void 0 || typeof e.tokens === "number" && Number.isFinite(e.tokens) && e.tokens >= 0);
+}
 const bytes = (text) => Buffer.byteLength(text, "utf8");
 /**
 * One event as a line of events.jsonl: redacted, clipped to fit
@@ -1933,6 +1963,30 @@ function encodeEvent(event, now = /* @__PURE__ */ new Date()) {
 	return line(clip(text, low));
 }
 /**
+* Parse complete lines of events.jsonl. Blank lines are ignored.
+*
+* @param text - whole lines, each ending in a newline.
+*/
+function parseEvents(text) {
+	const batch = {
+		events: [],
+		skipped: 0
+	};
+	for (const line of text.split("\n")) {
+		if (line.trim() === "") continue;
+		let value;
+		try {
+			value = JSON.parse(line);
+		} catch {
+			batch.skipped++;
+			continue;
+		}
+		if (isMemoryEvent(value)) batch.events.push(value);
+		else batch.skipped++;
+	}
+	return batch;
+}
+/**
 * Append one event to the log, creating its directory when needed.
 *
 * @param file - the events.jsonl path.
@@ -1942,6 +1996,40 @@ function encodeEvent(event, now = /* @__PURE__ */ new Date()) {
 async function appendEvent(file, event, now = /* @__PURE__ */ new Date()) {
 	await mkdir(dirname(file), { recursive: true });
 	await appendFile(file, encodeEvent(event, now), { flag: "a" });
+}
+/**
+* Read the events appended since `offset`. Only complete lines are read; the
+* returned offset stops before a line that is still being written. A missing
+* file reads as empty, and an offset past the end (the file was replaced)
+* starts again from the beginning.
+*
+* @param file - the events.jsonl path.
+* @param offset - where the previous read stopped; 0 for the whole log.
+*/
+async function readEventsFrom(file, offset = 0) {
+	let handle;
+	try {
+		handle = await open(file, "r");
+	} catch {
+		return {
+			events: [],
+			skipped: 0,
+			offset: 0
+		};
+	}
+	try {
+		const { size } = await handle.stat();
+		const start = offset > size ? 0 : offset;
+		const buffer = Buffer.alloc(size - start);
+		await handle.read(buffer, 0, buffer.length, start);
+		const complete = buffer.lastIndexOf(10) + 1;
+		return {
+			...parseEvents(buffer.subarray(0, complete).toString("utf8")),
+			offset: start + complete
+		};
+	} finally {
+		await handle.close();
+	}
 }
 /**
 * The one-shot prompt for an entry that looks resolved and has no fix. It
@@ -2994,9 +3082,614 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 	};
 }
 //#endregion
+//#region src/mcp.ts
+/** Protocol versions this server speaks, newest first. */
+const MCP_PROTOCOL_VERSIONS = [
+	"2025-11-25",
+	"2025-06-18",
+	"2025-03-26",
+	"2024-11-05"
+];
+/** JSON-RPC error codes. */
+const RPC_ERROR = {
+	parse: -32700,
+	invalidRequest: -32600,
+	methodNotFound: -32601,
+	invalidParams: -32602,
+	internal: -32603
+};
+/**
+* What the server tells the agent, once, at initialization: when to reach for
+* the tools. Clients may add it to the system prompt.
+*/
+const MCP_INSTRUCTIONS = "antibody shares error fixes across the coding agents working on this repository. When a command or tool fails with an error you have not seen, call antibody_lookup with the error text before diagnosing it: another agent may already have fixed it, or be fixing it now. When you get past an error, call antibody_record with its entry ID and the fix in a sentence or two, so every other agent gets it.";
+const isRecord$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isId = (value) => typeof value === "string" || typeof value === "number" && Number.isFinite(value) || value === null;
+const failure = (id, code, message) => ({
+	jsonrpc: "2.0",
+	id,
+	error: {
+		code,
+		message
+	}
+});
+/**
+* Serve tools to one MCP client.
+*
+* @param tools - from createTools().
+* @param info - the name and version the server reports.
+*/
+function createMcpServer(tools, info) {
+	const byName = new Map(tools.map((t) => [t.name, t]));
+	async function call(method, params) {
+		switch (method) {
+			case "initialize": {
+				const asked = params.protocolVersion;
+				return {
+					protocolVersion: MCP_PROTOCOL_VERSIONS.includes(asked) ? asked : MCP_PROTOCOL_VERSIONS[0],
+					capabilities: { tools: { listChanged: false } },
+					serverInfo: info,
+					instructions: MCP_INSTRUCTIONS
+				};
+			}
+			case "ping": return {};
+			case "tools/list": return { tools: tools.map((t) => ({
+				name: t.name,
+				description: t.description,
+				inputSchema: t.inputSchema,
+				annotations: {
+					readOnlyHint: t.readOnly,
+					openWorldHint: false
+				}
+			})) };
+			case "tools/call": {
+				const tool = typeof params.name === "string" ? byName.get(params.name) : void 0;
+				if (tool === void 0) throw new RpcError(RPC_ERROR.invalidParams, `unknown tool: ${String(params.name)}`);
+				const result = await tool.call(params.arguments);
+				return {
+					content: [{
+						type: "text",
+						text: result.text
+					}],
+					isError: result.isError
+				};
+			}
+			default: throw new RpcError(RPC_ERROR.methodNotFound, `method not found: ${method}`);
+		}
+	}
+	return { async handle(message) {
+		if (Array.isArray(message)) return failure(null, RPC_ERROR.invalidRequest, "batches are not supported");
+		if (!isRecord$1(message) || message.jsonrpc !== "2.0") return failure(null, RPC_ERROR.invalidRequest, "not a JSON-RPC 2.0 message");
+		if (message.method === void 0 && "id" in message) return void 0;
+		const { id, method, params } = message;
+		const notification = !("id" in message);
+		if (typeof method !== "string" || !notification && !isId(id)) return notification ? void 0 : failure(isId(id) ? id : null, RPC_ERROR.invalidRequest, "invalid request");
+		if (notification) return void 0;
+		if (params !== void 0 && !isRecord$1(params)) return failure(id, RPC_ERROR.invalidParams, "params must be an object");
+		try {
+			return {
+				jsonrpc: "2.0",
+				id,
+				result: await call(method, params ?? {})
+			};
+		} catch (error) {
+			return error instanceof RpcError ? failure(id, error.code, error.message) : failure(id, RPC_ERROR.internal, "internal error");
+		}
+	} };
+}
+/** A JSON-RPC error to send back for a request. */
+var RpcError = class extends Error {
+	code;
+	constructor(code, message) {
+		super(message);
+		this.code = code;
+	}
+};
+/**
+* Run a server over a line stream until the input ends: one JSON message per
+* line in, one per line out.
+*
+* @param server - the handler.
+* @param input - stdin, or a stream in tests.
+* @param write - where each response line goes.
+* @returns once the input has ended and every response is written.
+*/
+async function serveLines(server, input, write) {
+	const pending = [];
+	for await (const line of createInterface({
+		input,
+		crlfDelay: Infinity
+	})) {
+		if (line.trim() === "") continue;
+		let message;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			write(`${JSON.stringify(failure(null, RPC_ERROR.parse, "parse error"))}\n`);
+			continue;
+		}
+		pending.push(server.handle(message).then((response) => {
+			if (response !== void 0) write(`${JSON.stringify(response)}\n`);
+		}));
+	}
+	await Promise.all(pending);
+}
+//#endregion
+//#region src/tools.ts
+const DEFAULT_TOOLS_OPTIONS = {
+	match: {},
+	lockTimeoutMs: 5e3
+};
+/** Category of an entry antibody_record creates from a message without one. */
+const DEFAULT_RECORD_CATEGORY = "agent";
+/** Scopes antibody_stats counts notices over. */
+const STATS_SCOPES = ["fleet", "agent"];
+/** A query quoted back in a miss is clipped to this. */
+const QUERY_MAX_CHARS = 80;
+const SIGNATURE = /^[0-9a-f]{12}$/i;
+/** How a match was found, best first. */
+const VIA_RANK = {
+	exact: 0,
+	fuzzy: 1,
+	code: 2
+};
+const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+* Check arguments against a tool's schema: an object, no unknown property,
+* every required one present, each of the right type.
+*
+* @param schema - the tool's input schema.
+* @param args - what the agent sent; undefined counts as no arguments.
+* @returns why the arguments do not fit, or undefined when they do.
+*/
+function checkArgs(schema, args) {
+	const given = args ?? {};
+	if (!isRecord(given)) return "arguments must be an object";
+	for (const key of Object.keys(given)) if (!Object.hasOwn(schema.properties, key)) return `unknown argument ${key}`;
+	for (const key of schema.required) if (given[key] === void 0) return `${key} is required`;
+	for (const [key, property] of Object.entries(schema.properties)) {
+		const value = given[key];
+		if (value === void 0) continue;
+		if (property.type === "string") {
+			if (typeof value !== "string") return `${key} must be a string`;
+			if (property.enum !== void 0 && !property.enum.includes(value)) return `${key} must be one of ${property.enum.join(", ")}`;
+		} else if (property.type === "boolean") {
+			if (typeof value !== "boolean") return `${key} must be true or false`;
+		} else if (typeof value !== "number" || !Number.isInteger(value) || value < (property.minimum ?? -Infinity)) return property.minimum === void 0 ? `${key} must be an integer` : `${key} must be an integer of at least ${property.minimum}`;
+	}
+}
+/** One line, clipped. */
+const short = (value, max) => clip(oneLine(value), max);
+/** Similarity rounded for display. */
+const round = (n) => Math.round(n * 100) / 100;
+/** A trimmed string argument, or undefined when it is absent or blank. */
+const given = (value) => {
+	const trimmed = typeof value === "string" ? value.trim() : void 0;
+	return trimmed === void 0 || trimmed === "" ? void 0 : trimmed;
+};
+/** A failure to report as the tool's result. */
+var ToolError = class extends Error {};
+/**
+* Bind the tools to an agent.
+*
+* @param context - the memory, the agent and settings.
+* @returns the tools, in the order design §5.1 lists them.
+*/
+function createTools(context) {
+	const o = {
+		...DEFAULT_TOOLS_OPTIONS,
+		...context.options
+	};
+	const fs = context.deps?.fs ?? nodeStoreFs();
+	const clock = context.deps?.clock ?? systemClock();
+	const { idPrefix, idWidth } = DEFAULT_STORE_OPTIONS;
+	const idPattern = new RegExp(`^${idPrefix}(\\d+)$`, "i");
+	function open() {
+		const memory = context.memory();
+		const files = filesIn(memory);
+		const lock = { lockTimeoutMs: o.lockTimeoutMs };
+		const store = createStore(files, lock, fs, clock);
+		const state = createStateFile(files, lock, fs, clock);
+		const claims = createClaimsFile(files, {
+			...lock,
+			ttlMs: CLAIM_TTL_MS
+		}, fs, clock);
+		return {
+			dir: memory,
+			files,
+			store,
+			claims,
+			machine: async () => (await state.read()).state,
+			fleet: createFleet(memory, context.agent, context.session, lock, context.deps),
+			log: (event) => appendEvent(files.events, {
+				...event,
+				agent: context.agent,
+				session: context.session
+			}, clock.now()),
+			async entries() {
+				const [document, machine] = await Promise.all([store.read(), state.read()]);
+				return document.blocks.map((b) => effectiveEntry(b.entry, machine.state.entries[b.entry.id]));
+			},
+			async claim(fingerprint) {
+				return activeClaim(await claims.read(), fingerprint, clock.now());
+			}
+		};
+	}
+	/** The ID number in an ID-shaped string, or undefined. */
+	function idNumber(value) {
+		const m = idPattern.exec(value.trim());
+		return m === null ? void 0 : Number(m[1]);
+	}
+	/** The entry an ID-shaped string names: `E-7` finds `E-0007`. */
+	function byId(list, value) {
+		const n = idNumber(value);
+		return n === void 0 ? void 0 : list.find((i) => idNumber(i.entry.id) === n);
+	}
+	/** The canonical spelling of an ID-shaped string, for messages. */
+	function canonicalId(value) {
+		const n = idNumber(value);
+		return n === void 0 ? value.trim() : formatId(n, idPrefix, idWidth);
+	}
+	/**
+	* Match free text the way capture does: its headline, signed under a
+	* category. With no category, every category in memory is tried and the
+	* best hit wins: exact before fuzzy before code, then the higher
+	* similarity, then the earlier category.
+	*/
+	function matchText(raw, index, category) {
+		const headline = extractHeadline(raw);
+		const message = headline.line === "" ? raw.trim() : headline.line;
+		const categories = category === void 0 ? [...new Set(index.map((i) => i.category))] : [category];
+		let winner;
+		for (const cat of categories) {
+			const found = match({
+				category: cat,
+				message,
+				...headline.code === void 0 ? {} : { code: headline.code }
+			}, index, o.match);
+			if (!found.matched) continue;
+			if (winner === void 0 || VIA_RANK[found.via] < VIA_RANK[winner.via] || found.via === winner.via && found.similarity > winner.similarity) winner = found;
+		}
+		return winner;
+	}
+	/** What a thrown value means to the agent, in one line. */
+	function failure(error) {
+		if (error instanceof ToolError) return error.message;
+		if (error instanceof LockTimeoutError) return "the memory is busy; try again";
+		if (error instanceof ParseError) return `could not read ANTIBODIES.md: ${error.message}`;
+		return safeErrorText(error).message;
+	}
+	/** A tool whose arguments are checked and whose failures become results. */
+	function define(name, description, readOnly, properties, required, body) {
+		const inputSchema = {
+			type: "object",
+			properties,
+			required,
+			additionalProperties: false
+		};
+		return {
+			name,
+			description,
+			inputSchema,
+			readOnly,
+			async call(args) {
+				const wrong = checkArgs(inputSchema, args);
+				if (wrong !== void 0) return {
+					text: `${name}: ${wrong}`,
+					isError: true
+				};
+				try {
+					return {
+						text: await body(args ?? {}, open()),
+						isError: false
+					};
+				} catch (error) {
+					return {
+						text: `${name}: ${oneLine(failure(error))}`,
+						isError: true
+					};
+				}
+			}
+		};
+	}
+	/** Who is diagnosing an entry without a fix, as a line, or "". */
+	async function claimLine(memory, entry) {
+		if (oneLine(entry.fix) !== "") return "";
+		const claim = await memory.claim(entry.fingerprint);
+		if (claim === void 0) return "";
+		const elapsed = clock.now().getTime() - Date.parse(claim.since);
+		return `${claim.agent} has been diagnosing this for ${elapsedText(elapsed)}; its fix will be recorded here.`;
+	}
+	async function describe(memory, entry, via, full) {
+		const lines = [
+			`${entry.id} · ${entry.title}`,
+			`category: ${entry.category} · hits: ${entry.hits} · status: ${entry.status} · matched by ${via}`,
+			oneLine(entry.fix) === "" ? "fix: (none recorded)" : `fix: ${entry.fix}`
+		];
+		const claim = await claimLine(memory, entry);
+		if (claim !== "") lines.push(claim);
+		if (full) lines.push("raw:", entry.raw);
+		return lines.join("\n");
+	}
+	const lookup = define("antibody_lookup", "Look up an error in the fleet's shared antibody memory by entry ID, 12-hex fingerprint or the error text itself. Returns the entry with its recorded fix, and which agent is diagnosing it when there is no fix yet, or the closest entries when nothing matches.", true, {
+		query: {
+			type: "string",
+			description: `An entry ID (${formatId(7, idPrefix, idWidth)}), a 12-hex fingerprint, or the error message.`
+		},
+		full: {
+			type: "boolean",
+			description: "Also return the redacted raw sample. Default false."
+		}
+	}, ["query"], async (args, memory) => {
+		const q = given(args.query);
+		if (q === void 0) throw new ToolError("query is empty");
+		const full = args.full === true;
+		const index = indexEntries(await memory.entries());
+		if (idNumber(q) !== void 0) {
+			const found = byId(index, q);
+			if (found === void 0) throw new ToolError(`no entry ${canonicalId(q)} (it may have been archived)`);
+			return describe(memory, found.entry, "id", full);
+		}
+		if (SIGNATURE.test(q)) {
+			const found = index.find((i) => i.sig === q.toLowerCase());
+			if (found !== void 0) return describe(memory, found.entry, "fingerprint", full);
+		}
+		const hit = matchText(q, index);
+		if (hit !== void 0) return describe(memory, hit.entry, hit.via, full);
+		const tokens = tokenize(normalize(q));
+		const closest = index.map((i, order) => ({
+			i,
+			order,
+			similarity: jaccard(tokens, i.tokens)
+		})).filter((c) => c.similarity > 0).sort((a, b) => b.similarity - a.similarity || a.order - b.order).slice(0, 3);
+		const head = `No entry matches "${short(q, QUERY_MAX_CHARS)}".`;
+		if (closest.length === 0) return head;
+		return [`${head} Closest:`, ...closest.map(({ i, similarity }) => `${i.entry.id} ${short(i.entry.title, 120)} (similarity ${round(similarity)})`)].join("\n");
+	});
+	const list = define("antibody_list", "List the entries in the fleet's shared antibody memory: ID, hits, status and title only, no bodies.", true, {
+		cat: {
+			type: "string",
+			description: "Only this category: tool, command, llm, agent, or a display category such as tool / Bash."
+		},
+		status: {
+			type: "string",
+			enum: ENTRY_STATUSES
+		},
+		limit: {
+			type: "integer",
+			minimum: 1,
+			description: `At most this many entries (default 20, at most 200).`
+		}
+	}, [], async (args, memory) => {
+		const limit = Math.min(args.limit ?? 20, 200);
+		const cat = given(args.cat)?.toLowerCase();
+		const matches = indexEntries(await memory.entries()).filter((i) => (cat === void 0 || i.category.toLowerCase() === cat || i.entry.category.toLowerCase() === cat) && (args.status === void 0 || i.entry.status === args.status));
+		if (matches.length === 0) return "No entries.";
+		const shown = matches.slice(0, limit);
+		return [...shown.map(({ entry }) => `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(entry.title, 120)}`), `${shown.length} of ${matches.length} shown.`].join("\n");
+	});
+	/** Notes with one more line. */
+	const withNote = (notes, note) => notes === "" ? note : `${notes}\n${note}`;
+	/**
+	* Find the entry a message describes, or append one.
+	*
+	* Only an exact hit names the entry to update. A near hit writes nothing and
+	* comes back as the candidate: a fix recorded on a similar but different
+	* entry would later be injected as its known fix.
+	*
+	* A new entry is appended the way the hooks append one: only by the agent
+	* that claims its fingerprint, so two agents recording the same new error at
+	* once write one entry. The claim only guards the append and is released
+	* straight after.
+	*/
+	async function findOrAppend(memory, message, category, fields) {
+		const hit = matchText(message, indexEntries(await memory.entries()), category);
+		if (hit !== void 0 && hit.via !== "exact") throw new ToolError(`closest match is ${hit.id} (approximate, by ${hit.via}); nothing was written. Call antibody_record with id: "${hit.id}" to confirm, or reword message`);
+		if (hit !== void 0) return {
+			id: hit.id,
+			created: false
+		};
+		const cat = category ?? "agent";
+		const headline = extractHeadline(message);
+		const line = headline.line === "" ? message : headline.line;
+		const sig = signature(cat, line);
+		const outcome = await memory.claims.claim({
+			id: sig,
+			agent: context.agent,
+			session: context.session
+		});
+		try {
+			const existing = indexEntries(await memory.entries()).find((i) => i.sig === sig);
+			if (existing !== void 0) return {
+				id: existing.entry.id,
+				created: false
+			};
+			if (!outcome.granted) throw new ToolError(`${outcome.holder.agent} is recording this error right now; look it up with antibody_lookup in a moment`);
+			const { id } = await memory.store.append({
+				title: `[${cat}] ${line}`,
+				signature: sig,
+				category: cat,
+				meta: {
+					cat,
+					...headline.code === void 0 ? {} : { code: headline.code }
+				},
+				raw: message,
+				...fields.fix === void 0 ? {} : { fix: fields.fix },
+				status: fields.status ?? (fields.fix === void 0 ? "open" : "fixed"),
+				...fields.note === void 0 ? {} : { notes: fields.note }
+			});
+			await memory.log({
+				kind: "miss",
+				id,
+				text: line
+			});
+			if (fields.fix !== void 0) await memory.log({
+				kind: "fix",
+				id,
+				text: fields.fix
+			});
+			return {
+				id,
+				created: true
+			};
+		} finally {
+			if (outcome.granted) await memory.claims.release(sig, context.session);
+		}
+	}
+	/** Change an existing entry: the fix through the fleet, then the rest. */
+	async function change(memory, id, fields) {
+		let entry;
+		if (fields.fix !== void 0) {
+			entry = await memory.fleet.recordFix(id, fields.fix);
+			if (entry === void 0) return void 0;
+		}
+		if (fields.status !== void 0 || fields.note !== void 0) {
+			const current = (await memory.store.read()).blocks.find((b) => b.entry.id === id)?.entry;
+			if (current === void 0) return void 0;
+			const patch = {};
+			if (fields.status !== void 0) patch.status = fields.status;
+			if (fields.note !== void 0) patch.notes = withNote(current.notes, fields.note);
+			entry = await memory.store.update(id, patch);
+		}
+		return entry;
+	}
+	return [
+		lookup,
+		list,
+		define("antibody_record", "Record what you learned about an error in the fleet's shared antibody memory, so every other agent gets it. Give exactly one of id (an existing entry) or message (the error text). A message updates an entry only when it matches exactly; on an approximate match nothing is written and the closest entry's ID is returned, so confirm it with id. A new entry is created when nothing matches. A fix marks the entry fixed and is passed to agents waiting for it.", false, {
+			id: {
+				type: "string",
+				description: `An existing entry, e.g. ${formatId(7, idPrefix, idWidth)}.`
+			},
+			message: {
+				type: "string",
+				description: "The error text, when you do not know the ID. Only an exact match updates an existing entry."
+			},
+			fix: {
+				type: "string",
+				description: "What fixed it, in one or two sentences."
+			},
+			status: {
+				type: "string",
+				enum: ENTRY_STATUSES,
+				description: "fixed, wontfix (never inject it) or open. A fix alone sets fixed."
+			},
+			note: {
+				type: "string",
+				description: "A line added to the entry's notes."
+			},
+			category: {
+				type: "string",
+				description: `For message: the category to match and file under, e.g. tool or command. Default: match any; file new entries under ${DEFAULT_RECORD_CATEGORY}.`
+			}
+		}, [], async (args, memory) => {
+			const id = given(args.id);
+			const message = given(args.message);
+			const fix = given(args.fix);
+			const note = given(args.note);
+			const category = given(args.category);
+			const status = args.status;
+			if (id === void 0 === (message === void 0)) throw new ToolError("give exactly one of id and message");
+			if (args.fix !== void 0 && fix === void 0) throw new ToolError("fix is empty");
+			const fields = {
+				...fix === void 0 ? {} : { fix },
+				...status === void 0 ? {} : { status },
+				...note === void 0 ? {} : { note }
+			};
+			let target;
+			if (id !== void 0) {
+				if (Object.keys(fields).length === 0) throw new ToolError("nothing to record: give fix, status or note");
+				const found = byId(indexEntries(await memory.entries()), id);
+				if (found === void 0) throw new ToolError(`no entry ${canonicalId(id)}`);
+				target = {
+					id: found.entry.id,
+					created: false
+				};
+			} else target = await findOrAppend(memory, message, category, fields);
+			let entry;
+			if (!target.created) entry = await change(memory, target.id, fields);
+			entry ??= (await memory.entries()).find((e) => e.id === target.id);
+			if (entry === void 0) throw new ToolError(`no entry ${target.id}`);
+			const what = target.created ? "Created" : "Updated";
+			const hasFix = oneLine(entry.fix) !== "";
+			const tail = fix !== void 0 && entry.status !== "wontfix" ? " Agents waiting for it get the fix at their next tool call." : !hasFix && entry.status === "open" ? " No fix recorded yet." : "";
+			return `${what} ${entry.id} (status ${entry.status}).${tail}`;
+		}),
+		define("antibody_forget", "Remove a misjudged entry from the fleet's shared antibody memory. It moves to ANTIBODIES.archive.md with the reason noted; nothing is deleted. Agents waiting for its fix stop waiting.", false, {
+			id: { type: "string" },
+			reason: {
+				type: "string",
+				description: "Why, kept in the archive."
+			}
+		}, ["id"], async (args, memory) => {
+			const id = given(args.id);
+			if (id === void 0) throw new ToolError("id is empty");
+			const found = byId(indexEntries(await memory.entries()), id);
+			if (found === void 0) throw new ToolError(`no entry ${canonicalId(id)}`);
+			const reason = given(args.reason);
+			const archived = await memory.store.archive(found.entry.id, reason);
+			if (archived === void 0) throw new ToolError(`no entry ${found.entry.id}`);
+			await memory.log({
+				kind: "forget",
+				id: archived.id,
+				...reason === void 0 ? {} : { text: reason }
+			});
+			if (await memory.claims.release(archived.fingerprint)) await memory.log({
+				kind: "release",
+				id: archived.id,
+				text: "forgotten"
+			});
+			return `Archived ${archived.id} to ANTIBODIES.archive.md.`;
+		}),
+		define("antibody_stats", "Show the fleet's antibody ledger: entries, hits, notices delivered, an estimate of tokens saved, open entries without a fix, which errors agents are diagnosing right now, distrusted fixes and the memory path. Costs no model call.", true, { scope: {
+			type: "string",
+			enum: STATS_SCOPES,
+			description: "Count the notices of the whole fleet or of this agent only (default fleet). Entry figures are always the whole memory."
+		} }, [], async (args, memory) => {
+			const scope = args.scope ?? "fleet";
+			const [entries, machine, live, log] = await Promise.all([
+				memory.entries(),
+				memory.machine(),
+				memory.claims.read(),
+				readEventsFrom(memory.files.events)
+			]);
+			const now = clock.now();
+			const events = log.events.filter((e) => scope === "fleet" || e.agent === context.agent);
+			const notices = events.filter((e) => e.kind === "notice");
+			const fixNotices = notices.filter((e) => FIX_NOTICE_KINDS.includes(e.notice)).length;
+			const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
+			const net = fixNotices * 800 - noticeTokens;
+			const agents = new Set(events.map((e) => e.agent)).size;
+			const level = (entry) => {
+				const trust = machine.trust[entry.id];
+				return trust?.fixSig === fixSig(entry.fix) ? trustLevel(trust) : "trusted";
+			};
+			const withFix = entries.filter((e) => oneLine(e.fix) !== "");
+			const ids = (list) => list.length === 0 ? "none" : list.map((e) => e.id).join(", ");
+			const diagnosing = Object.values(live.claims).filter((c) => activeClaim(live, c.id, now) !== void 0).map((c) => {
+				const entry = entries.find((e) => e.fingerprint === c.id);
+				const since = elapsedText(now.getTime() - Date.parse(c.since));
+				return `${entry?.id ?? `new error ${c.id}`} by ${c.agent} (${since})`;
+			});
+			const where = scope === "fleet" ? "the fleet" : context.agent;
+			return [
+				`Memory: ${memory.dir}`,
+				`Entries: ${entries.length} · hits: ${entries.reduce((sum, e) => sum + e.hits, 0)} · open without a fix: ${entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length}`,
+				`Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
+				`Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × 800 − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+				`Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
+				`Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
+				`Distrusted fixes, not injected: ${ids(withFix.filter((e) => level(e) === "suppressed"))}`
+			].join("\n");
+		})
+	];
+}
+//#endregion
 //#region src/cli.ts
 /** The version `antibody --version` prints. */
 const VERSION = "0.0.0";
+/** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
+const HARNESS_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 /**
 * Route one hook call into the fleet loop.
 *
@@ -3061,19 +3754,54 @@ async function runHook(harness, io, deps = {}) {
 	return 0;
 }
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody --version
 `;
+/**
+* `antibody mcp [harness]`: serve the agent tools to one agent until stdin
+* ends. The harness names the agent the way its hooks do, so a fix recorded
+* through the tools is credited to the same agent in the event log; it
+* defaults to "mcp".
+*
+* Claude Code starts a stdio server in the project directory and passes
+* CLAUDE_PROJECT_DIR and CLAUDE_CODE_SESSION_ID, so the server finds the same
+* memory as the hooks and logs under the same session. Other harnesses get
+* the working directory and a session named after the process.
+*
+* @param harness - the harness name, or "" for the default.
+* @param io - stdout for responses, stderr for usage errors, the environment.
+* @param deps - the input stream, the directory, git; injected in tests.
+* @returns the exit code once stdin ends.
+*/
+async function runMcp(harness, io, deps = {}) {
+	const name = harness === "" ? "mcp" : harness;
+	if (!HARNESS_NAME.test(name)) {
+		io.stderr(`antibody: not a harness name: ${harness}\n${USAGE}`);
+		return 2;
+	}
+	const cwd = deps.cwd ?? (io.env.CLAUDE_PROJECT_DIR || process.cwd());
+	await serveLines(createMcpServer(createTools({
+		memory: () => memoryDir(cwd, deps.git, io.env),
+		agent: agentName(name, worktreeRoot(cwd, deps.git), io.env),
+		session: io.env.CLAUDE_CODE_SESSION_ID || `mcp-${deps.pid ?? process.pid}`
+	}), {
+		name: "antibody",
+		version: VERSION
+	}), deps.input ?? process.stdin, io.stdout);
+	return 0;
+}
 /**
 * The command line's entry point.
 *
 * @param argv - the arguments after the program name.
 * @param io - stdin, stdout, stderr and the environment.
-* @param deps - passed to the hook command.
+* @param deps - passed to the hook and mcp commands.
 * @returns the exit code.
 */
 async function main(argv, io, deps = {}) {
 	const [command, ...rest] = argv;
 	if (command === "hook") return runHook(rest[0] ?? "", io, deps);
+	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
 	if (command === "--version" || command === "-v") {
 		io.stdout(`${VERSION}\n`);
 		return 0;
@@ -3093,6 +3821,10 @@ const readStdin = async () => {
 	for await (const chunk of process.stdin) chunks.push(chunk);
 	return Buffer.concat(chunks).toString("utf8");
 };
+process.stdout.on("error", (error) => {
+	if (error.code !== "EPIPE") throw error;
+	process.exit(0);
+});
 process.exitCode = await main(process.argv.slice(2), {
 	readStdin,
 	stdout: (text) => process.stdout.write(text),

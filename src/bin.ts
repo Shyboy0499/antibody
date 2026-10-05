@@ -9,6 +9,13 @@ const readStdin = async (): Promise<string> => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
+// A reader that goes away, such as an MCP client that closed its end of the
+// pipe, ends the process quietly instead of with a stack trace.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code !== "EPIPE") throw error;
+  process.exit(0);
+});
+
 process.exitCode = await main(process.argv.slice(2), {
   readStdin,
   stdout: (text) => process.stdout.write(text),

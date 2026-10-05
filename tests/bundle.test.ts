@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -70,5 +70,41 @@ describe("the committed bundle", () => {
     expect(out.hookSpecificOutput.additionalContext).toContain(
       "claude-code@agent-a has been diagnosing this",
     );
+  });
+});
+
+describe("the committed bundle as an MCP server", () => {
+  const line = (id: number, method: string) =>
+    `${JSON.stringify({ jsonrpc: "2.0", id, method, params: {} })}\n`;
+
+  it("answers over stdio", () => {
+    const responses = run(
+      ["mcp", "claude-code"],
+      line(1, "initialize") + line(2, "tools/list"),
+    )
+      .trim()
+      .split("\n")
+      .map((text) => JSON.parse(text));
+    expect(responses.map((r) => r.id).sort()).toEqual([1, 2]);
+    const list = responses.find((r) => r.id === 2);
+    expect(list.result.tools).toHaveLength(5);
+  });
+
+  it("exits quietly when the client closes its end of the pipe", async () => {
+    const child = spawn(process.execPath, [bundle, "mcp"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    // The server may be gone before the last pings are written.
+    child.stdin.on("error", () => {});
+    child.stdout.once("data", () => {
+      child.stdout.destroy();
+      for (let id = 2; id < 200; id++) child.stdin.write(line(id, "ping"));
+      child.stdin.end();
+    });
+    child.stdin.write(line(1, "ping"));
+    const code = await new Promise((done) => child.on("exit", done));
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
   });
 });
