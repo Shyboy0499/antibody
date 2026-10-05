@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 import { basename, dirname, join, resolve } from "node:path";
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import * as fsp from "node:fs/promises";
-import { appendFile, mkdir, open } from "node:fs/promises";
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 //#region src/notice.ts
 /** How every notice introduces itself to the agent. */
 const NOTICE_PREFIX = "[antibody]";
@@ -1696,23 +1694,34 @@ const errorCode = (error) => error.code;
 * The real filesystem. Every "missing" case (ENOENT) is a value, not an error;
 * anything else - a directory where a file should be, a permission denial -
 * propagates.
+*
+* The calls are synchronous behind the async interface. node:fs/promises
+* loads the streams stack, which costs every hook about 10 ms before it does
+* anything, and a hook does one thing at a time anyway. The writes keep their
+* guarantees: `wx` still creates exclusively and appends still use O_APPEND.
 */
 function nodeStoreFs() {
 	return {
 		async readFile(path) {
 			try {
-				return await fsp.readFile(path, "utf8");
+				return readFileSync(path, "utf8");
 			} catch (error) {
 				if (errorCode(error) === "ENOENT") return void 0;
 				throw error;
 			}
 		},
-		writeFile: (path, data) => fsp.writeFile(path, data, "utf8"),
-		appendFile: (path, data) => fsp.appendFile(path, data, "utf8"),
-		rename: (from, to) => fsp.rename(from, to),
+		async writeFile(path, data) {
+			writeFileSync(path, data, "utf8");
+		},
+		async appendFile(path, data) {
+			appendFileSync(path, data, "utf8");
+		},
+		async rename(from, to) {
+			renameSync(from, to);
+		},
 		async createExclusive(path, data) {
 			try {
-				await fsp.writeFile(path, data, {
+				writeFileSync(path, data, {
 					encoding: "utf8",
 					flag: "wx"
 				});
@@ -1724,23 +1733,25 @@ function nodeStoreFs() {
 		},
 		async mtimeMs(path) {
 			try {
-				return (await fsp.stat(path)).mtimeMs;
+				return statSync(path).mtimeMs;
 			} catch (error) {
 				if (errorCode(error) === "ENOENT") return void 0;
 				throw error;
 			}
 		},
-		remove: (path) => fsp.rm(path, { force: true }),
+		async remove(path) {
+			rmSync(path, { force: true });
+		},
 		async list(dir) {
 			try {
-				return await fsp.readdir(dir);
+				return readdirSync(dir);
 			} catch (error) {
 				if (errorCode(error) === "ENOENT") return [];
 				throw error;
 			}
 		},
-		mkdir: async (dir) => {
-			await fsp.mkdir(dir, { recursive: true });
+		async mkdir(dir) {
+			mkdirSync(dir, { recursive: true });
 		}
 	};
 }
@@ -1995,8 +2006,8 @@ function parseEvents(text) {
 * @param now - the time to stamp when the event has none.
 */
 async function appendEvent(file, event, now = /* @__PURE__ */ new Date()) {
-	await mkdir(dirname(file), { recursive: true });
-	await appendFile(file, encodeEvent(event, now), { flag: "a" });
+	mkdirSync(dirname(file), { recursive: true });
+	appendFileSync(file, encodeEvent(event, now));
 }
 /**
 * Read the events appended since `offset`. Only complete lines are read; the
@@ -2008,9 +2019,9 @@ async function appendEvent(file, event, now = /* @__PURE__ */ new Date()) {
 * @param offset - where the previous read stopped; 0 for the whole log.
 */
 async function readEventsFrom(file, offset = 0) {
-	let handle;
+	let fd;
 	try {
-		handle = await open(file, "r");
+		fd = openSync(file, "r");
 	} catch {
 		return {
 			events: [],
@@ -2019,17 +2030,17 @@ async function readEventsFrom(file, offset = 0) {
 		};
 	}
 	try {
-		const { size } = await handle.stat();
+		const { size } = fstatSync(fd);
 		const start = offset > size ? 0 : offset;
 		const buffer = Buffer.alloc(size - start);
-		await handle.read(buffer, 0, buffer.length, start);
+		readSync(fd, buffer, 0, buffer.length, start);
 		const complete = buffer.lastIndexOf(10) + 1;
 		return {
 			...parseEvents(buffer.subarray(0, complete).toString("utf8")),
 			offset: start + complete
 		};
 	} finally {
-		await handle.close();
+		closeSync(fd);
 	}
 }
 /**

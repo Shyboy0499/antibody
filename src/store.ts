@@ -20,7 +20,16 @@
 // `StoreClock` are injected, so locking, staleness and corruption handling are
 // testable without racing a real disk. `nodeStoreFs()` and `systemClock()` are
 // the only parts that touch the machine.
-import * as fsp from "node:fs/promises";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { corruptFileName } from "./paths";
 import type { KbFiles } from "./paths";
@@ -892,23 +901,34 @@ const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code;
  * The real filesystem. Every "missing" case (ENOENT) is a value, not an error;
  * anything else - a directory where a file should be, a permission denial -
  * propagates.
+ *
+ * The calls are synchronous behind the async interface. node:fs/promises
+ * loads the streams stack, which costs every hook about 10 ms before it does
+ * anything, and a hook does one thing at a time anyway. The writes keep their
+ * guarantees: `wx` still creates exclusively and appends still use O_APPEND.
  */
 export function nodeStoreFs(): StoreFs {
   return {
     async readFile(path) {
       try {
-        return await fsp.readFile(path, "utf8");
+        return readFileSync(path, "utf8");
       } catch (error) {
         if (errorCode(error) === "ENOENT") return undefined;
         throw error;
       }
     },
-    writeFile: (path, data) => fsp.writeFile(path, data, "utf8"),
-    appendFile: (path, data) => fsp.appendFile(path, data, "utf8"),
-    rename: (from, to) => fsp.rename(from, to),
+    async writeFile(path, data) {
+      writeFileSync(path, data, "utf8");
+    },
+    async appendFile(path, data) {
+      appendFileSync(path, data, "utf8");
+    },
+    async rename(from, to) {
+      renameSync(from, to);
+    },
     async createExclusive(path, data) {
       try {
-        await fsp.writeFile(path, data, { encoding: "utf8", flag: "wx" });
+        writeFileSync(path, data, { encoding: "utf8", flag: "wx" });
         return true;
       } catch (error) {
         if (errorCode(error) === "EEXIST") return false;
@@ -917,23 +937,25 @@ export function nodeStoreFs(): StoreFs {
     },
     async mtimeMs(path) {
       try {
-        return (await fsp.stat(path)).mtimeMs;
+        return statSync(path).mtimeMs;
       } catch (error) {
         if (errorCode(error) === "ENOENT") return undefined;
         throw error;
       }
     },
-    remove: (path) => fsp.rm(path, { force: true }),
+    async remove(path) {
+      rmSync(path, { force: true });
+    },
     async list(dir) {
       try {
-        return await fsp.readdir(dir);
+        return readdirSync(dir);
       } catch (error) {
         if (errorCode(error) === "ENOENT") return [];
         throw error;
       }
     },
-    mkdir: async (dir) => {
-      await fsp.mkdir(dir, { recursive: true });
+    async mkdir(dir) {
+      mkdirSync(dir, { recursive: true });
     },
   };
 }
