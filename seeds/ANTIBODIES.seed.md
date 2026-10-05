@@ -1,4 +1,4 @@
-# ERRORS (seed entries)
+# ANTIBODIES (seed entries)
 
 Curated entries for errors that fleets of parallel agents meet in fresh git
 worktrees. They contain no machine names, project names, paths or credentials,

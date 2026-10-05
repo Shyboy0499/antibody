@@ -723,7 +723,9 @@ describe("store: a corrupt document", () => {
 
     const first = await store.append(input(1));
     expect(first).toMatchObject({ id: "E-0004", corrupt: true, archived: [] });
-    expect(first.savedAs).toBe("ERRORS.corrupt-2026-10-01T08-30-15-250Z.md");
+    expect(first.savedAs).toBe(
+      "ANTIBODIES.corrupt-2026-10-01T08-30-15-250Z.md",
+    );
     expect(text(join(kbDir, first.savedAs as string))).toBe(broken);
 
     const afterFirst = text(files.errors) as string;
@@ -740,16 +742,16 @@ describe("store: a corrupt document", () => {
     const { store, fs, text } = memoryStore();
     await fs.writeFile(files.errors, broken);
     await fs.writeFile(
-      join(kbDir, "ERRORS.corrupt-unrelated.md"),
+      join(kbDir, "ANTIBODIES.corrupt-unrelated.md"),
       "something else",
     );
-    await fs.writeFile(join(kbDir, "ERRORS.corrupt-empty.md"), "");
+    await fs.writeFile(join(kbDir, "ANTIBODIES.corrupt-empty.md"), "");
     await fs.writeFile(join(kbDir, "notes.md"), broken);
     const error = await store.update("E-0003", { fix: "x" }).catch((e) => e);
     expect(error).toBeInstanceOf(StoreCorruptError);
     expect((error as StoreCorruptError).parseError).toBeInstanceOf(ParseError);
     expect((error as StoreCorruptError).savedAs).toMatch(
-      /^ERRORS\.corrupt-2026/,
+      /^ANTIBODIES\.corrupt-2026/,
     );
     expect(text(files.errors)).toBe(broken);
   });
@@ -922,7 +924,7 @@ describe("store: real filesystem", () => {
       fix: "fixed by test",
       status: "fixed",
     });
-    expect(readdirSync(kb).sort()).toEqual(["ERRORS.md"]);
+    expect(readdirSync(kb).sort()).toEqual(["ANTIBODIES.md"]);
   });
 
   it("50 concurrent records yield 50 unique IDs and a document that parses completely", async () => {
@@ -939,7 +941,7 @@ describe("store: real filesystem", () => {
     expect(parsed.blocks.map((b) => b.entry.id).sort()).toEqual(
       Array.from({ length: 50 }, (_, n) => formatId(n + 1)),
     );
-    expect(readdirSync(dir)).toEqual(["ERRORS.md"]);
+    expect(readdirSync(dir)).toEqual(["ANTIBODIES.md"]);
   });
 
   it("reports missing things as values and real failures as errors", async () => {

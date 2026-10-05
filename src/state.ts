@@ -3,7 +3,7 @@
 //
 // Machine-local state: `state.json` in the knowledge base directory (§4.3).
 //
-// ERRORS.md is append-only knowledge, shared across devices through git: a
+// ANTIBODIES.md is append-only knowledge, shared across devices through git: a
 // block is written once and rewritten only when someone edits its fix, status
 // or notes. What changes on every repeat of an error - its hit count and when
 // it was last seen - lives here instead, so two devices that both hit the same
@@ -30,7 +30,7 @@
 // A missing file is an empty state. A file that is not JSON, or not version 1,
 // reads as empty too and never throws; it is left alone until the next write,
 // which saves it aside as `state.corrupt-<ts>.json` before replacing it - the
-// same treatment ERRORS.md gets. A record of the wrong shape inside a valid
+// same treatment ANTIBODIES.md gets. A record of the wrong shape inside a valid
 // file is dropped on its own.
 //
 // Writes take the knowledge base's `.lock`, the same one the store takes, and
@@ -57,7 +57,7 @@ import type { Entry, LockOptions, StoreClock, StoreFs } from "./store";
 /** The only version this code reads and writes. */
 export const STATE_VERSION = 1;
 
-/** This machine's counters for one entry, on top of its ERRORS.md baseline. */
+/** This machine's counters for one entry, on top of its ANTIBODIES.md baseline. */
 export interface HitCounter {
   /** Repeats seen on this machine since the block was written. */
   hits: number;
@@ -164,7 +164,7 @@ export function laterSeen(a: string, b: string): string {
  * machine's delta, and the later of the two last-seen times. Without a
  * counter it is the entry itself.
  *
- * @param entry - the entry as parsed from ERRORS.md: the baseline.
+ * @param entry - the entry as parsed from ANTIBODIES.md: the baseline.
  * @param counter - this machine's counters for it, if any.
  */
 export function effectiveEntry(
@@ -201,7 +201,7 @@ export function addHit(
 
 /**
  * Name for the copy of a `state.json` that could not be read, like
- * corruptFileName() for ERRORS.md.
+ * corruptFileName() for ANTIBODIES.md.
  *
  * @param now - timestamp to embed.
  * @returns a file name, never a path.
