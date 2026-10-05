@@ -347,3 +347,62 @@ describe("fleet: deliveries", () => {
     expect(await fleet("s-c").poll()).toEqual([]);
   });
 });
+
+describe("fleet: successes", () => {
+  const ok: ToolCall = {
+    toolName: "Read",
+    isError: false,
+    text: "API_URL=...",
+  };
+  const elsewhere: ToolCall = { toolName: "Grep", isError: false, text: "" };
+  const succeed = (session: string, c: ToolCall = ok) =>
+    createFleet(memory, `agent-${session}`, session).success(c);
+
+  it("asks the agent that got past an unfixed error to record the fix, once", async () => {
+    await fail("s-a");
+    expect(await succeed("s-a")).toEqual([
+      "[antibody] E-0001 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
+    ]);
+    await fail("s-a");
+    expect(await succeed("s-a")).toEqual([]);
+    expect((await events()).filter((e) => e.kind === "resolve")).toHaveLength(
+      2,
+    );
+  });
+
+  it("gives a fix that worked its trust", async () => {
+    await fail("s-a");
+    await recordFix("open");
+    await fail("s-b");
+    expect(await succeed("s-b")).toEqual([]);
+    const state = parseState(await readFile(filesIn(memory).state, "utf8"));
+    expect(state?.trust["E-0001"]).toMatchObject({ injected: 1, succeeded: 1 });
+  });
+
+  it("resolves nothing for a call on another tool, or in another session", async () => {
+    await fail("s-a");
+    expect(await succeed("s-a", elsewhere)).toEqual([]);
+    expect(await succeed("s-b")).toEqual([]);
+    expect((await events()).some((e) => e.kind === "resolve")).toBe(false);
+  });
+
+  it("ignores a call that did not succeed", async () => {
+    await fail("s-a");
+    const failed: ToolCall = { toolName: "Read", isError: true, text: MESSAGE };
+    expect(await succeed("s-a", failed)).toEqual([]);
+  });
+
+  it("skips a watched entry that is gone from the document", async () => {
+    await fail("s-a");
+    await createStore(filesIn(memory)).archive("E-0001", "test");
+    expect(await succeed("s-a")).toEqual([]);
+  });
+
+  it("delivers a held fix on a success, too", async () => {
+    await fail("s-a");
+    await fail("s-b");
+    await recordFix();
+    const [notice] = await succeed("s-b", elsewhere);
+    expect(notice).toContain(`fix: ${FIX}`);
+  });
+});
