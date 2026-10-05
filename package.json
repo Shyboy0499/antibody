@@ -32,6 +32,7 @@
     "prettier": "^3.9.9",
     "tsdown": "0.22.2",
     "typescript": "~5.7.2",
+    "vite-node": "^2.1.9",
     "vitest": "^2.1.9"
   },
   "engines": {
