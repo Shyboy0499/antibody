@@ -19,7 +19,7 @@
 // fleet; only the records this call changed are written back.
 import { TransientCounter, classify } from "./capture";
 import type { CaptureRecord } from "./capture";
-import { CLAIM_TTL_MS, createClaimsFile } from "./claims";
+import { CLAIM_TTL_MS, activeClaim, createClaimsFile } from "./claims";
 import type { ClaimOutcome } from "./claims";
 import type { CaptureInput, CaptureOptions } from "./capture";
 import { appendEvent } from "./events";
@@ -77,6 +77,13 @@ export interface Fleet {
    * @returns the notices to show the agent; often none.
    */
   failure(capture: CaptureInput, call: ToolCall): Promise<string[]>;
+  /**
+   * Deliver any fix this session has been waiting for since another agent
+   * claimed the error. Cheap when there is nothing to wait for.
+   *
+   * @returns the notices to show the agent; often none.
+   */
+  poll(): Promise<string[]>;
 }
 
 /** The per-call pieces restored from a session file. */
@@ -229,7 +236,10 @@ export function createFleet(
       hits: found.entry.hits + 1,
       lastSeen: laterSeen(found.entry.lastSeen, at),
     };
-    if (oneLine(entry.fix) === "" && found.injectable) {
+    // A hit that carries the fix answers any wait on it, too.
+    if (oneLine(entry.fix) !== "")
+      s.holding = s.holding.filter((f) => f !== entry.fingerprint);
+    else if (found.injectable) {
       const outcome = await claims.claim({
         id: entry.fingerprint,
         agent,
@@ -284,7 +294,60 @@ export function createFleet(
     return id;
   }
 
+  // Pass on the fixes this session is waiting for. A fingerprint stops being
+  // waited for once its fix is delivered, or once nobody holds its claim and
+  // it still has no fix, so the agent can take the problem on itself. A fix the
+  // budget cannot carry now is tried again on the next hook call.
+  async function deliver(
+    s: SessionState,
+    rt: Runtime,
+    machine: MachineState,
+    notices: string[],
+  ): Promise<void> {
+    if (s.holding.length === 0) return;
+    const entries = await readEntries(machine);
+    const live = await claims.read();
+    const now = clock.now();
+    const waiting: string[] = [];
+    for (const fingerprint of s.holding) {
+      const entry = entries.find((e) => e.fingerprint === fingerprint);
+      if (entry === undefined || oneLine(entry.fix) === "") {
+        if (activeClaim(live, fingerprint, now) !== undefined)
+          waiting.push(fingerprint);
+        continue;
+      }
+      const hit: Hit = {
+        matched: true,
+        id: entry.id,
+        entry,
+        via: "exact",
+        approximate: false,
+        similarity: 1,
+        injectable: entry.status !== "wontfix",
+      };
+      const notice = rt.injector.offer({ kind: "hit", hit }, true);
+      if (notice === undefined && entry.status !== "wontfix")
+        waiting.push(fingerprint);
+      await tell(notice, notices);
+    }
+    s.holding = waiting;
+  }
+
   return {
+    async poll() {
+      return sessionFile.update(async (s) => {
+        if (s.holding.length === 0) return [];
+        const machine = (await state.read()).state;
+        const before = structuredClone(machine.trust);
+        const rt = restore(s, machine.trust);
+        rt.injector.beginStep();
+        const notices: string[] = [];
+        await deliver(s, rt, machine, notices);
+        await persist(s, rt, before);
+        return notices;
+      });
+    },
+
     async failure(capture, call) {
       const classified = classify(capture, new TransientCounter(), o.capture);
       if (classified === undefined || classified.decision !== "record")
@@ -315,6 +378,7 @@ export function createFleet(
         } else id = await onMiss(s, rt, record, notices);
         if (!outcome.ok && id !== undefined)
           rt.tracker.occurred(id, outcome.key);
+        await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;
       });

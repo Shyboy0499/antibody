@@ -256,3 +256,94 @@ describe("fleet: claims", () => {
     expect(hint[0]).toMatch(/has been diagnosing this for 0 s/);
   });
 });
+
+describe("fleet: deliveries", () => {
+  let now: number;
+  const clock: StoreClock = {
+    now: () => new Date(now),
+    sleep: (ms) =>
+      new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+    random: Math.random,
+  };
+  const deps: FleetDeps = { fs: nodeStoreFs(), clock };
+  const fleet = (session: string, options: Partial<FleetOptions> = {}) =>
+    createFleet(memory, `agent-${session}`, session, options, deps);
+  const holding = async (session: string) =>
+    JSON.parse(
+      await readFile(join(memory, "sessions", `${session}.json`), "utf8"),
+    ).holding;
+  const other: CaptureInput = {
+    kind: "tool",
+    toolName: "Bash",
+    isError: true,
+    message: "fatal: 'main' is already checked out at '/w/a'",
+  };
+  const otherCall: ToolCall = {
+    toolName: "Bash",
+    isError: true,
+    text: other.message,
+  };
+
+  beforeEach(async () => {
+    now = Date.parse("2026-10-05T10:00:00.000Z");
+    await fleet("s-a").failure(capture, call);
+    await fleet("s-b").failure(capture, call);
+  });
+
+  it("passes the fix to the waiting agent once it is recorded, once", async () => {
+    expect(await fleet("s-b").poll()).toEqual([]);
+    await recordFix();
+    const [notice] = await fleet("s-b").poll();
+    expect(notice).toContain(`fix: ${FIX}`);
+    expect(await holding("s-b")).toEqual([]);
+    expect(await fleet("s-b").poll()).toEqual([]);
+  });
+
+  it("keeps waiting while the claim is live and there is no fix", async () => {
+    const before = await holding("s-b");
+    expect(await fleet("s-b").poll()).toEqual([]);
+    expect(await holding("s-b")).toEqual(before);
+    expect(before).toHaveLength(1);
+  });
+
+  it("stops waiting when the claim lapses without a fix", async () => {
+    now += 10 * 60 * 1000;
+    expect(await fleet("s-b").poll()).toEqual([]);
+    expect(await holding("s-b")).toEqual([]);
+  });
+
+  it("delivers alongside an unrelated failure in the same hook call", async () => {
+    await recordFix();
+    const notices = await fleet("s-b").failure(other, otherCall);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(`fix: ${FIX}`);
+    expect(await holding("s-b")).toEqual([]);
+  });
+
+  it("lets a hit on the awaited entry itself end the wait", async () => {
+    await recordFix();
+    const [notice] = await fleet("s-b").failure(capture, call);
+    expect(notice).toContain(`fix: ${FIX}`);
+    expect(await holding("s-b")).toEqual([]);
+    expect(await fleet("s-b").poll()).toEqual([]);
+  });
+
+  it("tries again on the next call when the step's budget is spent", async () => {
+    await recordFix("open");
+    await fleet("s-a").failure(other, otherCall);
+    await createStore(filesIn(memory)).update("E-0002", {
+      fix: "Use a branch of your own.",
+    });
+    // s-b waits for E-0001; its own failure on E-0002 takes the step's one notice.
+    const first = await fleet("s-b").failure(other, otherCall);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain("Use a branch of your own.");
+    expect(await holding("s-b")).toHaveLength(1);
+    const [later] = await fleet("s-b").poll();
+    expect(later).toContain(`fix: ${FIX}`);
+  });
+
+  it("does nothing for a session that waits for nothing", async () => {
+    expect(await fleet("s-c").poll()).toEqual([]);
+  });
+});
