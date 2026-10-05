@@ -3,6 +3,7 @@ import * as antibody from "../src/index";
 import * as capture from "../src/capture";
 import * as agent from "../src/agent";
 import * as claims from "../src/claims";
+import * as claudeCode from "../src/claude-code";
 import * as events from "../src/events";
 import * as injector from "../src/injector";
 import * as match from "../src/match";
@@ -35,6 +36,7 @@ describe("public entry point", () => {
     ["events", events],
     ["claims", claims],
     ["agent", agent],
+    ["claude-code", claudeCode],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
