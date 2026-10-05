@@ -15,6 +15,7 @@ export const KB_FILE = {
   machine: ".machine.json",
   lock: ".lock",
   events: "events.jsonl",
+  claims: "claims.json",
 } as const;
 
 /** Absolute paths of the files inside one memory directory. */
@@ -26,6 +27,7 @@ export interface KbFiles {
   machine: string;
   lock: string;
   events: string;
+  claims: string;
 }
 
 /**
@@ -43,6 +45,7 @@ export function filesIn(dir: string): KbFiles {
     machine: join(dir, KB_FILE.machine),
     lock: join(dir, KB_FILE.lock),
     events: join(dir, KB_FILE.events),
+    claims: join(dir, KB_FILE.claims),
   };
 }
 
