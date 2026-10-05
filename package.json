@@ -7,11 +7,16 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "oxlint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
     "@vitest/coverage-v8": "^2.1.9",
+    "oxlint": "^1.86.0",
+    "prettier": "^3.9.9",
     "typescript": "~5.7.2",
     "vitest": "^2.1.9"
   },
