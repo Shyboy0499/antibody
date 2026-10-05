@@ -1,0 +1,15 @@
+{
+  "name": "antibody",
+  "description": "antibody, the fleet learning layer for coding agents.",
+  "owner": {
+    "name": "Klay",
+    "url": "https://github.com/Shyboy0499"
+  },
+  "plugins": [
+    {
+      "name": "antibody",
+      "source": "./",
+      "description": "Herd immunity for coding-agent fleets: when one agent beats an error, every agent running beside it gets the fix."
+    }
+  ]
+}

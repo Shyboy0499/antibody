@@ -1,0 +1,19 @@
+{
+  "name": "antibody",
+  "version": "0.0.0",
+  "description": "Herd immunity for coding-agent fleets: when one agent beats an error, every agent running beside it gets the fix.",
+  "author": {
+    "name": "Klay",
+    "url": "https://github.com/Shyboy0499"
+  },
+  "homepage": "https://github.com/Shyboy0499/antibody",
+  "repository": "https://github.com/Shyboy0499/antibody",
+  "license": "MIT",
+  "keywords": ["agents", "fleet", "errors", "memory", "worktrees", "mcp"],
+  "mcpServers": {
+    "antibody": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs", "mcp", "claude-code"]
+    }
+  }
+}
