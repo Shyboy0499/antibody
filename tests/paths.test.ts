@@ -14,6 +14,7 @@ describe("file names", () => {
       state: "state.json",
       machine: ".machine.json",
       lock: ".lock",
+      events: "events.jsonl",
     });
   });
 
@@ -26,6 +27,7 @@ describe("file names", () => {
       state: join(dir, "state.json"),
       machine: join(dir, ".machine.json"),
       lock: join(dir, ".lock"),
+      events: join(dir, "events.jsonl"),
     });
   });
 
