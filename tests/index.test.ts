@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as antibody from "../src/index";
+import * as paths from "../src/paths";
 import * as redactPatterns from "../src/redact-patterns";
 import * as redact from "../src/redact";
 import * as signature from "../src/signature";
@@ -11,6 +12,7 @@ describe("public entry point", () => {
     ["signature", signature],
     ["redact-patterns", redactPatterns],
     ["redact", redact],
+    ["paths", paths],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
