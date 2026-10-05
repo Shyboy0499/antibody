@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Hit } from "../src/match";
 import {
   CAUSE_MAX_CHARS,
+  CLAIM_HINT_MAX_TOKENS,
   CAUSE_MIN_CHARS,
   CapTracker,
   DEFAULT_CAP_LIMITS,
@@ -12,7 +13,9 @@ import {
   NOTICE_MAX_TOKENS,
   NOTICE_PREFIX,
   WORDING,
+  claimHintText,
   clip,
+  elapsedText,
   estimateTokens,
   fitNotice,
   noticeText,
@@ -411,5 +414,39 @@ describe("CapTracker snapshots", () => {
         perId: null as unknown as Record<string, number>,
       }).snapshot(),
     ).toEqual({ step: 0, turn: 0, perId: {} });
+  });
+});
+
+describe("claim hints", () => {
+  it("says who is on it, for how long, and that the fix will follow", () => {
+    expect(claimHintText("E-0007", "codex-2", 40_000)).toBe(
+      "[antibody] E-0007: codex-2 has been diagnosing this for 40 s. Its fix will be passed to you when it is recorded.",
+    );
+  });
+
+  it("states the time in seconds, minutes or hours", () => {
+    expect(elapsedText(-5)).toBe("0 s");
+    expect(elapsedText(59_999)).toBe("59 s");
+    expect(elapsedText(60_000)).toBe("1 min");
+    expect(elapsedText(3_599_999)).toBe("59 min");
+    expect(elapsedText(7_200_000)).toBe("2 h");
+  });
+
+  it("stays under the hint's own token cap, clipping a long agent name", () => {
+    for (const holder of [
+      "claude-code@agent-a",
+      "x".repeat(200),
+      "代理".repeat(40),
+    ]) {
+      const text = claimHintText("E-0007", holder, 125_000);
+      expect(withinCaps(text)).toBe(true);
+      expect(estimateTokens(text)).toBeLessThanOrEqual(CLAIM_HINT_MAX_TOKENS);
+      expect(text.endsWith("when it is recorded.")).toBe(true);
+    }
+  });
+
+  it("clips the whole hint when even a one-character name cannot fit", () => {
+    const text = claimHintText("E-".repeat(200), "codex-2", 0);
+    expect(withinCaps(text)).toBe(true);
   });
 });

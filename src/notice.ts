@@ -264,6 +264,40 @@ export function noticeText(
   return { kind, text: fitNotice(render, cause, fix) };
 }
 
+/** A claim hint never exceeds this many tokens by estimateTokens(). */
+export const CLAIM_HINT_MAX_TOKENS = 60;
+
+/** How long ago, as a hint says it: seconds, then minutes, then hours. */
+export function elapsedText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  return `${Math.floor(s / 3600)} h`;
+}
+
+/**
+ * The notice for an agent that hit an entry another agent is diagnosing: who,
+ * for how long, and that the fix will follow. It only informs (design Q4).
+ *
+ * @param id - the entry.
+ * @param holder - the diagnosing agent's name.
+ * @param elapsedMs - how long the holder has been on it.
+ */
+export function claimHintText(
+  id: string,
+  holder: string,
+  elapsedMs: number,
+): string {
+  const render = (name: string) =>
+    `${NOTICE_PREFIX} ${id}: ${name} has been diagnosing this for ${elapsedText(elapsedMs)}. Its fix will be passed to you when it is recorded.`;
+  const fits = (n: number) => {
+    const text = render(clip(holder, n));
+    return withinCaps(text) && estimateTokens(text) <= CLAIM_HINT_MAX_TOKENS;
+  };
+  const n = largest(1, Math.max(1, Array.from(holder).length), fits);
+  return hardClip(render(clip(holder, n ?? 1)));
+}
+
 // ---------------------------------------------------------------------------
 // Caps
 
