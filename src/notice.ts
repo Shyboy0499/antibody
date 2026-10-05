@@ -71,6 +71,13 @@ export type NoticeKind =
   /** The one-shot request for the fix of an entry that looks resolved (T14). */
   | "ask-fix";
 
+/** The notices that carry an entry's fix. */
+export const FIX_NOTICE_KINDS: readonly NoticeKind[] = [
+  "hit",
+  "near",
+  "doubted",
+];
+
 /** One notice, ready to inject. */
 export interface Notice {
   id: string;
