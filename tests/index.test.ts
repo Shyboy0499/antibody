@@ -9,6 +9,7 @@ import * as redactPatterns from "../src/redact-patterns";
 import * as redact from "../src/redact";
 import * as resolveDetect from "../src/resolve-detect";
 import * as signature from "../src/signature";
+import * as state from "../src/state";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
 
@@ -27,6 +28,7 @@ describe("public entry point", () => {
     ["trust", trust],
     ["resolve-detect", resolveDetect],
     ["injector", injector],
+    ["state", state],
   ])("re-exports %s", (_module, exports) => {
     for (const [name, value] of Object.entries(exports)) {
       expect(antibody, name).toHaveProperty(name, value);
