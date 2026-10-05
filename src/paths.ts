@@ -4,7 +4,8 @@
 // dsh-errkb's directory tiers locate a DeepSeek Harness home; antibody finds its
 // memory directory through the git common directory instead (memoryDir below).
 import { execFileSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 /** The file names the memory directory holds. */
 export const KB_FILE = {
@@ -93,19 +94,87 @@ export class NotInGitRepoError extends Error {
   }
 }
 
+/** A worktree's root and its repository's common git directory. */
+export interface GitDirs {
+  worktree: string;
+  commonDir: string;
+}
+
+/**
+ * Find the repository `cwd` belongs to by reading `.git`, without starting
+ * git: a hook runs on every tool call, and two git processes cost more than
+ * the rest of the hook. Walking up from `cwd`, a `.git` directory is a main
+ * checkout; a `.git` file is a linked worktree (or a submodule) naming its
+ * gitdir, whose `commondir` file names the shared directory. The common
+ * directory is resolved through symlinks, so every agent computes the same
+ * path for it.
+ *
+ * @param cwd - any directory.
+ * @returns the directories, or undefined when `cwd` is in no repository or
+ *   its `.git` file cannot be read.
+ */
+export function findGitDirs(cwd: string): GitDirs | undefined {
+  let dir = resolve(cwd);
+  let previous: string | undefined;
+  while (dir !== previous) {
+    const dotGit = join(dir, ".git");
+    const stat = statSync(dotGit, { throwIfNoEntry: false });
+    if (stat?.isDirectory())
+      return { worktree: dir, commonDir: realpathSync(dotGit) };
+    if (stat?.isFile()) {
+      const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(
+        readFileSync(dotGit, "utf8"),
+      );
+      if (pointer === null) return undefined;
+      const gitdir = resolve(dir, pointer[1] as string);
+      let common = gitdir;
+      try {
+        common = resolve(
+          gitdir,
+          readFileSync(join(gitdir, "commondir"), "utf8").trim(),
+        );
+      } catch {
+        // No commondir: a submodule, whose gitdir is its own common directory.
+      }
+      try {
+        return { worktree: dir, commonDir: realpathSync(common) };
+      } catch {
+        return undefined;
+      }
+    }
+    previous = dir;
+    dir = dirname(dir);
+  }
+  return undefined;
+}
+
+// Variables that move the git directory somewhere `.git` does not say.
+const GIT_DIR_VARIABLES = ["GIT_DIR", "GIT_COMMON_DIR"];
+
 /**
  * The memory directory for the repository `cwd` belongs to: the same path from
  * the main checkout, from any linked worktree and from any subdirectory.
  *
  * @param cwd - any directory inside the repository.
- * @param git - runs git; injected in tests.
+ * @param git - runs git instead of reading `.git`; also used when GIT_DIR or
+ *   GIT_COMMON_DIR is set.
+ * @param env - the environment.
  * @returns `<git common dir>/antibody`, absolute.
  * @throws NotInGitRepoError when `cwd` is not inside a repository.
  */
-export function memoryDir(cwd: string, git: GitRunner = runGit): string {
+export function memoryDir(
+  cwd: string,
+  git?: GitRunner,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (git === undefined && !GIT_DIR_VARIABLES.some((v) => env[v])) {
+    const found = findGitDirs(cwd);
+    if (found === undefined) throw new NotInGitRepoError(cwd);
+    return join(found.commonDir, MEMORY_DIR_NAME);
+  }
   let common: string;
   try {
-    common = git(
+    common = (git ?? runGit)(
       ["rev-parse", "--path-format=absolute", "--git-common-dir"],
       cwd,
     );
