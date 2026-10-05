@@ -10,3 +10,7 @@ coverage/
 README.md
 docs/
 demo/
+
+# Written byte for byte by src/store.ts; tests/seeds.test.ts fails if a
+# formatter changes a character.
+seeds/

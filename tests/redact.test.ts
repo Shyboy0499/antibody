@@ -1,6 +1,9 @@
 // Ported from dsh-errkb, tests/redact.test.ts (MIT, Copyright (c) 2026 jingchangzhao-gif;
 // see NOTICE). Section marks such as §5.1 refer to dsh-errkb's design document.
 //
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MAX_SAMPLE_CHARS,
@@ -282,5 +285,24 @@ describe("capSample and redactSample", () => {
     const raw = join2("sk-", RANDOM, " at D:\\a\\b\\c.ts ", "z".repeat(900));
     const once = redactSample(raw);
     expect(redactSample(once)).toBe(once);
+  });
+});
+
+describe("committed seeds", () => {
+  // The public repository only carries curated seed entries. Anything
+  // committed there must already be in its redacted form, so running redaction
+  // over it (in the strictest mode) must change nothing.
+  const seedsDir = resolve(
+    fileURLToPath(new URL("..", import.meta.url)),
+    "seeds",
+  );
+  const seeds = readdirSync(seedsDir).filter((name) => name.endsWith(".md"));
+
+  it("every seeds/*.md is unchanged by redact()", () => {
+    expect(seeds.length).toBeGreaterThan(0);
+    for (const name of seeds) {
+      const text = readFileSync(join(seedsDir, name), "utf8");
+      expect(redact(text, { share: "public" }), name).toBe(text);
+    }
   });
 });
