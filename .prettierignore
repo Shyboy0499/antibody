@@ -1,8 +1,10 @@
 # Rewritten by pnpm on every resolution.
 pnpm-lock.yaml
 
-# Generated output. Prettier does not read .gitignore.
+# Generated output. Prettier does not read .gitignore. dist/ is committed
+# (the plugin runs it as it is in git) but still generated.
 lib/
+dist/
 coverage/
 
 # Hand-formatted prose and the self-contained demo page. Reformatting them is
