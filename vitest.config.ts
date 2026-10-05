@@ -15,6 +15,8 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       include: ["src/**"],
+      // The executable only wires main() to the real process; main() is tested.
+      exclude: ["src/bin.ts"],
       thresholds: {
         statements: 99,
         lines: 99,
