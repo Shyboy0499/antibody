@@ -2,12 +2,14 @@
 
 **Herd immunity for coding-agent fleets.** When one agent beats an error, every agent running beside it becomes immune.
 
-![Status](https://img.shields.io/badge/status-design%20stage-orange)
+![Status](https://img.shields.io/badge/status-M1%20done-yellow)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> **Status: design stage.** There is nothing to install yet. This repository holds the
-> design, the market survey behind it, and an interactive demo of the target
-> experience. The [roadmap](docs/roadmap.md) says what gets built first.
+> **Status: M1 done.** The core and the shared memory are built and tested:
+> fingerprinting, redaction, the `ANTIBODIES.md` store, matching, notices, fix trust,
+> claims and the event log, proven against eight concurrent writer processes. Nothing
+> connects to an agent yet; that is milestone M2, the Claude Code plugin. So there
+> is still nothing to install. The [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
 
@@ -91,14 +93,49 @@ It works under any orchestrator, because it only needs the agents' own hooks:
 herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or plain
 `git worktree add` and a few terminals.
 
-## Why it can be built quickly
+## What works today
 
-antibody's core comes from [dsh-errkb](https://github.com/jingchangzhao-gif/dsh-errkb),
+| Piece | Where | State |
+| --- | --- | --- |
+| Fingerprints: normalize an error, hash it to 12 characters | `src/signature.ts` | Built |
+| Mandatory redaction of keys, tokens, e-mails and paths | `src/redact.ts` | Built |
+| The `ANTIBODIES.md` entries document, safe under concurrent writers | `src/store.ts` | Built; also reads dsh-errkb's `ERRORS.md` |
+| Matching: exact, fuzzy and by code | `src/match.ts` | Built |
+| Capture: classifying failures, the noise rule | `src/capture.ts` | Built |
+| Notices, their caps, fix trust and the injector | `src/notice.ts`, `src/trust.ts`, `src/injector.ts` | Built |
+| Resolution detection | `src/resolve-detect.ts` | Built |
+| Hit counters and trust records in `state.json` | `src/state.ts` | Built |
+| The memory directory in the git common directory | `src/paths.ts` | Built |
+| The `events.jsonl` event log | `src/events.ts` | Built |
+| Claims, so only one agent diagnoses a new error | `src/claims.ts` | Built |
+| Claude Code plugin and MCP server | | M2 |
+| Codex CLI and Gemini CLI adapters | | M3 |
+| `antibody watch` | `demo/index.html` | M4; simulated demo only |
+
+## Built on dsh-errkb
+
+antibody's core came from [dsh-errkb](https://github.com/jingchangzhao-gif/dsh-errkb),
 an error knowledge base for a single DeepSeek Harness agent. Its pure layer
-(fingerprinting, mandatory redaction, the markdown store, matching, fix trust and
-resolution detection) is about 2,600 lines of TypeScript with no harness imports and
-a 99% coverage gate. antibody keeps that core and replaces the single-harness wiring
-with cross-harness hooks, shared memory and claims.
+(fingerprinting, redaction, the markdown store, matching, capture, notices, fix trust,
+state and resolution detection) came over with its tests and keeps its MIT notice in
+[`NOTICE`](NOTICE). antibody replaced the single-harness wiring with what a fleet needs:
+the shared memory directory, the event log and claims.
+
+## Development
+
+Node 22.13 or newer and pnpm 11.
+
+```sh
+pnpm install
+pnpm test            # vitest with the 99% statements and lines gate
+pnpm run typecheck
+pnpm run lint
+pnpm run format:check
+pnpm run build       # lib/ via tsdown
+```
+
+CI runs all of these on every push and pull request, plus a privacy guard that rejects
+personal paths, private e-mail addresses and credential-shaped tokens.
 
 ## Documents
 
@@ -108,4 +145,4 @@ with cross-harness hooks, shared memory and claims.
 
 ## License
 
-[MIT](LICENSE). Code ported from dsh-errkb keeps its own MIT notice.
+[MIT](LICENSE). Code ported from dsh-errkb keeps its own MIT notice; see [`NOTICE`](NOTICE).
