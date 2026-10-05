@@ -12,7 +12,7 @@ jobs:
   privacy-guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Ported from dsh-errkb's privacy guard (MIT; see NOTICE). antibody is a
       # public repository whose fixtures and docs talk about credentials and
