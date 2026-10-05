@@ -27,8 +27,9 @@
 // on tool A, then again on tool B, then A succeeded - resolves nothing; a
 // success on B afterwards does.
 //
-// The model's free text is never parsed for a fix: `err_record` (T15), through
+// The model's free text is never parsed for a fix: `antibody_record` (T15), through
 // the recorder's recordFix(), is the only way one is written.
+import { NOTICE_PREFIX } from "./notice";
 import { exitCode } from "./capture";
 
 /** Turns after the one an entry was last recorded in that still count. */
@@ -45,12 +46,12 @@ export type CaptureFixMode = (typeof CAPTURE_FIX_MODES)[number];
 
 /**
  * The one-shot prompt for an entry that looks resolved and has no fix. It
- * names `err_record` (T15), the one tool that writes a fix.
+ * names `antibody_record` (T15), the one tool that writes a fix.
  *
  * @param id - the entry.
  */
 export function askFixText(id: string): string {
-  return `[errkb] ${id} looks resolved. Record the fix with err_record in one sentence so it can be reused.`;
+  return `${NOTICE_PREFIX} ${id} looks resolved. Record the fix with antibody_record in one sentence so it can be reused.`;
 }
 
 /** The parts of one tool call that resolution detection reads. */
@@ -166,7 +167,7 @@ export class ResolutionTracker {
     return resolved;
   }
 
-  /** The entries being watched, for tests and `err_stats`. */
+  /** The entries being watched, for tests and `antibody_stats`. */
   watched(): string[] {
     return [...this.watches.keys()];
   }

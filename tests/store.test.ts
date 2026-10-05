@@ -589,7 +589,7 @@ describe("store: archive", () => {
   });
 });
 
-describe("store: archive one entry (err_forget, T15)", () => {
+describe("store: archive one entry (antibody_forget, T15)", () => {
   it("moves the entry to the archive with the reason in its notes", async () => {
     const { store, text } = memoryStore();
     for (let n = 1; n <= 3; n++) await store.append(input(n));

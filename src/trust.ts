@@ -168,7 +168,7 @@ export class FixTrust {
     this.store.save(this.state);
   }
 
-  /** A copy of the whole state, for persistence or `err_stats`. */
+  /** A copy of the whole state, for persistence or `antibody_stats`. */
   snapshot(): TrustState {
     return structuredClone(this.state);
   }
