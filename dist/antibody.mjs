@@ -492,13 +492,13 @@ function toToolCall(input) {
 //#region src/claude-code.ts
 /** The harness name, as agent names and events use it. */
 const CLAUDE_CODE = "claude-code";
-const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-const str = (value) => typeof value === "string" ? value : void 0;
+const isRecord$3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const str$1 = (value) => typeof value === "string" ? value : void 0;
 function outputText(value) {
 	if (value === void 0 || value === null) return void 0;
 	if (typeof value === "string") return value;
-	if (isRecord$2(value)) {
-		const streams = [str(value.stdout), str(value.stderr)].filter((s) => s !== void 0 && s !== "");
+	if (isRecord$3(value)) {
+		const streams = [str$1(value.stdout), str$1(value.stderr)].filter((s) => s !== void 0 && s !== "");
 		if (streams.length > 0) return streams.join("\n");
 	}
 	return JSON.stringify(value);
@@ -510,7 +510,7 @@ const EXIT_KEYS = [
 	"return_code"
 ];
 function outputExitCode(value) {
-	if (!isRecord$2(value)) return void 0;
+	if (!isRecord$3(value)) return void 0;
 	for (const key of EXIT_KEYS) {
 		const n = value[key];
 		if (typeof n === "number" && Number.isInteger(n)) return n;
@@ -530,22 +530,22 @@ function parseHookInput(text) {
 	} catch {
 		return;
 	}
-	if (!isRecord$2(value)) return void 0;
+	if (!isRecord$3(value)) return void 0;
 	const event = value.hook_event_name;
-	const sessionId = str(value.session_id);
-	const cwd = str(value.cwd);
+	const sessionId = str$1(value.session_id);
+	const cwd = str$1(value.cwd);
 	if (!HOOK_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
 	const input = {
 		event,
 		sessionId,
 		cwd
 	};
-	const agentId = str(value.agent_id);
+	const agentId = str$1(value.agent_id);
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
-	const toolName = str(value.tool_name);
+	const toolName = str$1(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord$2(value.tool_input)) {
-		const command = str(value.tool_input.command);
+	if (isRecord$3(value.tool_input)) {
+		const command = str$1(value.tool_input.command);
 		if (command !== void 0 && command.trim() !== "") input.command = command;
 	}
 	const result = value.tool_output ?? value.tool_response;
@@ -553,7 +553,7 @@ function parseHookInput(text) {
 	if (output !== void 0) input.output = output;
 	const exitCode = outputExitCode(result);
 	if (exitCode !== void 0) input.exitCode = exitCode;
-	const error = str(value.error);
+	const error = str$1(value.error);
 	if (error !== void 0) input.error = error;
 	return input;
 }
@@ -3252,6 +3252,122 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 	};
 }
 //#endregion
+//#region src/gemini.ts
+/** The harness name, as agent names and events use it. */
+const GEMINI = "gemini";
+/** Gemini CLI's hook events antibody handles, and what each one is to antibody. */
+const GEMINI_EVENTS = {
+	SessionStart: "SessionStart",
+	BeforeAgent: "UserPromptSubmit",
+	AfterTool: "PostToolUse",
+	SessionEnd: "SessionEnd"
+};
+/** Gemini CLI's names for its shell tool. */
+const GEMINI_SHELL_TOOLS = ["run_shell_command", "ShellTool"];
+const NOT_FAILURES = /* @__PURE__ */ new Set([
+	"sandbox_expansion_required",
+	"stop_execution",
+	"policy_violation"
+]);
+const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const str = (value) => typeof value === "string" ? value : void 0;
+/** `llmContent` as text: a string, a part, or a list of parts. */
+function contentText(value) {
+	if (typeof value === "string") return value;
+	if (Array.isArray(value)) return value.map(contentText).join("\n");
+	if (isRecord$2(value)) return str(value.text) ?? JSON.stringify(value);
+	return "";
+}
+const UNTRUSTED = /^\s*<untrusted_context>\n?([\s\S]*?)\n?<\/untrusted_context>\s*$/;
+const EXIT_CODE = /^Exit Code: (-?\d+)\s*$/m;
+const PROCESS_LINES = /^(?:Exit Code|Signal|Background PIDs|Process Group PGID): .*(?:\n|$)/gm;
+/**
+* A shell tool's result: its exit code, when it reports one, and the command's
+* own output and error lines without Gemini's labels and process details.
+*/
+function shellResult(text) {
+	const body = UNTRUSTED.exec(text)?.[1] ?? text;
+	const match = EXIT_CODE.exec(body);
+	const output = body.replace(PROCESS_LINES, "").replace(/^Output: (?:\(empty\))?/, "").trim();
+	return match === null ? { output } : {
+		exitCode: Number(match[1]),
+		output
+	};
+}
+/**
+* Parse a Gemini CLI hook's stdin.
+*
+* @param text - the JSON Gemini CLI wrote.
+* @returns the hook call in Claude Code's terms, or undefined for an event
+*   antibody does not handle or a payload it cannot read.
+*/
+function parseGeminiInput(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return;
+	}
+	if (!isRecord$2(value)) return void 0;
+	const native = value.hook_event_name;
+	const sessionId = str(value.session_id);
+	const cwd = str(value.cwd);
+	if (typeof native !== "string" || !Object.hasOwn(GEMINI_EVENTS, native) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
+	const input = {
+		event: GEMINI_EVENTS[native],
+		sessionId,
+		cwd
+	};
+	if (native !== "AfterTool") return input;
+	const toolName = str(value.tool_name);
+	if (toolName !== void 0) input.toolName = toolName;
+	if (isRecord$2(value.tool_input)) {
+		const command = str(value.tool_input.command);
+		if (command !== void 0 && command.trim() !== "") input.command = command;
+	}
+	const response = isRecord$2(value.tool_response) ? value.tool_response : {};
+	const content = contentText(response.llmContent);
+	const error = isRecord$2(response.error) ? response.error : void 0;
+	if (error !== void 0 && !NOT_FAILURES.has(str(error.type) ?? "")) {
+		input.event = "PostToolUseFailure";
+		input.error = str(error.message) ?? content;
+		return input;
+	}
+	if (toolName !== void 0 && GEMINI_SHELL_TOOLS.includes(toolName)) {
+		const shell = shellResult(content);
+		input.output = shell.output;
+		if (shell.exitCode !== void 0) input.exitCode = shell.exitCode;
+		return input;
+	}
+	input.output = content;
+	return input;
+}
+/** The most context one response carries: the same limit as for Claude Code. */
+const GEMINI_CONTEXT_MAX_CHARS = 1e4;
+const NATIVE = {
+	SessionStart: "SessionStart",
+	UserPromptSubmit: "BeforeAgent",
+	PostToolUse: "AfterTool",
+	PostToolUseFailure: "AfterTool"
+};
+/**
+* The stdout for a Gemini CLI hook: the notices as
+* `hookSpecificOutput.additionalContext`, one per line, or the empty string
+* when there is nothing to say or the event cannot carry context.
+*
+* @param event - the event the hook answers, in antibody's terms.
+* @param notices - notice bodies, each already inside the notice caps.
+*/
+function geminiResponse(event, notices) {
+	const lines = notices.filter((n) => n.trim() !== "");
+	const native = NATIVE[event];
+	if (lines.length === 0 || native === void 0) return "";
+	return JSON.stringify({ hookSpecificOutput: {
+		hookEventName: native,
+		additionalContext: clip(lines.join("\n"), GEMINI_CONTEXT_MAX_CHARS)
+	} });
+}
+//#endregion
 //#region src/mcp.ts
 /** Protocol versions this server speaks, newest first. */
 const MCP_PROTOCOL_VERSIONS = [
@@ -3881,6 +3997,17 @@ function createTools(context) {
 //#region src/cli.ts
 /** The version `antibody --version` prints. */
 const VERSION = "0.0.0";
+/** The harnesses `antibody hook` serves, by the name it is called with. */
+const HOOK_ADAPTERS = {
+	[CLAUDE_CODE]: {
+		parse: parseHookInput,
+		respond: hookResponse
+	},
+	[GEMINI]: {
+		parse: parseGeminiInput,
+		respond: geminiResponse
+	}
+};
 /** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
 const HARNESS_NAME = /^[a-z][a-z0-9-]{0,31}$/;
 /**
@@ -3909,7 +4036,7 @@ const TIMEOUT = Symbol("timeout");
 /**
 * `antibody hook <harness>`: handle one hook call. Always exits 0.
 *
-* @param harness - the harness whose hook called; only `claude-code` today.
+* @param harness - the harness whose hook called, a key of HOOK_ADAPTERS.
 * @param io - stdin, stdout, stderr and the environment.
 * @param deps - git, the deadline and the fleet factory.
 */
@@ -3917,8 +4044,9 @@ async function runHook(harness, io, deps = {}) {
 	const debug = io.env.ANTIBODY_DEBUG === "1";
 	let timer;
 	const work = async () => {
-		if (harness !== "claude-code") throw new Error(`unknown harness: ${harness}`);
-		const input = parseHookInput(await io.readStdin());
+		const adapter = Object.hasOwn(HOOK_ADAPTERS, harness) ? HOOK_ADAPTERS[harness] : void 0;
+		if (adapter === void 0) throw new Error(`unknown harness: ${harness}`);
+		const input = adapter.parse(await io.readStdin());
 		if (input === void 0) return "";
 		let memory;
 		try {
@@ -3926,9 +4054,9 @@ async function runHook(harness, io, deps = {}) {
 		} catch {
 			return "";
 		}
-		const agent = agentName(CLAUDE_CODE, worktreeRoot(input.cwd, deps.git), io.env);
+		const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
 		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(memory, agent, input.sessionId);
-		return hookResponse(input.event, await dispatch(input, fleet));
+		return adapter.respond(input.event, await dispatch(input, fleet));
 	};
 	try {
 		const deadline = new Promise((resolve) => {
@@ -3947,6 +4075,7 @@ async function runHook(harness, io, deps = {}) {
 	return 0;
 }
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody hook gemini        handle one Gemini CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody --version
 `;

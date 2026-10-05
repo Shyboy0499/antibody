@@ -1,6 +1,7 @@
 // The antibody command line.
 //
 //   antibody hook claude-code   handle one Claude Code hook call (stdin JSON)
+//   antibody hook gemini        handle one Gemini CLI hook call (stdin JSON)
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody --version          print the version
 //
@@ -12,8 +13,9 @@
 import { agentName, worktreeRoot } from "./agent";
 import { CLAUDE_CODE, hookResponse, parseHookInput } from "./claude-code";
 import { toCapture, toToolCall } from "./hook-input";
-import type { HookInput } from "./hook-input";
+import type { HookEvent, HookInput } from "./hook-input";
 import { createFleet } from "./fleet";
+import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { memoryDir } from "./paths";
@@ -51,6 +53,18 @@ export interface McpDeps {
   cwd?: string;
   pid?: number;
 }
+
+/** One harness's hook protocol: its payload in, its response out. */
+export interface HookAdapter {
+  parse(text: string): HookInput | undefined;
+  respond(event: HookEvent, notices: readonly string[]): string;
+}
+
+/** The harnesses `antibody hook` serves, by the name it is called with. */
+export const HOOK_ADAPTERS: Readonly<Record<string, HookAdapter>> = {
+  [CLAUDE_CODE]: { parse: parseHookInput, respond: hookResponse },
+  [GEMINI]: { parse: parseGeminiInput, respond: geminiResponse },
+};
 
 /** A harness name as `antibody mcp` accepts it: it becomes part of agent names. */
 const HARNESS_NAME = /^[a-z][a-z0-9-]{0,31}$/;
@@ -91,7 +105,7 @@ const TIMEOUT = Symbol("timeout");
 /**
  * `antibody hook <harness>`: handle one hook call. Always exits 0.
  *
- * @param harness - the harness whose hook called; only `claude-code` today.
+ * @param harness - the harness whose hook called, a key of HOOK_ADAPTERS.
  * @param io - stdin, stdout, stderr and the environment.
  * @param deps - git, the deadline and the fleet factory.
  */
@@ -103,8 +117,11 @@ export async function runHook(
   const debug = io.env.ANTIBODY_DEBUG === "1";
   let timer: NodeJS.Timeout | undefined;
   const work = async (): Promise<string> => {
-    if (harness !== CLAUDE_CODE) throw new Error(`unknown harness: ${harness}`);
-    const input = parseHookInput(await io.readStdin());
+    const adapter = Object.hasOwn(HOOK_ADAPTERS, harness)
+      ? HOOK_ADAPTERS[harness]
+      : undefined;
+    if (adapter === undefined) throw new Error(`unknown harness: ${harness}`);
+    const input = adapter.parse(await io.readStdin());
     if (input === undefined) return "";
     let memory: string;
     try {
@@ -112,17 +129,13 @@ export async function runHook(
     } catch {
       return "";
     }
-    const agent = agentName(
-      CLAUDE_CODE,
-      worktreeRoot(input.cwd, deps.git),
-      io.env,
-    );
+    const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
     const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s)))(
       memory,
       agent,
       input.sessionId,
     );
-    return hookResponse(input.event, await dispatch(input, fleet));
+    return adapter.respond(input.event, await dispatch(input, fleet));
   };
   try {
     const deadline = new Promise<typeof TIMEOUT>((resolve) => {
@@ -149,6 +162,7 @@ export async function runHook(
 }
 
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody hook gemini        handle one Gemini CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody --version
 `;
