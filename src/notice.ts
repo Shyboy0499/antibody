@@ -283,6 +283,18 @@ export const DEFAULT_CAP_LIMITS: CapLimits = {
   fixedPerSession: 1,
 };
 
+/** CapTracker's counts as plain data, so a hook process can save them between calls. */
+export interface CapSnapshot {
+  step: number;
+  turn: number;
+  perId: Record<string, number>;
+}
+
+const count = (value: unknown): number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : 0;
+
 /**
  * Counts one session's notices. Create one per session; call beginTurn() and
  * beginStep() at those boundaries, and tryEmit() before each notice.
@@ -299,6 +311,37 @@ export class CapTracker {
     for (const key of Object.keys(l) as (keyof CapLimits)[])
       l[key] = Math.min(l[key], limits[key] ?? l[key]);
     this.limits = l;
+  }
+
+  /**
+   * A tracker carrying on from saved counts. Anything malformed in the
+   * snapshot counts as zero, so a damaged file can only make antibody quieter
+   * for a moment, never louder.
+   *
+   * @param snapshot - what snapshot() returned, or undefined for a new session.
+   * @param limits - as for the constructor.
+   */
+  static restore(
+    snapshot: Partial<CapSnapshot> | undefined,
+    limits: Partial<CapLimits> = {},
+  ): CapTracker {
+    const caps = new CapTracker(limits);
+    caps.step = count(snapshot?.step);
+    caps.turn = count(snapshot?.turn);
+    const perId = snapshot?.perId;
+    if (typeof perId === "object" && perId !== null)
+      for (const [id, used] of Object.entries(perId))
+        if (count(used) > 0) caps.perId.set(id, count(used));
+    return caps;
+  }
+
+  /** The counts, for restore() in the next hook process. */
+  snapshot(): CapSnapshot {
+    return {
+      step: this.step,
+      turn: this.turn,
+      perId: Object.fromEntries(this.perId),
+    };
   }
 
   /** A new turn: the turn and step budgets start again. */

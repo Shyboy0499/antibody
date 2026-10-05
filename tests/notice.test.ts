@@ -373,3 +373,43 @@ describe("the prefix", () => {
     ).toBe(true);
   });
 });
+
+describe("CapTracker snapshots", () => {
+  it("carries the budgets over to the next process", () => {
+    const first = new CapTracker();
+    expect(first.tryEmit("E-0001")).toBe(true);
+    const next = CapTracker.restore(
+      JSON.parse(JSON.stringify(first.snapshot())),
+    );
+    expect(next.snapshot()).toEqual({
+      step: 1,
+      turn: 1,
+      perId: { "E-0001": 1 },
+    });
+    expect(next.tryEmit("E-0002")).toBe(false);
+    next.beginStep();
+    expect(next.tryEmit("E-0001")).toBe(true);
+    next.beginStep();
+    expect(next.tryEmit("E-0001")).toBe(false);
+  });
+
+  it("starts fresh without a snapshot, and keeps the limits it is given", () => {
+    const caps = CapTracker.restore(undefined, { perTurn: 1 });
+    expect(caps.snapshot()).toEqual({ step: 0, turn: 0, perId: {} });
+    expect(caps.limits.perTurn).toBe(1);
+  });
+
+  it("counts anything malformed as zero", () => {
+    const caps = CapTracker.restore({
+      step: -1,
+      turn: 2.5,
+      perId: { "E-1": "2" as unknown as number, "E-2": 1, "E-3": -4, "E-4": 0 },
+    });
+    expect(caps.snapshot()).toEqual({ step: 0, turn: 0, perId: { "E-2": 1 } });
+    expect(
+      CapTracker.restore({
+        perId: null as unknown as Record<string, number>,
+      }).snapshot(),
+    ).toEqual({ step: 0, turn: 0, perId: {} });
+  });
+});
