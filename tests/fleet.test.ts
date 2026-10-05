@@ -406,3 +406,61 @@ describe("fleet: successes", () => {
     expect(notice).toContain(`fix: ${FIX}`);
   });
 });
+
+describe("fleet: turns and session end", () => {
+  const ok: ToolCall = { toolName: "Read", isError: false, text: "" };
+  const fleet = (session: string) =>
+    createFleet(memory, `agent-${session}`, session);
+
+  it("forgets the turn's injections on a new prompt, so a fix is not doubted across turns", async () => {
+    await fail("s-a");
+    await recordFix("open");
+    expect((await fail("s-b"))[0]).toContain("Known fix");
+    await fleet("s-b").beginTurn();
+    expect((await fail("s-b"))[0]).toContain("Known fix");
+    const state = parseState(await readFile(filesIn(memory).state, "utf8"));
+    expect(state?.trust["E-0001"]?.recurredAfterInject).toBe(0);
+  });
+
+  it("lets a watch lapse after the next turn", async () => {
+    await fail("s-a");
+    await fleet("s-a").beginTurn();
+    await fleet("s-a").beginTurn();
+    expect(await fleet("s-a").success(ok)).toEqual([]);
+  });
+
+  it("still resolves within the next turn", async () => {
+    await fail("s-a");
+    await fleet("s-a").beginTurn();
+    expect(await fleet("s-a").success(ok)).toHaveLength(1);
+  });
+
+  it("delivers held fixes when a prompt arrives", async () => {
+    await fail("s-a");
+    await fail("s-b");
+    await recordFix();
+    const [notice] = await fleet("s-b").beginTurn();
+    expect(notice).toContain(`fix: ${FIX}`);
+  });
+
+  it("releases a session's claims when it ends, so the next agent takes over", async () => {
+    await fail("s-a");
+    const released = await fleet("s-a").endSession();
+    expect(released).toHaveLength(1);
+    expect((await events()).at(-1)).toMatchObject({
+      kind: "release",
+      id: released[0],
+    });
+    expect(await readFile(filesIn(memory).claims, "utf8")).not.toContain("s-a");
+    await expect(
+      readFile(join(memory, "sessions", "s-a.json"), "utf8"),
+    ).rejects.toThrow();
+    expect(await fail("s-b")).toEqual([
+      "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
+    ]);
+  });
+
+  it("ends a session that never wrote anything", async () => {
+    expect(await fleet("s-z").endSession()).toEqual([]);
+  });
+});

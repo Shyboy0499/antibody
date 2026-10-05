@@ -93,6 +93,20 @@ export interface Fleet {
    * @returns the notices to show the agent; often none.
    */
   success(call: ToolCall): Promise<string[]>;
+  /**
+   * The user sent a new prompt: the turn's notice budgets start again, old
+   * resolution watches lapse, and held fixes are delivered.
+   *
+   * @returns the notices to show the agent; often none.
+   */
+  beginTurn(): Promise<string[]>;
+  /**
+   * The session ended: release every claim it held, so no other agent waits on
+   * it, and forget its state.
+   *
+   * @returns the fingerprints that were released.
+   */
+  endSession(): Promise<string[]>;
 }
 
 /** The per-call pieces restored from a session file. */
@@ -355,6 +369,28 @@ export function createFleet(
         await persist(s, rt, before);
         return notices;
       });
+    },
+
+    async beginTurn() {
+      return sessionFile.update(async (s) => {
+        const machine = (await state.read()).state;
+        const before = structuredClone(machine.trust);
+        const rt = restore(s, machine.trust);
+        rt.injector.beginTurn();
+        rt.tracker.beginTurn();
+        const notices: string[] = [];
+        await deliver(s, rt, machine, notices);
+        await persist(s, rt, before);
+        return notices;
+      });
+    },
+
+    async endSession() {
+      const released = await claims.releaseSession(session);
+      for (const fingerprint of released)
+        await log({ kind: "release", id: fingerprint, text: "session ended" });
+      await sessionFile.remove();
+      return released;
     },
 
     async success(call) {
