@@ -13,18 +13,14 @@
 // or parses to the wrong shape, is skipped and counted, never thrown.
 //
 // Privacy. An event's free text goes through redact() before it is written.
-import {
-  appendFileSync,
-  closeSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-} from "node:fs";
 import { dirname } from "node:path";
+import { nodeFs } from "./lazy";
 import { clip } from "./notice";
 import type { NoticeKind } from "./notice";
 import { redact } from "./redact";
+
+const { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readSync } =
+  nodeFs;
 
 /** The version every event line carries. */
 export const EVENTS_VERSION = 1;

@@ -7,8 +7,10 @@
 // does anything. So stdin is read and stdout written through their file
 // descriptors. Only `antibody mcp`, which reads stdin line by line for as long
 // as it runs, uses the stdin stream.
-import { fstatSync, readFileSync, writeSync } from "node:fs";
+import { nodeFs } from "./lazy";
 import { main } from "./cli";
+
+const { fstatSync, readFileSync, writeSync } = nodeFs;
 
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code;
 
