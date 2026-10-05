@@ -45,3 +45,9 @@ jobs:
       # straight from git. A source change without a rebuilt bundle fails here.
       - name: Bundle is up to date
         run: git diff --exit-code -- dist/
+
+      # The M2 check against the committed bundle: a fix recorded in one
+      # worktree reaches a session in another within a second. Hook latency is
+      # printed, not enforced: shared runners are too noisy for a 50 ms gate.
+      - name: End-to-end
+        run: pnpm run e2e -- --samples 5
