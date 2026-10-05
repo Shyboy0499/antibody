@@ -5,7 +5,19 @@
   "description": "Herd immunity for coding-agent fleets: when one agent beats an error, every agent running beside it gets the fix.",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "oxlint",
@@ -17,6 +29,7 @@
     "@vitest/coverage-v8": "^2.1.9",
     "oxlint": "^1.86.0",
     "prettier": "^3.9.9",
+    "tsdown": "0.22.2",
     "typescript": "~5.7.2",
     "vitest": "^2.1.9"
   },
