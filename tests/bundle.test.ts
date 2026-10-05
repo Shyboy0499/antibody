@@ -108,3 +108,25 @@ describe("the committed bundle as an MCP server", () => {
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
   });
 });
+
+describe("the committed bundle's setup", () => {
+  it("points Gemini CLI's hooks at itself", () => {
+    const settings = JSON.parse(
+      run([
+        "setup",
+        "gemini",
+        "--print",
+        "--settings",
+        join(root, "none.json"),
+      ]),
+    );
+    expect(settings.mcpServers.antibody.args).toEqual([
+      bundle,
+      "mcp",
+      "gemini",
+    ]);
+    expect(settings.hooks.AfterTool[0].hooks[0].command).toBe(
+      `node ${bundle} hook gemini`,
+    );
+  });
+});

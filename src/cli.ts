@@ -3,6 +3,7 @@
 //   antibody hook claude-code   handle one Claude Code hook call (stdin JSON)
 //   antibody hook gemini        handle one Gemini CLI hook call (stdin JSON)
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
+//   antibody setup gemini       add the hooks and MCP server to Gemini CLI
 //   antibody --version          print the version
 //
 // A hook must never break or block the agent it runs in, so `hook` fails open:
@@ -21,6 +22,8 @@ import { createMcpServer, serveLines } from "./mcp";
 import { memoryDir } from "./paths";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
+import { runSetup } from "./setup";
+import type { SetupDeps } from "./setup";
 import { createTools } from "./tools";
 
 /** The version `antibody --version` prints. */
@@ -164,6 +167,7 @@ export async function runHook(
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
        antibody hook gemini        handle one Gemini CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
+       antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody --version
 `;
 
@@ -215,11 +219,12 @@ export async function runMcp(
 export async function main(
   argv: readonly string[],
   io: CliIo,
-  deps: HookDeps & McpDeps = {},
+  deps: HookDeps & McpDeps & SetupDeps = {},
 ): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
   if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
+  if (command === "setup") return runSetup(rest, io, deps);
   if (command === "--version" || command === "-v") {
     io.stdout(`${VERSION}\n`);
     return 0;

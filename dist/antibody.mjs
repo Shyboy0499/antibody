@@ -492,12 +492,12 @@ function toToolCall(input) {
 //#region src/claude-code.ts
 /** The harness name, as agent names and events use it. */
 const CLAUDE_CODE = "claude-code";
-const isRecord$3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isRecord$4 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const str$1 = (value) => typeof value === "string" ? value : void 0;
 function outputText(value) {
 	if (value === void 0 || value === null) return void 0;
 	if (typeof value === "string") return value;
-	if (isRecord$3(value)) {
+	if (isRecord$4(value)) {
 		const streams = [str$1(value.stdout), str$1(value.stderr)].filter((s) => s !== void 0 && s !== "");
 		if (streams.length > 0) return streams.join("\n");
 	}
@@ -510,7 +510,7 @@ const EXIT_KEYS = [
 	"return_code"
 ];
 function outputExitCode(value) {
-	if (!isRecord$3(value)) return void 0;
+	if (!isRecord$4(value)) return void 0;
 	for (const key of EXIT_KEYS) {
 		const n = value[key];
 		if (typeof n === "number" && Number.isInteger(n)) return n;
@@ -530,7 +530,7 @@ function parseHookInput(text) {
 	} catch {
 		return;
 	}
-	if (!isRecord$3(value)) return void 0;
+	if (!isRecord$4(value)) return void 0;
 	const event = value.hook_event_name;
 	const sessionId = str$1(value.session_id);
 	const cwd = str$1(value.cwd);
@@ -544,7 +544,7 @@ function parseHookInput(text) {
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
 	const toolName = str$1(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord$3(value.tool_input)) {
+	if (isRecord$4(value.tool_input)) {
 		const command = str$1(value.tool_input.command);
 		if (command !== void 0 && command.trim() !== "") input.command = command;
 	}
@@ -3269,13 +3269,13 @@ const NOT_FAILURES = /* @__PURE__ */ new Set([
 	"stop_execution",
 	"policy_violation"
 ]);
-const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isRecord$3 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const str = (value) => typeof value === "string" ? value : void 0;
 /** `llmContent` as text: a string, a part, or a list of parts. */
 function contentText(value) {
 	if (typeof value === "string") return value;
 	if (Array.isArray(value)) return value.map(contentText).join("\n");
-	if (isRecord$2(value)) return str(value.text) ?? JSON.stringify(value);
+	if (isRecord$3(value)) return str(value.text) ?? JSON.stringify(value);
 	return "";
 }
 const UNTRUSTED = /^\s*<untrusted_context>\n?([\s\S]*?)\n?<\/untrusted_context>\s*$/;
@@ -3308,7 +3308,7 @@ function parseGeminiInput(text) {
 	} catch {
 		return;
 	}
-	if (!isRecord$2(value)) return void 0;
+	if (!isRecord$3(value)) return void 0;
 	const native = value.hook_event_name;
 	const sessionId = str(value.session_id);
 	const cwd = str(value.cwd);
@@ -3321,13 +3321,13 @@ function parseGeminiInput(text) {
 	if (native !== "AfterTool") return input;
 	const toolName = str(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
-	if (isRecord$2(value.tool_input)) {
+	if (isRecord$3(value.tool_input)) {
 		const command = str(value.tool_input.command);
 		if (command !== void 0 && command.trim() !== "") input.command = command;
 	}
-	const response = isRecord$2(value.tool_response) ? value.tool_response : {};
+	const response = isRecord$3(value.tool_response) ? value.tool_response : {};
 	const content = contentText(response.llmContent);
-	const error = isRecord$2(response.error) ? response.error : void 0;
+	const error = isRecord$3(response.error) ? response.error : void 0;
 	if (error !== void 0 && !NOT_FAILURES.has(str(error.type) ?? "")) {
 		input.event = "PostToolUseFailure";
 		input.error = str(error.message) ?? content;
@@ -3389,7 +3389,7 @@ const RPC_ERROR = {
 * the tools. Clients may add it to the system prompt.
 */
 const MCP_INSTRUCTIONS = "antibody shares error fixes across the coding agents working on this repository. When a command or tool fails with an error you have not seen, call antibody_lookup with the error text before diagnosing it: another agent may already have fixed it, or be fixing it now. When you get past an error, call antibody_record with its entry ID and the fix in a sentence or two, so every other agent gets it.";
-const isRecord$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isRecord$2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const isId = (value) => typeof value === "string" || typeof value === "number" && Number.isFinite(value) || value === null;
 const failure = (id, code, message) => ({
 	jsonrpc: "2.0",
@@ -3445,13 +3445,13 @@ function createMcpServer(tools, info) {
 	}
 	return { async handle(message) {
 		if (Array.isArray(message)) return failure(null, RPC_ERROR.invalidRequest, "batches are not supported");
-		if (!isRecord$1(message) || message.jsonrpc !== "2.0") return failure(null, RPC_ERROR.invalidRequest, "not a JSON-RPC 2.0 message");
+		if (!isRecord$2(message) || message.jsonrpc !== "2.0") return failure(null, RPC_ERROR.invalidRequest, "not a JSON-RPC 2.0 message");
 		if (message.method === void 0 && "id" in message) return void 0;
 		const { id, method, params } = message;
 		const notification = !("id" in message);
 		if (typeof method !== "string" || !notification && !isId(id)) return notification ? void 0 : failure(isId(id) ? id : null, RPC_ERROR.invalidRequest, "invalid request");
 		if (notification) return void 0;
-		if (params !== void 0 && !isRecord$1(params)) return failure(id, RPC_ERROR.invalidParams, "params must be an object");
+		if (params !== void 0 && !isRecord$2(params)) return failure(id, RPC_ERROR.invalidParams, "params must be an object");
 		try {
 			return {
 				jsonrpc: "2.0",
@@ -3500,6 +3500,137 @@ async function serveLines(server, input, write) {
 		}));
 	}
 	await Promise.all(pending);
+}
+//#endregion
+//#region src/setup.ts
+/** The name every hook and MCP server antibody registers goes by. */
+const SETUP_NAME = "antibody";
+/** A Gemini CLI hook's time limit, in milliseconds. */
+const GEMINI_HOOK_TIMEOUT_MS = 1e4;
+const isRecord$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+/** A path as one shell word, for a command string a shell will run. */
+function shellQuote(path) {
+	return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'"'"'`)}'`;
+}
+/** Whether a hook definition holds only antibody's hooks. */
+function ours(definition) {
+	return isRecord$1(definition) && Array.isArray(definition.hooks) && definition.hooks.length > 0 && definition.hooks.every((h) => isRecord$1(h) && h.name === "antibody");
+}
+/**
+* Gemini CLI settings with antibody's hooks and MCP server added, or taken
+* out. Other entries, and every other setting, are kept as they were.
+*
+* @param settings - the parsed settings.json, or {} when there is none.
+* @param bundle - the absolute path of dist/antibody.mjs.
+* @param node - the Node.js executable the hooks run.
+* @param remove - take antibody's entries out instead of adding them.
+* @returns the new settings; the input is not changed.
+*/
+function geminiSettings(settings, bundle, node, remove = false) {
+	const next = { ...settings };
+	const hooks = isRecord$1(settings.hooks) ? { ...settings.hooks } : {};
+	const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${GEMINI}`;
+	for (const event of Object.keys(GEMINI_EVENTS)) {
+		const kept = (Array.isArray(hooks[event]) ? hooks[event] : []).filter((definition) => !ours(definition));
+		if (!remove) kept.push({ hooks: [{
+			type: "command",
+			name: SETUP_NAME,
+			command,
+			timeout: GEMINI_HOOK_TIMEOUT_MS
+		}] });
+		if (kept.length > 0) hooks[event] = kept;
+		else delete hooks[event];
+	}
+	if (Object.keys(hooks).length > 0) next.hooks = hooks;
+	else delete next.hooks;
+	const servers = isRecord$1(settings.mcpServers) ? { ...settings.mcpServers } : {};
+	if (remove) delete servers[SETUP_NAME];
+	else servers[SETUP_NAME] = {
+		command: node,
+		args: [
+			bundle,
+			"mcp",
+			GEMINI
+		]
+	};
+	if (Object.keys(servers).length > 0) next.mcpServers = servers;
+	else delete next.mcpServers;
+	return next;
+}
+const SETUP_USAGE = `usage: antibody setup gemini [--settings <file>] [--remove] [--print]
+  --settings <file>  the settings file (default ~/.gemini/settings.json)
+  --remove           take antibody's hooks and MCP server out again
+  --print            print the new settings instead of writing them
+`;
+/**
+* `antibody setup gemini`: add antibody's hooks and MCP server to Gemini CLI's
+* settings, or take them out.
+*
+* @param args - the arguments after `setup`.
+* @param io - stdout and stderr, and the environment.
+* @param deps - the home directory and the bundle path; injected in tests.
+* @returns the exit code: 0, 1 when the settings cannot be read, 2 on usage.
+*/
+async function runSetup(args, io, deps = {}) {
+	const usage = (problem) => {
+		io.stderr(`antibody: ${problem}\n${SETUP_USAGE}`);
+		return 2;
+	};
+	let harness;
+	let file;
+	let remove = false;
+	let print = false;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--remove") remove = true;
+		else if (arg === "--print") print = true;
+		else if (arg === "--settings") {
+			file = args[++i];
+			if (file === void 0) return usage("--settings needs a file");
+		} else if (arg.startsWith("-")) return usage(`unknown option: ${arg}`);
+		else if (harness === void 0) harness = arg;
+		else return usage(`unexpected argument: ${arg}`);
+	}
+	if (harness !== "gemini") return usage(harness === void 0 ? "setup needs a harness" : `setup does not know ${harness}`);
+	const home = deps.home ?? io.env.HOME ?? "";
+	const path = resolve(file ?? join(home, ".gemini", "settings.json"));
+	let settings = {};
+	let text;
+	try {
+		text = nodeFs.readFileSync(path, "utf8");
+	} catch (error) {
+		if (error.code !== "ENOENT") {
+			io.stderr(`antibody: cannot read ${path}: ${String(error)}\n`);
+			return 1;
+		}
+	}
+	if (text !== void 0 && text.trim() !== "") {
+		let parsed;
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			parsed = void 0;
+		}
+		if (isRecord$1(parsed)) settings = parsed;
+		else if (print) io.stderr(`antibody: ${path} is not plain JSON; printing antibody's entries alone.\n`);
+		else {
+			io.stderr(`antibody: ${path} is not plain JSON (comments, perhaps), so it was left as it was. Run 'antibody setup gemini --print' and merge the entries by hand.\n`);
+			return 1;
+		}
+	}
+	const bundle = deps.bundle ?? nodeFs.realpathSync(process.argv[1]);
+	const next = geminiSettings(settings, bundle, "node", remove);
+	const json = `${JSON.stringify(next, null, 2)}\n`;
+	if (print) {
+		io.stdout(json);
+		return 0;
+	}
+	nodeFs.mkdirSync(dirname(path), { recursive: true });
+	const temp = `${path}.antibody-${process.pid}.tmp`;
+	nodeFs.writeFileSync(temp, json);
+	nodeFs.renameSync(temp, path);
+	io.stdout(remove ? `Removed antibody's hooks and MCP server from ${path}.\n` : `Added antibody's hooks (${Object.keys(GEMINI_EVENTS).join(", ")}) and MCP server to ${path}.\nRestart Gemini CLI to load them.\n`);
+	return 0;
 }
 //#endregion
 //#region src/tools.ts
@@ -4077,6 +4208,7 @@ async function runHook(harness, io, deps = {}) {
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
        antibody hook gemini        handle one Gemini CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
+       antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody --version
 `;
 /**
@@ -4124,6 +4256,7 @@ async function main(argv, io, deps = {}) {
 	const [command, ...rest] = argv;
 	if (command === "hook") return runHook(rest[0] ?? "", io, deps);
 	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
+	if (command === "setup") return runSetup(rest, io, deps);
 	if (command === "--version" || command === "-v") {
 		io.stdout(`${VERSION}\n`);
 		return 0;
