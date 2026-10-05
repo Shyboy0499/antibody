@@ -586,3 +586,46 @@ describe("antibody hook gemini, beside Claude Code", () => {
     expect(await hookAs("gemini", event("SessionEnd"))).toBeUndefined();
   });
 });
+
+describe("antibody stats", () => {
+  const stats = async (cwd: string, ...args: string[]) => {
+    let out = "";
+    let err = "";
+    const code = await main(
+      ["stats", ...args],
+      {
+        readStdin: async () => "",
+        stdout: (t) => void (out += t),
+        stderr: (t) => void (err += t),
+        env: {},
+      },
+      { cwd },
+    );
+    return { code, out, err };
+  };
+
+  it("prints the ledger of the repository it runs in", async () => {
+    const run = await stats(agentB);
+    expect(run.code).toBe(0);
+    expect(run.err).toBe("");
+    expect(run.out).toMatch(
+      new RegExp(
+        `^Memory: ${memoryDir(agentA).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n`,
+      ),
+    );
+    expect(run.out).toContain("Entries: ");
+    expect(run.out.endsWith("\n")).toBe(true);
+  });
+
+  it("fails outside a repository, and refuses arguments", async () => {
+    const outside = await stats(root);
+    expect(outside).toEqual({
+      code: 1,
+      out: "",
+      err: `antibody: not inside a git repository: ${root}\n`,
+    });
+    const extra = await stats(agentA, "--json");
+    expect(extra.code).toBe(2);
+    expect(extra.err).toContain("stats takes no arguments");
+  });
+});

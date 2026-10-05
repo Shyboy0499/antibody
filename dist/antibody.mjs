@@ -4377,6 +4377,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
+       antibody stats              print the memory's ledger for this repository
        antibody --version
 `;
 /**
@@ -4413,6 +4414,35 @@ async function runMcp(harness, io, deps = {}) {
 	return 0;
 }
 /**
+* `antibody stats`: print the antibody_stats ledger for the repository the
+* working directory is in: entries, hits, notices and the tokens they saved,
+* what is being diagnosed, distrusted fixes.
+*
+* @param args - the arguments after `stats`; none are taken.
+* @param io - stdout for the ledger, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+* @returns 0, 1 when the memory cannot be read, 2 on usage.
+*/
+async function runStats(args, io, deps = {}) {
+	if (args.length > 0) {
+		io.stderr(`antibody: stats takes no arguments\n${USAGE}`);
+		return 2;
+	}
+	const cwd = deps.cwd ?? process.cwd();
+	const [stats] = createTools({
+		memory: () => memoryDir(cwd, deps.git, io.env),
+		agent: agentName("cli", worktreeRoot(cwd, deps.git), io.env),
+		session: `cli-${deps.pid ?? process.pid}`
+	}).filter((tool) => tool.name === "antibody_stats");
+	const result = await stats.call({});
+	if (result.isError) {
+		io.stderr(`antibody: ${result.text.replace(/^antibody_stats: /, "")}\n`);
+		return 1;
+	}
+	io.stdout(`${result.text}\n`);
+	return 0;
+}
+/**
 * The command line's entry point.
 *
 * @param argv - the arguments after the program name.
@@ -4425,6 +4455,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "hook") return runHook(rest[0] ?? "", io, deps);
 	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
 	if (command === "setup") return runSetup(rest, io, deps);
+	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "--version" || command === "-v") {
 		io.stdout(`${VERSION}\n`);
 		return 0;
