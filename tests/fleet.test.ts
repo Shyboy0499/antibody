@@ -345,15 +345,27 @@ describe("fleet: deliveries", () => {
     expect(later).toContain(`fix: ${FIX}`);
   });
 
+  // Spends a session's turn on three known fixes for other errors.
+  const spendTurn = async (session: string) => {
+    const known = [
+      "EACCES: permission denied, mkdir 'var/run/shop'",
+      "TypeError: Cannot read properties of undefined (reading 'price')",
+      "SyntaxError: Unexpected token } in JSON",
+    ].map((message): [CaptureInput, ToolCall] => [
+      { kind: "tool", toolName: "Read", isError: true, message },
+      { toolName: "Read", isError: true, text: message },
+    ]);
+    for (const [c, t] of known) await fleet("s-c").failure(c, t);
+    for (const id of ["E-0002", "E-0003", "E-0004"])
+      await createStore(filesIn(memory)).update(id, { fix: "Fixed it." });
+    const told = [];
+    for (const [c, t] of known)
+      told.push((await fleet(session).failure(c, t)).length);
+    return told;
+  };
+
   it("delivers the promised fix even once the turn's budget is spent", async () => {
-    // s-b was told once in beforeEach; a second hint and a fix for another
-    // error spend the rest of its turn's three notices.
-    expect(await fleet("s-b").failure(capture, call)).toHaveLength(1);
-    await fleet("s-c").failure(other, otherCall);
-    await createStore(filesIn(memory)).update("E-0002", {
-      fix: "Use a branch of your own.",
-    });
-    expect(await fleet("s-b").failure(other, otherCall)).toHaveLength(1);
+    expect(await spendTurn("s-b")).toEqual([1, 1, 1]);
     await recordFix();
     const [notice] = await fleet("s-b").poll();
     expect(notice).toContain(`fix: ${FIX}`);
@@ -361,15 +373,24 @@ describe("fleet: deliveries", () => {
   });
 
   it("hands the promised fix to a hit on the awaited entry once the turn's budget is spent", async () => {
-    expect(await fleet("s-b").failure(capture, call)).toHaveLength(1);
-    await fleet("s-c").failure(other, otherCall);
-    await createStore(filesIn(memory)).update("E-0002", {
-      fix: "Use a branch of your own.",
-    });
-    expect(await fleet("s-b").failure(other, otherCall)).toHaveLength(1);
+    await spendTurn("s-b");
     await recordFix();
     const [notice] = await fleet("s-b").failure(capture, call);
     expect(notice).toContain(`fix: ${FIX}`);
+  });
+
+  it("still tells an agent who is on an error once its turn's budget is spent", async () => {
+    await spendTurn("s-d");
+    await fleet("s-a").failure(other, otherCall);
+    const [hint] = await fleet("s-d").failure(other, otherCall);
+    expect(hint).toContain("agent-s-a has been diagnosing this");
+  });
+
+  it("does not let claim hints spend the turn's budget", async () => {
+    // s-b's hint in beforeEach, and a second one, leave its turn's three
+    // notices for the three known fixes.
+    expect(await fleet("s-b").failure(capture, call)).toHaveLength(1);
+    expect(await spendTurn("s-b")).toEqual([1, 1, 1]);
   });
 
   it("does nothing for a session that waits for nothing", async () => {

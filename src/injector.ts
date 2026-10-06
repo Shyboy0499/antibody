@@ -59,7 +59,7 @@ export class Injector {
    * @param event - the hit or the miss.
    * @param observed - observe() already saw this hit; do not count it again.
    * @param promised - the session was told this entry's fix would be passed
-   *   on (a claim hint): a fix is not held back by the turn's budget.
+   *   on (a claim hint): the fix is a hand-over, outside the turn's budget.
    * @returns the notice to inject, or undefined to stay silent.
    */
   offer(

@@ -258,7 +258,13 @@ export function createFleet(
       text: `held by ${outcome.holder.agent}`,
     });
     // With injection off (paused, or the setting), the hint is not shown either.
-    if (o.inject === "off" || !rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
+    // The hint is a hand-over, outside the turn's budget: without it the agent
+    // would diagnose the error alongside the peer.
+    if (
+      o.inject === "off" ||
+      !rt.caps.tryEmit(`${fingerprint}\0hold`, false, true)
+    )
+      return;
     const elapsed = clock.now().getTime() - Date.parse(outcome.holder.since);
     const text = claimHintText(label, outcome.holder.agent, elapsed);
     notices.push(text);
