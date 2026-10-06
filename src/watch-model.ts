@@ -14,8 +14,10 @@
 import type { ClaimsState } from "./claims";
 import { activeClaim } from "./claims";
 import type { MemoryEvent } from "./events";
+import { plain } from "./exchange";
 import { FIX_NOTICE_KINDS, oneLine } from "./notice";
 import type { NoticeKind } from "./notice";
+import { pendingReview } from "./review";
 import type { Entry } from "./store";
 import { ASSUMED_DIAGNOSIS_TOKENS } from "./tools";
 
@@ -59,6 +61,8 @@ export interface MemoryFigures {
   open: number;
   /** Fix notices over hits of entries that had a fix to give, 0 to 1. */
   immunity: number;
+  /** Entries holding something back until a person reviews it. */
+  held: number;
 }
 
 /** One row of the antibodies pane. */
@@ -69,6 +73,8 @@ export interface AntibodyRow {
   title: string;
   status: Entry["status"];
   fix: string;
+  /** Its fix or text waits for a person's review: `antibody review`. */
+  held?: true;
   /** Who is diagnosing it now, when it has no fix and a live claim. */
   diagnosing?: string;
   /** Who recorded its fix. */
@@ -219,7 +225,10 @@ export function fleetView(
   const notices = events.filter((e) => e.kind === "notice");
   const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
   const fixNotices = notices.filter(fixNotice);
-  const withFix = entries.filter((e) => oneLine(e.fix) !== "");
+  // A fix that waits for review is not an antibody yet.
+  const withFix = entries.filter(
+    (e) => oneLine(e.fix) !== "" && !pendingReview(e),
+  );
   const fixedIds = new Set(withFix.map((e) => e.id));
   const hitsOnFixed = events.filter(
     (e) => e.kind === "hit" && e.id !== undefined && fixedIds.has(e.id),
@@ -244,15 +253,19 @@ export function fleetView(
     const { count, tokens } = reuse.get(entry.id) ?? { count: 0, tokens: 0 };
     const beatenBy = fixedBy.get(entry.id);
     const claim = claimOf.get(entry.fingerprint);
-    const hasFix = oneLine(entry.fix) !== "";
+    const held = pendingReview(entry);
+    const hasFix = oneLine(entry.fix) !== "" && !held;
     return {
       id: entry.id,
       fingerprint: entry.fingerprint,
-      category: entry.category,
-      title: entry.title,
+      category: plain(entry.category),
+      title: plain(entry.title),
       status: entry.status,
-      fix: oneLine(entry.fix),
-      ...(!hasFix && claim !== undefined ? { diagnosing: claim.agent } : {}),
+      fix: held ? "" : oneLine(entry.fix),
+      ...(held ? { held: true as const } : {}),
+      ...(!hasFix && !held && claim !== undefined
+        ? { diagnosing: claim.agent }
+        : {}),
       ...(beatenBy === undefined ? {} : { beatenBy }),
       reused: count,
       saved: Math.max(0, count * ASSUMED_DIAGNOSIS_TOKENS - tokens),
@@ -274,6 +287,7 @@ export function fleetView(
         .length,
       immunity:
         hitsOnFixed === 0 ? 0 : Math.min(1, fixNotices.length / hitsOnFixed),
+      held: entries.filter(pendingReview).length,
     },
     antibodies,
     events: events.slice(-EVENT_LINES).map(eventLine),

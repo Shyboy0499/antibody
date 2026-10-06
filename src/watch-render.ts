@@ -187,6 +187,7 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     `re-diagnoses avoided ${m.avoided}`,
     `antibodies ${m.antibodies} / ${m.entries} (${m.open} open)`,
     `fleet immunity ${Math.round(m.immunity * 100)}%`,
+    ...(m.held > 0 ? [`${m.held} waiting for review`] : []),
   ];
   const memoryLines =
     cells(memoryParts.join(" · ")) + 2 <= width
@@ -198,8 +199,9 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
   const flexible = width - 9 - byWidth - 8 - 9;
   const titleWidth = Math.floor(flexible * 0.45);
   const antibodyRow = (a: AntibodyRow) => {
-    const [fix, style]: [string, Style] =
-      a.fix !== ""
+    const [fix, style]: [string, Style] = a.held
+      ? ["waiting for review", "yellow"]
+      : a.fix !== ""
         ? [a.fix, "green"]
         : a.diagnosing !== undefined
           ? [`diagnosing (${a.diagnosing})`, "yellow"]

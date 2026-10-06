@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cells, fit, renderView } from "../src/watch-render";
 import type { RenderOptions } from "../src/watch-render";
-import type { FleetView } from "../src/watch-model";
+import type { AntibodyRow, FleetView } from "../src/watch-model";
 
 const NOW = new Date("2026-10-05T10:00:00.000Z");
 const ago = (s: number) => new Date(NOW.getTime() - s * 1000).toISOString();
@@ -42,6 +42,7 @@ const view: FleetView = {
     entries: 3,
     open: 2,
     immunity: 1,
+    held: 0,
   },
   antibodies: [
     {
@@ -172,6 +173,23 @@ describe("renderView", () => {
     expect(narrow).toMatch(/re-diagnoses avoided 2 *\n antibodies 1/);
     expect(wide.join("\n")).toContain(
       "re-diagnoses avoided 2 · antibodies 1 / 3 (2 open) · fleet immunity 100%",
+    );
+  });
+
+  it("says what waits for review, in the memory figures and in the antibody's row", () => {
+    const waiting: FleetView = {
+      ...view,
+      memory: { ...view.memory, held: 2 },
+      antibodies: [
+        { ...(view.antibodies[0] as AntibodyRow), fix: "", held: true },
+      ],
+    };
+    const text = renderView(waiting, options({ width: 180 })).join("\n");
+    expect(text).toContain("fleet immunity 100% · 2 waiting for review");
+    expect(text).toMatch(/ E-0001 +pnpm dev .* waiting for review /);
+    expect(text).not.toContain("Copy .env");
+    expect(renderView(view, options({ width: 180 })).join("\n")).not.toContain(
+      "waiting for review",
     );
   });
 
