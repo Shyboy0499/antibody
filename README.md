@@ -10,7 +10,8 @@
 > errors, claims keep two agents from diagnosing the same new one, and a recorded fix
 > reaches the other sessions in the repository at their next tool call, whichever CLI
 > they run. Five MCP tools let any agent look errors up and record fixes, and
-> `antibody watch` shows the fleet live. A public benchmark comes next; the
+> `antibody watch` shows the fleet live. The [benchmark](bench/README.md) that
+> will measure it is built; its real runs come next, and the
 > [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
@@ -300,6 +301,7 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | `antibody watch` and `antibody stats` | `src/watch.ts`, `src/watch-model.ts`, `src/watch-render.ts`, `src/cli.ts` | Built |
 | `antibody export`, `import`, `review`, `allow` and `reject`, and the review gate | `src/exchange.ts`, `src/exchange-cli.ts`, `src/review.ts`, `src/review-cli.ts`, `src/memory-cli.ts` | Built |
 | The diagnosis cost, read from Claude Code, Codex CLI and Gemini CLI transcripts | `src/transcript.ts`, `src/fleet.ts`, `src/tools.ts` | Built |
+| The benchmark: traps, tasks, the on and off runner, scripted and Claude Code agents | `bench/` | Built; no real run published yet |
 
 ## Built on dsh-errkb
 
@@ -322,6 +324,7 @@ pnpm run lint
 pnpm run format:check
 pnpm run build       # lib/ and the dist/antibody.mjs bundle, via tsdown
 pnpm run e2e         # the M2 exchange end to end, plus hook latency
+pnpm run bench       # the benchmark; see bench/README.md
 ```
 
 `dist/antibody.mjs` is committed, because Claude Code runs the plugin straight from

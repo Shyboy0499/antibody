@@ -100,12 +100,21 @@ Each milestone ends with something that can be checked, not just written.
   matches a count by hand on a real 22 MB Claude Code transcript, and the built bundle
   carried a measured cost from a hook's claim, through `antibody mcp`'s
   `antibody_record`, into `stats` and `watch`.
-- A public benchmark repo with eight realistic tasks and the setup traps from the
-  design's table.
-- Run an eight-agent fleet with injection on and off, several times each, and record
-  tokens, wall time and repeat diagnoses.
+- **The benchmark harness (done).** [`bench/`](../bench/README.md) holds a project
+  that sets four of the design's traps (a stale lockfile, a missing `.env`, an
+  uncommitted generated client and a busy port), eight tasks with hidden acceptance
+  checks, and `pnpm run bench`. That runs the same fleet with injection on and off,
+  several times each, and reports the median run of each arm: tokens from the
+  agents' transcripts, wall time, trap diagnoses, repeat diagnoses and tasks done.
+  It drives scripted agents, which cost nothing and check the runner, and real
+  Claude Code agents, each with its own spending cap. **Checked:** the scripted
+  agents run through the committed bundle end to end, and the Claude Code driver
+  against a stand-in for `claude` that runs the hooks it was given. It lives in this
+  repository; a separate public benchmark repo is still open.
+- Run an eight-agent Claude Code fleet with injection on and off, several times
+  each. This needs a real run's budget.
 - Put the measured numbers at the top of the README.
-- **Done when:** the numbers are reproducible from a script in the benchmark repo.
+- **Done when:** the numbers are reproducible from a script in the benchmark.
 
 ## M6 · Teams and many machines (started)
 
