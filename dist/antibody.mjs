@@ -2932,6 +2932,26 @@ var ResolutionTracker = class ResolutionTracker {
 		}
 		return resolved;
 	}
+	/**
+	* A call failing under `key` was recorded against `id`. When `key` is a
+	* command line, the other entries watched under it inside the window were
+	* got past: the same command now fails on something else.
+	*
+	* @returns those entries, in the order they were recorded; each stops being
+	*   watched. Nothing for a tool's key.
+	*/
+	movedPast(id, key, turn = this.current) {
+		if (!key.startsWith("command:")) return [];
+		const passed = [];
+		for (const [watched, watch] of this.watches) {
+			if (watched === id || watch.key !== key) continue;
+			const after = turn - watch.turn;
+			if (after < 0 || after > 1) continue;
+			this.watches.delete(watched);
+			passed.push(watched);
+		}
+		return passed;
+	}
 	/** The entries being watched, for tests and `antibody_stats`. */
 	watched() {
 		return [...this.watches.keys()];
@@ -3918,6 +3938,20 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 		}
 		s.holding = waiting;
 	}
+	async function gotPast(s, rt, machine, ids) {
+		if (ids.length === 0) return;
+		const entries = await readEntries(machine);
+		for (const id of ids) {
+			const entry = entries.find((e) => e.id === id);
+			if (entry === void 0) continue;
+			await log({
+				kind: "resolve",
+				id
+			});
+			if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
+			else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id)) s.asking.push(id);
+		}
+	}
 	async function askPending(s, rt, machine, notices) {
 		if (s.asking.length === 0) return;
 		const entries = await readEntries(machine);
@@ -4006,20 +4040,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				const rt = restore(s, machine.trust);
 				rt.injector.beginStep();
 				const notices = [];
-				const resolved = rt.tracker.succeeded(outcome.keys);
-				if (resolved.length > 0) {
-					const entries = await readEntries(machine);
-					for (const id of resolved) {
-						const entry = entries.find((e) => e.id === id);
-						if (entry === void 0) continue;
-						await log({
-							kind: "resolve",
-							id
-						});
-						if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
-						else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id)) s.asking.push(id);
-					}
-				}
+				await gotPast(s, rt, machine, rt.tracker.succeeded(outcome.keys));
 				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);
@@ -4047,7 +4068,11 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 					id = found.id;
 					await onHit(s, rt, machine, found, record, notices);
 				} else id = await onMiss(s, rt, record, notices);
-				if (!outcome.ok && id !== void 0) rt.tracker.occurred(id, outcome.key);
+				if (!outcome.ok && id !== void 0) {
+					const passed = rt.tracker.movedPast(id, outcome.key);
+					rt.tracker.occurred(id, outcome.key);
+					await gotPast(s, rt, machine, passed);
+				}
 				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);

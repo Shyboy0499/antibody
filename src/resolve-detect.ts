@@ -27,6 +27,13 @@
 // on tool A, then again on tool B, then A succeeded - resolves nothing; a
 // success on B afterwards does.
 //
+// Moving past. A command that fails again on a different error was got past
+// its first one: `npm test` that stops on a stale lockfile, and then, once
+// that is fixed, on a missing `.env`, resolves the lockfile entry there and
+// then - it need not wait for the whole run to pass. Only a command line says
+// that much; two failures of one tool are often unrelated, so a tool's key
+// moves past nothing.
+//
 // The model's free text is never parsed for a fix: `antibody_record` (T15), through
 // the recorder's recordFix(), is the only way one is written.
 import { NOTICE_PREFIX } from "./notice";
@@ -218,6 +225,27 @@ export class ResolutionTracker {
       resolved.push(id);
     }
     return resolved;
+  }
+
+  /**
+   * A call failing under `key` was recorded against `id`. When `key` is a
+   * command line, the other entries watched under it inside the window were
+   * got past: the same command now fails on something else.
+   *
+   * @returns those entries, in the order they were recorded; each stops being
+   *   watched. Nothing for a tool's key.
+   */
+  movedPast(id: string, key: string, turn = this.current): string[] {
+    if (!key.startsWith("command:")) return [];
+    const passed: string[] = [];
+    for (const [watched, watch] of this.watches) {
+      if (watched === id || watch.key !== key) continue;
+      const after = turn - watch.turn;
+      if (after < 0 || after > RESOLUTION_WINDOW_TURNS) continue;
+      this.watches.delete(watched);
+      passed.push(watched);
+    }
+    return passed;
   }
 
   /** The entries being watched, for tests and `antibody_stats`. */

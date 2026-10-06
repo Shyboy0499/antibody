@@ -394,6 +394,26 @@ export function createFleet(
     s.holding = waiting;
   }
 
+  // Entries this session got past: a fix that worked gains trust, and a
+  // missing one is to be asked for.
+  async function gotPast(
+    s: SessionState,
+    rt: Runtime,
+    machine: MachineState,
+    ids: string[],
+  ): Promise<void> {
+    if (ids.length === 0) return;
+    const entries = await readEntries(machine);
+    for (const id of ids) {
+      const entry = entries.find((e) => e.id === id);
+      if (entry === undefined) continue;
+      await log({ kind: "resolve", id });
+      if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
+      else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id))
+        s.asking.push(id);
+    }
+  }
+
   // Ask for the fixes of entries this session got past without one. An ask
   // the budget cannot carry now waits for a later hook call rather than being
   // lost; one whose entry has a fix by now, or is gone, is dropped.
@@ -493,18 +513,7 @@ export function createFleet(
         const rt = restore(s, machine.trust);
         rt.injector.beginStep();
         const notices: string[] = [];
-        const resolved = rt.tracker.succeeded(outcome.keys);
-        if (resolved.length > 0) {
-          const entries = await readEntries(machine);
-          for (const id of resolved) {
-            const entry = entries.find((e) => e.id === id);
-            if (entry === undefined) continue;
-            await log({ kind: "resolve", id });
-            if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
-            else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id))
-              s.asking.push(id);
-          }
-        }
+        await gotPast(s, rt, machine, rt.tracker.succeeded(outcome.keys));
         await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
@@ -540,8 +549,11 @@ export function createFleet(
           id = found.id;
           await onHit(s, rt, machine, found, record, notices);
         } else id = await onMiss(s, rt, record, notices);
-        if (!outcome.ok && id !== undefined)
+        if (!outcome.ok && id !== undefined) {
+          const passed = rt.tracker.movedPast(id, outcome.key);
           rt.tracker.occurred(id, outcome.key);
+          await gotPast(s, rt, machine, passed);
+        }
         await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
