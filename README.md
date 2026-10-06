@@ -211,6 +211,47 @@ alternate screen.
 eight agents. Open it in a browser and press `m` to turn shared memory off: the fleet
 goes back to paying for the same diagnosis over and over.
 
+## Share fixes with your team
+
+The memory lives inside `.git`, so a teammate's clone, or a cloud agent's, starts
+without it. Fixes travel in a file you commit:
+
+```sh
+antibody export                  # write the fixes this fleet found to ANTIBODIES.md
+git add ANTIBODIES.md && git commit -m "Share antibody fixes"
+```
+
+In another clone of the repository:
+
+```sh
+antibody import                  # read ANTIBODIES.md into this clone's memory
+antibody review                  # read what came in
+antibody allow --all             # or: antibody allow E-0004, antibody reject E-0005
+```
+
+| Command | Does |
+| --- | --- |
+| `antibody export [--out FILE \| --print]` | Writes the fixes this fleet found to `ANTIBODIES.md` in the repository root, or to `FILE`, or prints them. It writes nothing when there is nothing to export, and never overwrites a file that is not an export |
+| `antibody import [FILE] [--dry-run]` | Reads a file's fixes into this memory, held for review. `--dry-run` says what would be imported |
+| `antibody review` | Prints everything that waits for review, in full |
+| `antibody allow ID... \| --all` | Approves entries: agents see them from their next hook call |
+| `antibody reject ID... \| --all` | Turns entries down: they move to `ANTIBODIES.archive.md`, and an import does not bring them back |
+
+**What leaves.** Only an entry with a working fix that was found in this repository.
+Entries without a fix, `wontfix` entries and fixes still waiting for review stay
+behind. Every text is redacted again, in case the file was edited by hand since, and
+the notes are left out.
+
+**What comes in is held back.** The file is text someone else wrote, so an imported
+entry is held for review: agents are shown neither its fix nor its title, trigger or
+sample. An agent that meets the same error is told "seen before, no fix recorded
+yet", claims it and diagnoses it as usual. A fix an agent records itself is trusted
+at once, because it was found in this fleet. Importing never replaces a fix this
+memory already has, and never adds more entries than the memory has room for.
+`antibody review` strips control, zero-width and direction-changing characters, and
+the invisible tag characters that can hide text from a reader, from everything it
+prints.
+
 ## Works with
 
 | Agent | How antibody connects | Fix delivery |
@@ -250,6 +291,7 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | The Gemini CLI and Codex CLI adapters | `src/gemini.ts`, `src/codex.ts`, `src/hook-input.ts` | Built; payloads read off each CLI's source |
 | `antibody setup` for Gemini CLI and Codex CLI | `src/setup.ts` | Built |
 | `antibody watch` and `antibody stats` | `src/watch.ts`, `src/watch-model.ts`, `src/watch-render.ts`, `src/cli.ts` | Built |
+| `antibody export`, `import`, `review`, `allow` and `reject`, and the review gate | `src/exchange.ts`, `src/exchange-cli.ts`, `src/review.ts`, `src/review-cli.ts`, `src/memory-cli.ts` | Built |
 
 ## Built on dsh-errkb
 

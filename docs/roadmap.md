@@ -99,9 +99,23 @@ Each milestone ends with something that can be checked, not just written.
 - Put the measured numbers at the top of the README.
 - **Done when:** the numbers are reproducible from a script in the benchmark repo.
 
-## M6 · Teams and many machines
+## M6 · Teams and many machines (started)
 
-- `antibody export` and import with a review gate.
-- Optionally, a small relay for cloud agents (design Q5).
-- Integration notes for herdr, vibe-kanban, superset, claude-squad,
+- **Export and import with a review gate (done).** `antibody export` writes the
+  fixes this fleet found to a committed `ANTIBODIES.md`, redacted again and without
+  notes. `antibody import` reads one into a clone's memory, held for review: the
+  fix, and the title, trigger and sample of an entry that came whole, stay out of
+  every agent's context (`src/review.ts`) until a person approves them with
+  `antibody allow`, or turns them down with `antibody reject`, after reading them
+  with `antibody review`. An import never replaces a fix, respects `wontfix`, and
+  leaves out what was rejected before. The file is read with a size limit, a
+  fingerprint check, text limits, hidden characters removed and a room limit.
+- **Checked:** `tests/exchange-cli.test.ts` and `tests/review-cli.test.ts` run the
+  exchange between two real repositories, including an agent that meets an imported
+  error and is told no fix is recorded, then gets the fix once it is approved. The
+  built bundle was walked through the same flow.
+- **Open:** import on `SessionStart` for a clone that has no memory yet (today it is
+  one command), showing what waits for review in `antibody watch`, and the opt-in
+  relay for cloud agents (design Q5).
+- **Open:** integration notes for herdr, vibe-kanban, superset, claude-squad,
   agent-orchestrator and paperclip.
