@@ -31,6 +31,7 @@ import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
+import { autoImportText, importOnFirstSession } from "./auto-import";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
 import { runAllow, runReject, runReview } from "./review-cli";
@@ -149,10 +150,12 @@ export async function runHook(
     } catch {
       return "";
     }
-    const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
+    const root = worktreeRoot(input.cwd, deps.git);
+    const agent = agentName(harness, root, io.env);
     // Paused: the fleet loop still records, but injects nothing.
+    const paused = injectionPaused(memory);
     const options = {
-      ...(injectionPaused(memory) ? { inject: "off" as const } : {}),
+      ...(paused ? { inject: "off" as const } : {}),
       ...(input.transcriptPath === undefined
         ? {}
         : { transcript: input.transcriptPath }),
@@ -162,7 +165,19 @@ export async function runHook(
       agent,
       input.sessionId,
     );
-    return adapter.respond(input.event, await dispatch(input, fleet));
+    // A fresh clone's first session takes in the fixes its repository
+    // committed, held for review (src/auto-import.ts).
+    const imported =
+      input.event === "SessionStart"
+        ? await importOnFirstSession(memory, root, io.env)
+        : undefined;
+    const notices = await dispatch(input, fleet);
+    return adapter.respond(
+      input.event,
+      imported === undefined || paused
+        ? notices
+        : [autoImportText(imported), ...notices],
+    );
   };
   try {
     const deadline = new Promise<typeof TIMEOUT>((resolve) => {

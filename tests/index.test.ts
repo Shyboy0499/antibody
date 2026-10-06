@@ -26,6 +26,7 @@ import * as transcript from "../src/transcript";
 import * as review from "../src/review";
 import * as exchange from "../src/exchange";
 import * as exchangeCli from "../src/exchange-cli";
+import * as autoImport from "../src/auto-import";
 import * as memoryCli from "../src/memory-cli";
 import * as reviewCli from "../src/review-cli";
 import * as tools from "../src/tools";
@@ -51,6 +52,7 @@ describe("public entry point", () => {
     ["review", review],
     ["exchange", exchange],
     ["exchange-cli", exchangeCli],
+    ["auto-import", autoImport],
     ["memory-cli", memoryCli],
     ["review-cli", reviewCli],
     ["resolve-detect", resolveDetect],

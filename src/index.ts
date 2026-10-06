@@ -13,6 +13,7 @@ export * from "./transcript";
 export * from "./review";
 export * from "./exchange";
 export * from "./exchange-cli";
+export * from "./auto-import";
 export * from "./memory-cli";
 export * from "./review-cli";
 export * from "./resolve-detect";
