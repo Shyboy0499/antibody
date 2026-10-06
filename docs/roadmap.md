@@ -135,7 +135,7 @@ Each milestone ends with something that can be checked, not just written.
 - Put the measured numbers at the top of the README.
 - **Done when:** the numbers are reproducible from a script in the benchmark.
 
-## M6 · Teams and many machines (started)
+## M6 · Teams and many machines (done)
 
 - **Export and import with a review gate (done).** `antibody export` writes the
   fixes this fleet found to a committed `ANTIBODIES.md`, redacted again and without
@@ -152,8 +152,18 @@ Each milestone ends with something that can be checked, not just written.
   built bundle was walked through the same flow.
 - `antibody watch` says how many entries wait for review and marks them in the
   antibodies pane, and `antibody stats` lists their IDs.
-- **Open:** import on `SessionStart` for a clone that has no memory yet (today it is
-  one command), and the opt-in relay for cloud agents (design Q5).
+- **Import on session start (done).** A clone's first session imports a committed
+  `ANTIBODIES.md` into a memory that has nothing yet, held for review, and tells its
+  agent a person must review it. A marker created exclusively makes it once per
+  clone, however many sessions start together. `ANTIBODY_AUTO_IMPORT=0` turns it
+  off.
+- **The relay (done, design Q5).** `antibody relay serve` keeps the latest fix for
+  each fingerprint for several machines; `antibody relay sync`, and the agents' MCP
+  server every 30 seconds, push this machine's new fixes and pull the others'. Pulled
+  fixes are held for review unless `ANTIBODY_RELAY_TRUST=fleet`. **Checked:**
+  `tests/relay-client.test.ts` syncs two real repositories through a real relay,
+  held and trusted, and an MCP server records a fix that reaches the relay before it
+  stops.
 - **Integration notes (done).** [`docs/integrations.md`](integrations.md) says, for
   herdr, vibe-kanban, superset, claude-squad, agent-orchestrator and paperclip, how
   each lays out its agents' work, from its own README, and what antibody needs there:
