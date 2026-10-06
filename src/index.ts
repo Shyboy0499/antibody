@@ -16,6 +16,7 @@ export * from "./exchange-cli";
 export * from "./auto-import";
 export * from "./relay";
 export * from "./relay-server";
+export * from "./relay-client";
 export * from "./relay-cli";
 export * from "./memory-cli";
 export * from "./review-cli";

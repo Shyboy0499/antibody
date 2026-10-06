@@ -219,6 +219,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody relay serve        share fixes between machines through a relay
+       antibody relay sync         push this machine's fixes and pull the others'
        antibody --version
 `;
 
