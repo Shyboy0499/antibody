@@ -1,0 +1,14 @@
+{
+  "name": "bench-shop",
+  "private": true,
+  "type": "module",
+  "description": "A small shop service: the project the antibody benchmark's agents work on.",
+  "scripts": {
+    "test": "node scripts/check-lock.js && node --test",
+    "generate": "node scripts/generate.js",
+    "lock": "node scripts/lock.js"
+  },
+  "dependencies": {
+    "shop-schema": "1.4.0"
+  }
+}
