@@ -2,17 +2,17 @@
 
 **Herd immunity for coding-agent fleets.** When one agent beats an error, every agent running beside it becomes immune.
 
-![Status](https://img.shields.io/badge/status-M4%3A%20fleet%20view-yellowgreen)
+![Status](https://img.shields.io/badge/status-M6%3A%20many%20machines-yellowgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
-> **Status: M4, a mixed fleet you can watch.** antibody installs as a Claude Code
-> plugin, and `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture
+> **Status: M6, fixes that travel between machines.** antibody installs as a Claude
+> Code plugin, and `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture
 > errors, claims keep two agents from diagnosing the same new one, and a recorded fix
 > reaches the other sessions in the repository at their next tool call, whichever CLI
 > they run. Five MCP tools let any agent look errors up and record fixes, and
-> `antibody watch` shows the fleet live. The [benchmark](bench/README.md) that
-> will measure it is built; its real runs come next, and the
-> [roadmap](docs/roadmap.md) has the rest.
+> `antibody watch` shows the fleet live. Fixes reach other clones through a committed
+> file or an optional relay. The [benchmark](bench/README.md) that will measure it is
+> built; its real runs come next, and the [roadmap](docs/roadmap.md) has the rest.
 
 ![antibody fleet view](docs/fleet-view.png)
 
@@ -243,6 +243,10 @@ antibody review                  # read what came in
 antibody allow --all             # or: antibody allow E-0004, antibody reject E-0005
 ```
 
+A clone's first session runs the import on its own when the clone has no memory yet
+and the repository commits `ANTIBODIES.md`, and tells its agent that a person must
+review what came in. `ANTIBODY_AUTO_IMPORT=0` turns that off.
+
 | Command | Does |
 | --- | --- |
 | `antibody export [--out FILE \| --print]` | Writes the fixes this fleet found to `ANTIBODIES.md` in the repository root, or to `FILE`, or prints them. It writes nothing when there is nothing to export, and never overwrites a file that is not an export |
@@ -250,6 +254,8 @@ antibody allow --all             # or: antibody allow E-0004, antibody reject E-
 | `antibody review` | Prints everything that waits for review, in full |
 | `antibody allow ID... \| --all` | Approves entries: agents see them from their next hook call |
 | `antibody reject ID... \| --all` | Turns entries down: they move to `ANTIBODIES.archive.md`, and an import does not bring them back |
+| `antibody relay serve [--port N] [--host H] [--data FILE]` | Runs a relay, below |
+| `antibody relay sync` | Pushes this machine's fixes to the relay and pulls the others' |
 
 **What leaves.** Only an entry with a working fix that was found in this repository.
 Entries without a fix, `wontfix` entries and fixes still waiting for review stay
@@ -265,6 +271,36 @@ memory already has, and never adds more entries than the memory has room for.
 `antibody review` strips control, zero-width and direction-changing characters, and
 the invisible tag characters that can hide text from a reader, from everything it
 prints.
+
+### Share through a relay
+
+Cloud agents start in fresh containers, and a committed file only moves when someone
+commits it. A relay moves fixes as they are found: a small HTTP service that every
+machine's memory syncs through.
+
+```sh
+# Somewhere every agent can reach, behind a proxy that terminates TLS:
+ANTIBODY_RELAY_TOKEN=<a long secret> antibody relay serve --host 0.0.0.0
+
+# In each agent's environment:
+ANTIBODY_RELAY=https://relay.example.com
+ANTIBODY_RELAY_TOKEN=<the same secret>
+ANTIBODY_RELAY_TRUST=fleet       # only when every machine with the token is yours
+```
+
+The agents' MCP server then syncs while it runs: as it starts, every 30 seconds, and
+as it stops. Hooks never touch the network. `antibody relay sync` syncs by hand.
+
+- **What the relay holds:** what export lets leave a machine, which is entries with
+  a working fix, redacted again, without notes. It keeps the latest fix for each
+  error, in one JSON file.
+- **What comes back:** by default, what a machine pulls is held for review, as an
+  import is. With `ANTIBODY_RELAY_TRUST=fleet`, every machine holding the token is
+  trusted as one fleet, and an agent meeting the error is given the fix at once.
+  Either way, a pulled fix never replaces one the machine has.
+- **Limits:** the token must be 16 characters or more, a push is limited in size,
+  and a relay holds at most 5,000 fixes. A machine sends only what changed since its
+  last sync, and never pushes back what it pulled.
 
 ## Works with
 
@@ -309,6 +345,8 @@ orchestrator](docs/integrations.md) has a note on each.
 | `antibody export`, `import`, `review`, `allow` and `reject`, and the review gate | `src/exchange.ts`, `src/exchange-cli.ts`, `src/review.ts`, `src/review-cli.ts`, `src/memory-cli.ts` | Built |
 | The diagnosis cost, read from Claude Code, Codex CLI and Gemini CLI transcripts | `src/transcript.ts`, `src/fleet.ts`, `src/tools.ts` | Built |
 | The benchmark: traps, tasks, the on and off runner, scripted and Claude Code agents | `bench/` | Built; no real run published yet |
+| Import of a committed export on a clone's first session | `src/auto-import.ts` | Built |
+| The relay, `antibody relay serve` and `sync`, and the MCP server's background sync | `src/relay.ts`, `src/relay-server.ts`, `src/relay-client.ts`, `src/relay-cli.ts` | Built |
 
 ## Built on dsh-errkb
 

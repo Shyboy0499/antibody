@@ -2,8 +2,8 @@
 
 Status: draft, October 2026. Milestones M1 (core and shared memory), M2 (the
 Claude Code plugin and the MCP server), M3 (the Gemini CLI and Codex CLI adapters)
-and M4 (`antibody watch`) are implemented, M5 has begun with measured diagnosis cost,
-and M6 with export and import.
+and M4 (`antibody watch`) are implemented, M5 has its measured diagnosis cost and
+benchmark harness, and M6 its export, import and relay.
 Statements about other tools' hook APIs come from their public documentation and
 are marked where they still need to be checked against a running copy.
 
@@ -178,17 +178,23 @@ counter increment is lost and that every file still parses.
 
 ### 4.3 Beyond one machine
 
-Cloud agents and teammates do not share a `.git` directory. Milestone M6 has the
-first of two options built:
+Cloud agents and teammates do not share a `.git` directory. Milestone M6 built both
+options (Q5):
 
 - **Export and import (built).** `antibody export` writes the fixes this fleet found
   to a committed `ANTIBODIES.md`: only entries with a working fix that were not
-  themselves imported and unreviewed, redacted again, without notes. A fresh clone
-  runs `antibody import`, and what comes in is held until a person approves it, the
-  way `direnv allow` works (§9). An entry the clone already has a fix for keeps its
-  own, a `wontfix` is respected, and a fix a person rejected is not brought back.
-- **Relay (open, Q5).** A small optional HTTP service that several machines'
-  memories sync through.
+  themselves imported and unreviewed, redacted again, without notes. A fresh clone's
+  first session imports it on its own (`src/auto-import.ts`), or a person runs
+  `antibody import`, and what comes in is held until a person approves it, the way
+  `direnv allow` works (§9). An entry the clone already has a fix for keeps its own,
+  a `wontfix` is respected, and a fix a person rejected is not brought back.
+- **Relay (built).** A small optional HTTP service that several machines' memories
+  sync through (`antibody relay serve`). It keeps the latest fix for each
+  fingerprint, numbered as it changes, and speaks documents in the export's format,
+  so what a machine pulls is read with import's limits. The agents' MCP server syncs
+  as it starts, every 30 seconds and as it stops; hooks never touch the network.
+  Pulled fixes are held for review unless the machine trusts the relay as its own
+  fleet (`ANTIBODY_RELAY_TRUST=fleet`).
 
 ## 5. Harness adapters
 
@@ -313,7 +319,11 @@ Milestone M5 replaces these estimates with a measured benchmark.
   because it is read back to measure the diagnosis: it names a file on this machine,
   and `events.jsonl` is never exported.
 - **Local by default.** Memory never leaves the machine unless someone runs
-  `antibody export` or configures a relay.
+  `antibody export` or configures a relay. A relay holds only what export would let
+  leave, redacted again; every call carries its token, compared by its SHA-256; and
+  it speaks plain HTTP, to sit behind a proxy that terminates TLS. What a machine
+  pulls from it is held for review like an import, unless the machine was told to
+  trust every holder of the token as its own fleet.
 - **Prompt injection.** Injected fixes are text other agents wrote, so they are an
   injection surface. Mitigations: only agents in this repository's fleet write to its
   memory; every notice is framed as advice from a named peer, never as an instruction
@@ -348,4 +358,5 @@ Milestone M5 replaces these estimates with a measured benchmark.
   it.
 - **Q4 Claim behaviour.** Should a claim hint only inform, or also suggest the agent
   switches to other work until the fix arrives?
-- **Q5 Cross-machine sharing.** Export and import first, or a relay first.
+- **Q5 Cross-machine sharing. Decided:** both, export and import first, then the
+  relay (§4.3).
