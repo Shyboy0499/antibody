@@ -1,0 +1,4 @@
+{
+  "products": ["id", "name", "priceCents"],
+  "orders": ["id", "productId", "quantity"]
+}

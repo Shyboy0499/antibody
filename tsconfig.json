@@ -12,5 +12,5 @@
     "sourceMap": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "tests", "*.config.ts"]
+  "include": ["src", "tests", "bench/*.ts", "*.config.ts"]
 }
