@@ -154,5 +154,8 @@ Each milestone ends with something that can be checked, not just written.
   antibodies pane, and `antibody stats` lists their IDs.
 - **Open:** import on `SessionStart` for a clone that has no memory yet (today it is
   one command), and the opt-in relay for cloud agents (design Q5).
-- **Open:** integration notes for herdr, vibe-kanban, superset, claude-squad,
-  agent-orchestrator and paperclip.
+- **Integration notes (done).** [`docs/integrations.md`](integrations.md) says, for
+  herdr, vibe-kanban, superset, claude-squad, agent-orchestrator and paperclip, how
+  each lays out its agents' work, from its own README, and what antibody needs there:
+  nothing beyond installing it in each harness when agents work in worktrees of one
+  repository, and a committed export or a relay when they work on separate machines.
