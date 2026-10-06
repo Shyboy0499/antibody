@@ -2212,6 +2212,42 @@ async function rejectedFixes(archive) {
 	}
 }
 /**
+* Read an exported document's fixes into the memory, each held for a person's
+* review (src/review.ts).
+*
+* @param memory - the memory, as openMemory() gives it.
+* @param text - the document.
+* @param name - the document's name, for the import notes and messages.
+* @param dry - plan only, writing nothing.
+* @returns what it took in, or why the document could not be read.
+*/
+async function importDocument(memory, text, name, dry = false) {
+	if (Buffer.byteLength(text) > 524288) return { error: `${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it` };
+	let incoming;
+	try {
+		incoming = parseDocument$1(text).blocks.map((b) => b.entry);
+	} catch (error) {
+		if (!(error instanceof ParseError)) throw error;
+		return { error: `could not read ${name}: ${error.message}` };
+	}
+	const room = Math.max(0, DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length);
+	const plan = planImport(memory.entries, incoming, room, name, await rejectedFixes(memory.files.archive));
+	const count = plan.add.length + plan.adopt.length;
+	if (!dry) {
+		for (const entry of plan.add) await memory.store.append(entry);
+		for (const { id, fix } of plan.adopt) await memory.store.update(id, {
+			fix,
+			status: "fixed",
+			meta: holdImportedFix
+		});
+	}
+	return {
+		plan,
+		count,
+		left: leftOut(plan)
+	};
+}
+/**
 * `antibody import`: read the fixes of a committed ANTIBODIES.md into this
 * clone's memory, where each waits for a person's review (src/review.ts)
 * before any agent sees it. A fix is added as a new entry for an error this
@@ -2244,33 +2280,15 @@ async function runImport(args, io, deps = {}) {
 		io.stderr(`antibody: no such file: ${name}\n`);
 		return 1;
 	}
-	if (Buffer.byteLength(text) > 524288) {
-		io.stderr(`antibody: ${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it\n`);
+	const outcome = await importDocument(memory, text, name, dry);
+	if ("error" in outcome) {
+		io.stderr(`antibody: ${outcome.error}\n`);
 		return 1;
 	}
-	let incoming;
-	try {
-		incoming = parseDocument$1(text).blocks.map((b) => b.entry);
-	} catch (error) {
-		if (!(error instanceof ParseError)) throw error;
-		io.stderr(`antibody: could not read ${name}: ${error.message}\n`);
-		return 1;
-	}
-	const room = Math.max(0, DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length);
-	const plan = planImport(memory.entries, incoming, room, name, await rejectedFixes(memory.files.archive));
-	const count = plan.add.length + plan.adopt.length;
-	const left = leftOut(plan);
+	const { plan, count, left } = outcome;
 	if (count === 0) {
 		io.stdout(`Nothing to import from ${name}${left === "" ? "" : ` (${left})`}.\n`);
 		return 0;
-	}
-	if (!dry) {
-		for (const entry of plan.add) await memory.store.append(entry);
-		for (const { id, fix } of plan.adopt) await memory.store.update(id, {
-			fix,
-			status: "fixed",
-			meta: holdImportedFix
-		});
 	}
 	io.stdout([
 		`${dry ? "Would import" : "Imported"} ${count} ${count === 1 ? "fix" : "fixes"} from ${name}: ${plan.add.length} for new errors, ${plan.adopt.length} for errors this machine had no fix for.`,
@@ -4351,6 +4369,47 @@ async function serveLines(server, input, write) {
 	}
 	await Promise.all(pending);
 }
+/** The marker a clone's memory keeps once its first session has looked. */
+const AUTO_IMPORT_MARKER = ".imported";
+/**
+* What the agent is told: that fixes came in, and that a person must review
+* them before any agent sees them.
+*
+* @param count - the fixes imported.
+*/
+function autoImportText(count) {
+	const [fixes, them] = count === 1 ? ["fix", "it"] : ["fixes", "them"];
+	return `${NOTICE_PREFIX} This clone took in ${count} ${fixes} from the committed ${EXCHANGE_FILE}. No agent is shown ${them} until a person reviews ${them}: \`antibody review\`, then \`antibody allow\`.`;
+}
+/**
+* On a session's start, import the repository's committed export into a
+* memory that has nothing yet.
+*
+* @param memory - the memory directory.
+* @param root - the worktree root, where an export is committed.
+* @param env - the environment, for the switch.
+* @param fs - the file system; injected in tests.
+* @returns how many fixes came in, or undefined when nothing was imported.
+*/
+async function importOnFirstSession(memory, root, env, fs = nodeStoreFs()) {
+	if (env["ANTIBODY_AUTO_IMPORT"] === "0") return void 0;
+	const files = filesIn(memory);
+	if (nodeFs.existsSync(files.errors)) return void 0;
+	const source = join(root, EXCHANGE_FILE);
+	if (!nodeFs.existsSync(source)) return void 0;
+	await fs.mkdir(memory);
+	const marker = join(memory, AUTO_IMPORT_MARKER);
+	if (!await fs.createExclusive(marker, `${(/* @__PURE__ */ new Date()).toISOString()}\n`)) return void 0;
+	const text = await fs.readFile(source);
+	if (text === void 0) return void 0;
+	const store = createStore(files, {}, fs);
+	const outcome = await importDocument({
+		store,
+		entries: (await store.read()).blocks.map((b) => b.entry),
+		files
+	}, text, EXCHANGE_FILE);
+	return "error" in outcome || outcome.count === 0 ? void 0 : outcome.count;
+}
 //#endregion
 //#region src/review-cli.ts
 const REVIEW_USAGE = "usage: antibody review\n";
@@ -5767,13 +5826,17 @@ async function runHook(harness, io, deps = {}) {
 		} catch {
 			return "";
 		}
-		const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
+		const root = worktreeRoot(input.cwd, deps.git);
+		const agent = agentName(harness, root, io.env);
+		const paused = injectionPaused(memory);
 		const options = {
-			...injectionPaused(memory) ? { inject: "off" } : {},
+			...paused ? { inject: "off" } : {},
 			...input.transcriptPath === void 0 ? {} : { transcript: input.transcriptPath }
 		};
 		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s, options)))(memory, agent, input.sessionId);
-		return adapter.respond(input.event, await dispatch(input, fleet));
+		const imported = input.event === "SessionStart" ? await importOnFirstSession(memory, root, io.env) : void 0;
+		const notices = await dispatch(input, fleet);
+		return adapter.respond(input.event, imported === void 0 || paused ? notices : [autoImportText(imported), ...notices]);
 	};
 	try {
 		const deadline = new Promise((resolve) => {

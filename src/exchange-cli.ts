@@ -25,7 +25,8 @@ import {
   parseDocument,
   writeFileAtomic,
 } from "./store";
-import type { Entry } from "./store";
+import type { Entry, ErrorStore } from "./store";
+import type { KbFiles } from "./paths";
 
 const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
   --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
@@ -163,6 +164,66 @@ async function rejectedFixes(archive: string): Promise<Set<string>> {
   }
 }
 
+/** What reading an exported document into the memory came to. */
+export interface ImportOutcome {
+  plan: ImportPlan;
+  /** Fixes taken in: new entries, and fixes for entries that had none. */
+  count: number;
+  /** What was left out, as "1 already known, 2 without a working fix". */
+  left: string;
+}
+
+/**
+ * Read an exported document's fixes into the memory, each held for a person's
+ * review (src/review.ts).
+ *
+ * @param memory - the memory, as openMemory() gives it.
+ * @param text - the document.
+ * @param name - the document's name, for the import notes and messages.
+ * @param dry - plan only, writing nothing.
+ * @returns what it took in, or why the document could not be read.
+ */
+export async function importDocument(
+  memory: { store: ErrorStore; entries: Entry[]; files: KbFiles },
+  text: string,
+  name: string,
+  dry = false,
+): Promise<ImportOutcome | { error: string }> {
+  if (Buffer.byteLength(text) > IMPORT_MAX_BYTES)
+    return {
+      error: `${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it`,
+    };
+  let incoming: Entry[];
+  try {
+    incoming = parseDocument(text).blocks.map((b) => b.entry);
+  } catch (error) {
+    if (!(error instanceof ParseError)) throw error;
+    return { error: `could not read ${name}: ${error.message}` };
+  }
+  const room = Math.max(
+    0,
+    DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length,
+  );
+  const plan = planImport(
+    memory.entries,
+    incoming,
+    room,
+    name,
+    await rejectedFixes(memory.files.archive),
+  );
+  const count = plan.add.length + plan.adopt.length;
+  if (!dry) {
+    for (const entry of plan.add) await memory.store.append(entry);
+    for (const { id, fix } of plan.adopt)
+      await memory.store.update(id, {
+        fix,
+        status: "fixed",
+        meta: holdImportedFix,
+      });
+  }
+  return { plan, count, left: leftOut(plan) };
+}
+
 /**
  * `antibody import`: read the fixes of a committed ANTIBODIES.md into this
  * clone's memory, where each waits for a person's review (src/review.ts)
@@ -206,48 +267,17 @@ export async function runImport(
     io.stderr(`antibody: no such file: ${name}\n`);
     return 1;
   }
-  if (Buffer.byteLength(text) > IMPORT_MAX_BYTES) {
-    io.stderr(
-      `antibody: ${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it\n`,
-    );
+  const outcome = await importDocument(memory, text, name, dry);
+  if ("error" in outcome) {
+    io.stderr(`antibody: ${outcome.error}\n`);
     return 1;
   }
-  let incoming: Entry[];
-  try {
-    incoming = parseDocument(text).blocks.map((b) => b.entry);
-  } catch (error) {
-    if (!(error instanceof ParseError)) throw error;
-    io.stderr(`antibody: could not read ${name}: ${error.message}\n`);
-    return 1;
-  }
-
-  const room = Math.max(
-    0,
-    DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length,
-  );
-  const plan = planImport(
-    memory.entries,
-    incoming,
-    room,
-    name,
-    await rejectedFixes(memory.files.archive),
-  );
-  const count = plan.add.length + plan.adopt.length;
-  const left = leftOut(plan);
+  const { plan, count, left } = outcome;
   if (count === 0) {
     io.stdout(
       `Nothing to import from ${name}${left === "" ? "" : ` (${left})`}.\n`,
     );
     return 0;
-  }
-  if (!dry) {
-    for (const entry of plan.add) await memory.store.append(entry);
-    for (const { id, fix } of plan.adopt)
-      await memory.store.update(id, {
-        fix,
-        status: "fixed",
-        meta: holdImportedFix,
-      });
   }
   io.stdout(
     [
