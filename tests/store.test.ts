@@ -684,6 +684,31 @@ describe("store: update", () => {
     );
   });
 
+  it("sets and removes machine fields, and refuses a name that would split the comment", async () => {
+    const { store, text } = memoryStore();
+    await store.append(input(1));
+    const set = await store.update("E-0001", {
+      meta: { review: "pending", note: "two words" },
+    });
+    expect(set?.meta).toMatchObject({ review: "pending", note: "two words" });
+    expect(
+      parseDocument(text(files.errors) as string).blocks[0]?.entry.meta,
+    ).toEqual(set?.meta);
+    const removed = await store.update("E-0001", {
+      meta: { review: null, absent: null },
+    });
+    expect(Object.keys(removed?.meta ?? {})).toEqual([
+      "sig",
+      "cat",
+      "code",
+      "first",
+      "note",
+    ]);
+    await expect(
+      store.update("E-0001", { meta: { "two words": "x" } }),
+    ).rejects.toThrow(RangeError);
+  });
+
   it("returns undefined for an unknown ID and writes nothing", async () => {
     const { store, text } = memoryStore();
     await store.append(input(1));

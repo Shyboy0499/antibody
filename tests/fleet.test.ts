@@ -528,3 +528,43 @@ describe("fleet: injection off (paused)", () => {
     expect(notice).toContain(`fix: ${FIX}`);
   });
 });
+
+describe("fleet: the review gate", () => {
+  const fleet = (session: string) =>
+    createFleet(memory, `agent-${session}`, session);
+  // An imported fix that no person has approved yet.
+  const pending = () =>
+    createStore(filesIn(memory)).update("E-0001", {
+      fix: FIX,
+      status: "fixed",
+      meta: { review: "pending" },
+    });
+
+  it("offers no fix that waits for a person, so the agent diagnoses it", async () => {
+    await fail("s-a");
+    await fleet("s-a").endSession();
+    await pending();
+    expect(await fail("s-b")).toEqual([
+      "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
+    ]);
+    expect((await events()).at(-2)).toMatchObject({
+      kind: "claim",
+      agent: "agent-s-b",
+    });
+  });
+
+  it("does not deliver it to an agent that waits", async () => {
+    await fail("s-a");
+    await fail("s-b");
+    await pending();
+    expect(await fleet("s-b").poll()).toEqual([]);
+  });
+
+  it("lets a fix recorded in the fleet clear the mark", async () => {
+    await fail("s-a");
+    await pending();
+    const entry = await fleet("s-a").recordFix("E-0001", FIX);
+    expect(entry?.meta).not.toHaveProperty("review");
+    expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
+  });
+});

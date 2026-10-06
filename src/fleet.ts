@@ -32,6 +32,7 @@ import type { InjectMode, Notice } from "./notice";
 import { filesIn } from "./paths";
 import { ResolutionTracker, callOutcome } from "./resolve-detect";
 import type { ToolCall } from "./resolve-detect";
+import { REVIEW_KEY, forAgents } from "./review";
 import { createSessionFile } from "./session";
 import type { SessionState } from "./session";
 import { addHit, createStateFile, effectiveEntry, laterSeen } from "./state";
@@ -170,8 +171,9 @@ export function createFleet(
 
   async function readEntries(machine: MachineState): Promise<Entry[]> {
     const document = await store.read();
+    // A fix waiting for a person's review is not offered: see src/review.ts.
     return document.blocks.map((b) =>
-      effectiveEntry(b.entry, machine.entries[b.entry.id]),
+      forAgents(effectiveEntry(b.entry, machine.entries[b.entry.id])),
     );
   }
 
@@ -387,9 +389,11 @@ export function createFleet(
 
     async recordFix(id, fix) {
       if (oneLine(fix) === "") throw new RangeError("a fix cannot be blank");
+      // A fix found in this fleet needs no review, so the mark goes too.
       const entry = await store.update(id, {
         fix: fix.trim(),
         status: "fixed",
+        meta: { [REVIEW_KEY]: null },
       });
       if (entry === undefined) return undefined;
       await log({ kind: "fix", id, text: entry.fix });
