@@ -2,6 +2,7 @@
 //
 //   antibody review              read every entry that holds something back
 //   antibody allow ID... | --all approve entries, so agents see them
+//   antibody reject ID... | --all turn entries down, so they are archived
 //
 // What waits came from outside this machine, so it is shown as text to read,
 // never to run: control characters and hidden characters are taken out of
@@ -11,12 +12,17 @@ import type { CliIo, McpDeps } from "./cli";
 import { plain } from "./exchange";
 import { openMemory } from "./memory-cli";
 import { clip, oneLine } from "./notice";
-import { REVIEW_KEY, heldParts, pendingReview } from "./review";
-import type { Entry } from "./store";
+import {
+  REVIEW_KEY,
+  REVIEW_REJECTED,
+  heldParts,
+  pendingReview,
+} from "./review";
+import type { Entry, ErrorStore } from "./store";
 
 const REVIEW_USAGE = "usage: antibody review\n";
 
-const ALLOW_USAGE = `usage: antibody allow ID... | --all
+const usageOf = (command: string) => `usage: antibody ${command} ID... | --all
   ID     an entry that waits for review, as antibody review shows it (E-0004, e4, 4)
   --all  every entry that waits
 `;
@@ -106,6 +112,66 @@ const idNumber = (text: string): number | undefined => {
 };
 
 /**
+ * Pick the entries a command acts on from its arguments - IDs, or `--all` -
+ * which must all be entries that wait for review.
+ *
+ * @returns the store and the entries, or the exit code after saying why not.
+ */
+async function choose(
+  command: string,
+  args: readonly string[],
+  io: CliIo,
+  deps: McpDeps,
+): Promise<{ store: ErrorStore; chosen: Entry[] } | number> {
+  const all = args.includes("--all");
+  const ids = args.filter((a) => a !== "--all");
+  const unknown = ids.find((a) => a.startsWith("-"));
+  if (
+    unknown !== undefined ||
+    (all && ids.length > 0) ||
+    (!all && ids.length === 0)
+  ) {
+    io.stderr(
+      unknown === undefined
+        ? `antibody: give entry IDs, or --all\n${usageOf(command)}`
+        : `antibody: unknown option: ${unknown}\n${usageOf(command)}`,
+    );
+    return 2;
+  }
+  const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
+  if ("error" in memory) {
+    io.stderr(`antibody: ${memory.error}\n`);
+    return 1;
+  }
+
+  const chosen: Entry[] = [];
+  const problems: string[] = [];
+  if (all) chosen.push(...memory.entries.filter(pendingReview));
+  else
+    for (const id of ids) {
+      const n = idNumber(id);
+      const entry = memory.entries.find(
+        (e) => n !== undefined && idNumber(e.id) === n,
+      );
+      if (entry === undefined) problems.push(`no entry ${clip(plain(id), 40)}`);
+      else if (!pendingReview(entry))
+        problems.push(`${entry.id} is not waiting for review`);
+      else if (!chosen.includes(entry)) chosen.push(entry);
+    }
+  if (problems.length > 0) {
+    io.stderr(
+      `antibody: ${problems.join("; ")}. Nothing was ${command === "allow" ? "approved" : "rejected"}.\n`,
+    );
+    return 1;
+  }
+  if (chosen.length === 0) {
+    io.stdout("Nothing waits for review.\n");
+    return 0;
+  }
+  return { store: memory.store, chosen };
+}
+
+/**
  * `antibody allow`: approve entries that wait for review, which clears the
  * mark, so agents see their fix and text from their next hook call. Either
  * every ID is one that waits, or nothing is approved.
@@ -119,54 +185,40 @@ export async function runAllow(
   io: CliIo,
   deps: McpDeps = {},
 ): Promise<number> {
-  const all = args.includes("--all");
-  const ids = args.filter((a) => a !== "--all");
-  const unknown = ids.find((a) => a.startsWith("-"));
-  if (
-    unknown !== undefined ||
-    (all && ids.length > 0) ||
-    (!all && ids.length === 0)
-  ) {
-    io.stderr(
-      unknown === undefined
-        ? `antibody: give entry IDs, or --all\n${ALLOW_USAGE}`
-        : `antibody: unknown option: ${unknown}\n${ALLOW_USAGE}`,
-    );
-    return 2;
-  }
-  const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
-  if ("error" in memory) {
-    io.stderr(`antibody: ${memory.error}\n`);
-    return 1;
-  }
-
-  const waiting = memory.entries.filter(pendingReview);
-  const chosen: Entry[] = [];
-  const problems: string[] = [];
-  if (all) chosen.push(...waiting);
-  else
-    for (const id of ids) {
-      const n = idNumber(id);
-      const entry = memory.entries.find(
-        (e) => n !== undefined && idNumber(e.id) === n,
-      );
-      if (entry === undefined) problems.push(`no entry ${clip(plain(id), 40)}`);
-      else if (!pendingReview(entry))
-        problems.push(`${entry.id} is not waiting for review`);
-      else if (!chosen.includes(entry)) chosen.push(entry);
-    }
-  if (problems.length > 0) {
-    io.stderr(`antibody: ${problems.join("; ")}. Nothing was approved.\n`);
-    return 1;
-  }
-  if (chosen.length === 0) {
-    io.stdout("Nothing waits for review.\n");
-    return 0;
-  }
-  for (const entry of chosen)
-    await memory.store.update(entry.id, { meta: { [REVIEW_KEY]: null } });
+  const picked = await choose("allow", args, io, deps);
+  if (typeof picked === "number") return picked;
+  for (const entry of picked.chosen)
+    await picked.store.update(entry.id, { meta: { [REVIEW_KEY]: null } });
   io.stdout(
-    `Approved ${chosen.map((e) => e.id).join(", ")}. Agents see ${chosen.length === 1 ? "it" : "them"} from their next hook call.\n`,
+    `Approved ${picked.chosen.map((e) => e.id).join(", ")}. Agents see ${picked.chosen.length === 1 ? "it" : "them"} from their next hook call.\n`,
+  );
+  return 0;
+}
+
+/**
+ * `antibody reject`: turn entries that wait for review down. They move to the
+ * archive, marked rejected, so `antibody import` does not bring them back.
+ * Either every ID is one that waits, or nothing is rejected.
+ *
+ * @param args - entry IDs, or `--all`.
+ * @param io - stdout for the report, stderr for errors, the environment.
+ * @param deps - the working directory and git; injected in tests.
+ */
+export async function runReject(
+  args: readonly string[],
+  io: CliIo,
+  deps: McpDeps = {},
+): Promise<number> {
+  const picked = await choose("reject", args, io, deps);
+  if (typeof picked === "number") return picked;
+  for (const entry of picked.chosen) {
+    await picked.store.update(entry.id, {
+      meta: { [REVIEW_KEY]: REVIEW_REJECTED },
+    });
+    await picked.store.archive(entry.id, "rejected in review");
+  }
+  io.stdout(
+    `Rejected ${picked.chosen.map((e) => e.id).join(", ")}. ${picked.chosen.length === 1 ? "It moved" : "They moved"} to ANTIBODIES.archive.md, and an import will not bring ${picked.chosen.length === 1 ? "it" : "them"} back.\n`,
   );
   return 0;
 }

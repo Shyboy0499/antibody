@@ -3,6 +3,7 @@
 import { isAbsolute, relative } from "node:path";
 import type { CliIo, McpDeps } from "./cli";
 import { filesIn, memoryDir } from "./paths";
+import type { KbFiles } from "./paths";
 import { createStore } from "./store";
 import type { Entry, ErrorStore } from "./store";
 
@@ -15,17 +16,20 @@ export async function openMemory(
   cwd: string,
   io: CliIo,
   deps: McpDeps,
-): Promise<{ store: ErrorStore; entries: Entry[] } | { error: string }> {
+): Promise<
+  { store: ErrorStore; entries: Entry[]; files: KbFiles } | { error: string }
+> {
   let memory: string;
   try {
     memory = memoryDir(cwd, deps.git, io.env);
   } catch (error) {
     return { error: (error as Error).message };
   }
-  const store = createStore(filesIn(memory));
+  const files = filesIn(memory);
+  const store = createStore(files);
   try {
     const document = await store.read();
-    return { store, entries: document.blocks.map((b) => b.entry) };
+    return { store, entries: document.blocks.map((b) => b.entry), files };
   } catch (error) {
     return {
       error: `could not read ANTIBODIES.md: ${(error as Error).message}`,

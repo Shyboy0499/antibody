@@ -1151,6 +1151,13 @@ const REVIEW_KEY = "review";
 const HOLD_TEXT = "text";
 /** The mark for an entry that came whole from outside. */
 const REVIEW_ALL = `fix+${HOLD_TEXT}`;
+/**
+* The mark an entry gets when a person rejects it, just before it moves to
+* the archive. It is not a held part, so it holds everything, which does no
+* harm to an entry that is on its way out; import reads it to leave the entry
+* out next time.
+*/
+const REVIEW_REJECTED = "rejected";
 /** What a lookup shows in place of an entry's held title. */
 const HELD_TITLE = "(imported, waiting for review)";
 /** Which parts of an entry are held, read from its machine fields. */
@@ -1986,6 +1993,15 @@ function forImport(entry, source) {
 	};
 }
 /**
+* The fingerprints of the entries a person rejected in review, from the
+* archive they were moved to. Importing leaves these out.
+*
+* @param archive - the archive's entries.
+*/
+function rejectedKeys(archive) {
+	return new Set(archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf));
+}
+/**
 * Decide what to do with each incoming entry. An entry already here keeps its
 * own fix, so importing twice, or in the clone that exported, changes nothing.
 *
@@ -1993,8 +2009,9 @@ function forImport(entry, source) {
 * @param incoming - the entries of the file.
 * @param room - how many new entries the memory has room for.
 * @param source - the file's name, noted on new entries.
+* @param rejected - fingerprints a person turned down, from rejectedKeys().
 */
-function planImport(local, incoming, room, source) {
+function planImport(local, incoming, room, source, rejected = /* @__PURE__ */ new Set()) {
 	const plan = {
 		add: [],
 		adopt: [],
@@ -2003,6 +2020,7 @@ function planImport(local, incoming, room, source) {
 			"no-fix": 0,
 			duplicate: 0,
 			"bad-fingerprint": 0,
+			rejected: 0,
 			wontfix: 0,
 			full: 0
 		}
@@ -2014,7 +2032,10 @@ function planImport(local, incoming, room, source) {
 		if (entry.status !== "fixed" || oneLine(entry.fix) === "") plan.skipped["no-fix"]++;
 		else if (!FINGERPRINT.test(key)) plan.skipped["bad-fingerprint"]++;
 		else if (seen.has(key)) plan.skipped.duplicate++;
-		else {
+		else if (rejected.has(key)) {
+			seen.add(key);
+			plan.skipped.rejected++;
+		} else {
 			seen.add(key);
 			const mine = here.get(key);
 			if (mine === void 0) if (plan.add.length < room) plan.add.push(forImport(entry, source));
@@ -2047,11 +2068,13 @@ async function openMemory(cwd, io, deps) {
 	} catch (error) {
 		return { error: error.message };
 	}
-	const store = createStore(filesIn(memory));
+	const files = filesIn(memory);
+	const store = createStore(files);
 	try {
 		return {
 			store,
-			entries: (await store.read()).blocks.map((b) => b.entry)
+			entries: (await store.read()).blocks.map((b) => b.entry),
+			files
 		};
 	} catch (error) {
 		return { error: `could not read ANTIBODIES.md: ${error.message}` };
@@ -2142,12 +2165,22 @@ const WHY = {
 	"no-fix": "without a working fix",
 	duplicate: "repeated in the file",
 	"bad-fingerprint": "with a fingerprint that is not one",
+	rejected: "that you rejected before",
 	wontfix: "for errors marked wontfix here",
 	full: `that did not fit: the memory holds at most ${DEFAULT_STORE_OPTIONS.maxEntries} entries`
 };
 /** What an import left out, as "1 already known, 2 without a working fix". */
 function leftOut(plan) {
 	return [["known", plan.known], ...Object.entries(plan.skipped)].filter(([, n]) => n > 0).map(([why, n]) => `${n} ${WHY[why]}`).join(", ");
+}
+/** The fingerprints rejected in review, from the archive; none if it does not parse. */
+async function rejectedFixes(archive) {
+	try {
+		return rejectedKeys(parseDocument(await nodeStoreFs().readFile(archive) ?? "").blocks.map((b) => b.entry));
+	} catch (error) {
+		if (!(error instanceof ParseError)) throw error;
+		return /* @__PURE__ */ new Set();
+	}
 }
 /**
 * `antibody import`: read the fixes of a committed ANTIBODIES.md into this
@@ -2195,7 +2228,7 @@ async function runImport(args, io, deps = {}) {
 		return 1;
 	}
 	const room = Math.max(0, DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length);
-	const plan = planImport(memory.entries, incoming, room, name);
+	const plan = planImport(memory.entries, incoming, room, name, await rejectedFixes(memory.files.archive));
 	const count = plan.add.length + plan.adopt.length;
 	const left = leftOut(plan);
 	if (count === 0) {
@@ -4068,7 +4101,7 @@ async function serveLines(server, input, write) {
 //#endregion
 //#region src/review-cli.ts
 const REVIEW_USAGE = "usage: antibody review\n";
-const ALLOW_USAGE = `usage: antibody allow ID... | --all
+const usageOf = (command) => `usage: antibody ${command} ID... | --all
   ID     an entry that waits for review, as antibody review shows it (E-0004, e4, 4)
   --all  every entry that waits
 `;
@@ -4134,6 +4167,48 @@ const idNumber = (text) => {
 	return m === null ? void 0 : Number(m[1]);
 };
 /**
+* Pick the entries a command acts on from its arguments - IDs, or `--all` -
+* which must all be entries that wait for review.
+*
+* @returns the store and the entries, or the exit code after saying why not.
+*/
+async function choose(command, args, io, deps) {
+	const all = args.includes("--all");
+	const ids = args.filter((a) => a !== "--all");
+	const unknown = ids.find((a) => a.startsWith("-"));
+	if (unknown !== void 0 || all && ids.length > 0 || !all && ids.length === 0) {
+		io.stderr(unknown === void 0 ? `antibody: give entry IDs, or --all\n${usageOf(command)}` : `antibody: unknown option: ${unknown}\n${usageOf(command)}`);
+		return 2;
+	}
+	const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
+	if ("error" in memory) {
+		io.stderr(`antibody: ${memory.error}\n`);
+		return 1;
+	}
+	const chosen = [];
+	const problems = [];
+	if (all) chosen.push(...memory.entries.filter(pendingReview));
+	else for (const id of ids) {
+		const n = idNumber(id);
+		const entry = memory.entries.find((e) => n !== void 0 && idNumber(e.id) === n);
+		if (entry === void 0) problems.push(`no entry ${clip(plain(id), 40)}`);
+		else if (!pendingReview(entry)) problems.push(`${entry.id} is not waiting for review`);
+		else if (!chosen.includes(entry)) chosen.push(entry);
+	}
+	if (problems.length > 0) {
+		io.stderr(`antibody: ${problems.join("; ")}. Nothing was ${command === "allow" ? "approved" : "rejected"}.\n`);
+		return 1;
+	}
+	if (chosen.length === 0) {
+		io.stdout("Nothing waits for review.\n");
+		return 0;
+	}
+	return {
+		store: memory.store,
+		chosen
+	};
+}
+/**
 * `antibody allow`: approve entries that wait for review, which clears the
 * mark, so agents see their fix and text from their next hook call. Either
 * every ID is one that waits, or nothing is approved.
@@ -4143,39 +4218,29 @@ const idNumber = (text) => {
 * @param deps - the working directory and git; injected in tests.
 */
 async function runAllow(args, io, deps = {}) {
-	const all = args.includes("--all");
-	const ids = args.filter((a) => a !== "--all");
-	const unknown = ids.find((a) => a.startsWith("-"));
-	if (unknown !== void 0 || all && ids.length > 0 || !all && ids.length === 0) {
-		io.stderr(unknown === void 0 ? `antibody: give entry IDs, or --all\n${ALLOW_USAGE}` : `antibody: unknown option: ${unknown}\n${ALLOW_USAGE}`);
-		return 2;
+	const picked = await choose("allow", args, io, deps);
+	if (typeof picked === "number") return picked;
+	for (const entry of picked.chosen) await picked.store.update(entry.id, { meta: { [REVIEW_KEY]: null } });
+	io.stdout(`Approved ${picked.chosen.map((e) => e.id).join(", ")}. Agents see ${picked.chosen.length === 1 ? "it" : "them"} from their next hook call.\n`);
+	return 0;
+}
+/**
+* `antibody reject`: turn entries that wait for review down. They move to the
+* archive, marked rejected, so `antibody import` does not bring them back.
+* Either every ID is one that waits, or nothing is rejected.
+*
+* @param args - entry IDs, or `--all`.
+* @param io - stdout for the report, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+*/
+async function runReject(args, io, deps = {}) {
+	const picked = await choose("reject", args, io, deps);
+	if (typeof picked === "number") return picked;
+	for (const entry of picked.chosen) {
+		await picked.store.update(entry.id, { meta: { [REVIEW_KEY]: REVIEW_REJECTED } });
+		await picked.store.archive(entry.id, "rejected in review");
 	}
-	const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
-	if ("error" in memory) {
-		io.stderr(`antibody: ${memory.error}\n`);
-		return 1;
-	}
-	const waiting = memory.entries.filter(pendingReview);
-	const chosen = [];
-	const problems = [];
-	if (all) chosen.push(...waiting);
-	else for (const id of ids) {
-		const n = idNumber(id);
-		const entry = memory.entries.find((e) => n !== void 0 && idNumber(e.id) === n);
-		if (entry === void 0) problems.push(`no entry ${clip(plain(id), 40)}`);
-		else if (!pendingReview(entry)) problems.push(`${entry.id} is not waiting for review`);
-		else if (!chosen.includes(entry)) chosen.push(entry);
-	}
-	if (problems.length > 0) {
-		io.stderr(`antibody: ${problems.join("; ")}. Nothing was approved.\n`);
-		return 1;
-	}
-	if (chosen.length === 0) {
-		io.stdout("Nothing waits for review.\n");
-		return 0;
-	}
-	for (const entry of chosen) await memory.store.update(entry.id, { meta: { [REVIEW_KEY]: null } });
-	io.stdout(`Approved ${chosen.map((e) => e.id).join(", ")}. Agents see ${chosen.length === 1 ? "it" : "them"} from their next hook call.\n`);
+	io.stdout(`Rejected ${picked.chosen.map((e) => e.id).join(", ")}. ${picked.chosen.length === 1 ? "It moved" : "They moved"} to ANTIBODIES.archive.md, and an import will not bring ${picked.chosen.length === 1 ? "it" : "them"} back.\n`);
 	return 0;
 }
 //#endregion
@@ -5448,6 +5513,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody import             read fixes from a committed ANTIBODIES.md
        antibody review             read what waits for your review
        antibody allow ID... | --all   approve it, so agents see it
+       antibody reject ID... | --all  turn it down, so it is archived
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -5531,6 +5597,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "import") return runImport(rest, io, deps);
 	if (command === "review") return runReview(rest, io, deps);
 	if (command === "allow") return runAllow(rest, io, deps);
+	if (command === "reject") return runReject(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "watch") return runWatch(rest, io, deps);
 	if (command === "--version" || command === "-v") {
