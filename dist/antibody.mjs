@@ -2034,12 +2034,12 @@ function holdImportedFix(meta) {
 	return { [REVIEW_KEY]: heldParts(meta).text ? REVIEW_ALL : "fix" };
 }
 //#endregion
-//#region src/exchange-cli.ts
-const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
-  --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
-  --print     print the document instead of writing a file
-`;
-/** The memory's store and its entries as the document holds them, or why not. */
+//#region src/memory-cli.ts
+/**
+* The memory's store and its entries as the document holds them, or the
+* reason they cannot be read: outside a repository, or a document that does
+* not parse.
+*/
 async function openMemory(cwd, io, deps) {
 	let memory;
 	try {
@@ -2062,6 +2062,12 @@ function shown(cwd, path) {
 	const rel = relative(cwd, path);
 	return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? path : rel;
 }
+//#endregion
+//#region src/exchange-cli.ts
+const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
+  --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
+  --print     print the document instead of writing a file
+`;
 /**
 * `antibody export`: write the fixes this fleet found to ANTIBODIES.md in the
 * repository root, redacted again, for a person to look over and commit. It
@@ -2206,7 +2212,7 @@ async function runImport(args, io, deps = {}) {
 	}
 	io.stdout([
 		`${dry ? "Would import" : "Imported"} ${count} ${count === 1 ? "fix" : "fixes"} from ${name}: ${plan.add.length} for new errors, ${plan.adopt.length} for errors this machine had no fix for.`,
-		...dry ? [] : ["They wait for your review, and no agent sees them until you approve them."],
+		...dry ? [] : ["They wait for your review, and no agent sees them until you approve them.", "Run `antibody review` to read them, then `antibody allow` to approve."],
 		...left === "" ? [] : [`Left out: ${left}.`],
 		""
 	].join("\n"));
@@ -3172,7 +3178,7 @@ function indexEntries(entries) {
 		};
 	});
 }
-const idNumber = (id) => Number(/\d+$/.exec(id)?.[0] ?? Infinity);
+const idNumber$1 = (id) => Number(/\d+$/.exec(id)?.[0] ?? Infinity);
 /**
 * Pick the best candidate: highest similarity, then the error's own project,
 * then the lowest ID (the oldest entry, which is the one people have edited).
@@ -3183,7 +3189,7 @@ function best(candidates, proj) {
 		if (winner === void 0) return c;
 		if (c.similarity !== winner.similarity) return c.similarity > winner.similarity ? c : winner;
 		if (sameProj(c) !== sameProj(winner)) return sameProj(c) > sameProj(winner) ? c : winner;
-		return idNumber(c.indexed.entry.id) < idNumber(winner.indexed.entry.id) ? c : winner;
+		return idNumber$1(c.indexed.entry.id) < idNumber$1(winner.indexed.entry.id) ? c : winner;
 	}, void 0);
 }
 function hit(winner, via) {
@@ -4058,6 +4064,119 @@ async function serveLines(server, input, write) {
 		}));
 	}
 	await Promise.all(pending);
+}
+//#endregion
+//#region src/review-cli.ts
+const REVIEW_USAGE = "usage: antibody review\n";
+const ALLOW_USAGE = `usage: antibody allow ID... | --all
+  ID     an entry that waits for review, as antibody review shows it (E-0004, e4, 4)
+  --all  every entry that waits
+`;
+/** What an entry holds back, in words. */
+function holding(entry) {
+	const held = heldParts(entry.meta);
+	return held.fix && held.text ? "its fix and its text" : held.fix ? "its fix" : "its text";
+}
+const INDENT = "            ";
+/** A text for the screen: plain, clipped, its lines under a label. */
+function field(label, text, max) {
+	const lines = plain(text).split("\n").map((l) => l.trimEnd()).filter((l) => l !== "");
+	if (lines.length === 0) return [];
+	const body = clip(lines.join("\n"), max).split("\n");
+	return [`  ${`${label}:`.padEnd(10)}${body[0]}`, ...body.slice(1).map((l) => `${INDENT}${l}`)];
+}
+/** One held entry as `antibody review` shows it. */
+function describe(entry) {
+	return [
+		`${entry.id} · ${clip(oneLine(plain(entry.title)), 200)}  (holds ${holding(entry)})`,
+		...field("category", oneLine(plain(entry.category)), 100),
+		...field("trigger", oneLine(plain(entry.trigger)), 200),
+		...field("sample", entry.raw, 500),
+		...field("fix", entry.fix, 1e3),
+		...field("notes", entry.notes, 300),
+		""
+	];
+}
+/**
+* `antibody review`: print every entry that holds something back for a
+* person, with the text agents are not yet shown.
+*
+* @param args - the arguments after `review`; none are taken.
+* @param io - stdout for the entries, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+*/
+async function runReview(args, io, deps = {}) {
+	if (args.length > 0) {
+		io.stderr(`antibody: review takes no arguments\n${REVIEW_USAGE}`);
+		return 2;
+	}
+	const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
+	if ("error" in memory) {
+		io.stderr(`antibody: ${memory.error}\n`);
+		return 1;
+	}
+	const waiting = memory.entries.filter(pendingReview);
+	if (waiting.length === 0) {
+		io.stdout("Nothing waits for review.\n");
+		return 0;
+	}
+	io.stdout([
+		...waiting.flatMap(describe),
+		`${waiting.length} ${waiting.length === 1 ? "entry waits" : "entries wait"} for review. Agents see none of it yet.`,
+		`Approve with: antibody allow ${waiting.map((e) => e.id).join(" ")}`,
+		"or all of it with: antibody allow --all",
+		""
+	].join("\n"));
+	return 0;
+}
+const idNumber = (text) => {
+	const m = /^(?:[A-Za-z]+-?)?0*(\d+)$/.exec(text.trim());
+	return m === null ? void 0 : Number(m[1]);
+};
+/**
+* `antibody allow`: approve entries that wait for review, which clears the
+* mark, so agents see their fix and text from their next hook call. Either
+* every ID is one that waits, or nothing is approved.
+*
+* @param args - entry IDs, or `--all`.
+* @param io - stdout for the report, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+*/
+async function runAllow(args, io, deps = {}) {
+	const all = args.includes("--all");
+	const ids = args.filter((a) => a !== "--all");
+	const unknown = ids.find((a) => a.startsWith("-"));
+	if (unknown !== void 0 || all && ids.length > 0 || !all && ids.length === 0) {
+		io.stderr(unknown === void 0 ? `antibody: give entry IDs, or --all\n${ALLOW_USAGE}` : `antibody: unknown option: ${unknown}\n${ALLOW_USAGE}`);
+		return 2;
+	}
+	const memory = await openMemory(deps.cwd ?? process.cwd(), io, deps);
+	if ("error" in memory) {
+		io.stderr(`antibody: ${memory.error}\n`);
+		return 1;
+	}
+	const waiting = memory.entries.filter(pendingReview);
+	const chosen = [];
+	const problems = [];
+	if (all) chosen.push(...waiting);
+	else for (const id of ids) {
+		const n = idNumber(id);
+		const entry = memory.entries.find((e) => n !== void 0 && idNumber(e.id) === n);
+		if (entry === void 0) problems.push(`no entry ${clip(plain(id), 40)}`);
+		else if (!pendingReview(entry)) problems.push(`${entry.id} is not waiting for review`);
+		else if (!chosen.includes(entry)) chosen.push(entry);
+	}
+	if (problems.length > 0) {
+		io.stderr(`antibody: ${problems.join("; ")}. Nothing was approved.\n`);
+		return 1;
+	}
+	if (chosen.length === 0) {
+		io.stdout("Nothing waits for review.\n");
+		return 0;
+	}
+	for (const entry of chosen) await memory.store.update(entry.id, { meta: { [REVIEW_KEY]: null } });
+	io.stdout(`Approved ${chosen.map((e) => e.id).join(", ")}. Agents see ${chosen.length === 1 ? "it" : "them"} from their next hook call.\n`);
+	return 0;
 }
 //#endregion
 //#region src/setup.ts
@@ -5327,6 +5446,8 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody setup codex        add the hooks to Codex CLI
        antibody export             write the fleet's fixes to ANTIBODIES.md
        antibody import             read fixes from a committed ANTIBODIES.md
+       antibody review             read what waits for your review
+       antibody allow ID... | --all   approve it, so agents see it
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -5408,6 +5529,8 @@ async function main(argv, io, deps = {}) {
 	if (command === "setup") return runSetup(rest, io, deps);
 	if (command === "export") return runExport(rest, io, deps);
 	if (command === "import") return runImport(rest, io, deps);
+	if (command === "review") return runReview(rest, io, deps);
+	if (command === "allow") return runAllow(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "watch") return runWatch(rest, io, deps);
 	if (command === "--version" || command === "-v") {

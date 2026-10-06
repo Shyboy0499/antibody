@@ -222,6 +222,7 @@ describe("antibody import", () => {
       [
         "Imported 2 fixes from ANTIBODIES.md: 2 for new errors, 0 for errors this machine had no fix for.",
         "They wait for your review, and no agent sees them until you approve them.",
+        "Run `antibody review` to read them, then `antibody allow` to approve.",
         "",
       ].join("\n"),
     );

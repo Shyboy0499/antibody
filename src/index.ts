@@ -12,6 +12,8 @@ export * from "./trust";
 export * from "./review";
 export * from "./exchange";
 export * from "./exchange-cli";
+export * from "./memory-cli";
+export * from "./review-cli";
 export * from "./resolve-detect";
 export * from "./injector";
 export * from "./state";
