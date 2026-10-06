@@ -1,10 +1,10 @@
 # antibody design
 
 Status: draft, October 2026. Milestones M1 (core and shared memory), M2 (the
-Claude Code plugin and the MCP server) and M3 (the Gemini CLI and Codex CLI adapters)
-and M4 (`antibody watch`) are implemented. Statements about
-other tools' hook APIs come from their public documentation and are marked where
-they still need to be checked against a running copy.
+Claude Code plugin and the MCP server), M3 (the Gemini CLI and Codex CLI adapters)
+and M4 (`antibody watch`) are implemented, and M6 has begun with export and import.
+Statements about other tools' hook APIs come from their public documentation and
+are marked where they still need to be checked against a running copy.
 
 ## 1. What antibody is
 
@@ -171,14 +171,17 @@ counter increment is lost and that every file still parses.
 
 ### 4.3 Beyond one machine
 
-Cloud agents and teammates do not share a `.git` directory. Two later options, to be
-chosen in milestone M6:
+Cloud agents and teammates do not share a `.git` directory. Milestone M6 has the
+first of two options built:
 
-- **Export and import.** `antibody export` writes reviewed, redacted entries to a
-  committed `ANTIBODIES.md`. A fresh clone imports them as untrusted until a person
-  approves them, the way `direnv allow` works.
-- **Relay.** A small optional HTTP service that several machines' memories sync
-  through.
+- **Export and import (built).** `antibody export` writes the fixes this fleet found
+  to a committed `ANTIBODIES.md`: only entries with a working fix that were not
+  themselves imported and unreviewed, redacted again, without notes. A fresh clone
+  runs `antibody import`, and what comes in is held until a person approves it, the
+  way `direnv allow` works (§9). An entry the clone already has a fix for keeps its
+  own, a `wontfix` is respected, and a fix a person rejected is not brought back.
+- **Relay (open, Q5).** A small optional HTTP service that several machines'
+  memories sync through.
 
 ## 5. Harness adapters
 
@@ -299,9 +302,14 @@ Milestone M5 replaces these estimates with a measured benchmark.
 - **Prompt injection.** Injected fixes are text other agents wrote, so they are an
   injection surface. Mitigations: only agents in this repository's fleet write to its
   memory; every notice is framed as advice from a named peer, never as an instruction
-  from the user; fixes that keep failing lose trust; imported entries stay untrusted
-  until a person approves them; `antibody review` lists new fixes for a person to
-  check.
+  from the user; fixes that keep failing lose trust. Imported entries stay untrusted
+  until a person approves them. What is held is not only the fix: the title, trigger
+  and sample of an entry that came whole are text someone else wrote, and agents
+  read them in lookups and notices, so they are held too (`src/review.ts`).
+  `antibody review` shows a person everything that waits, stripped of control,
+  hidden and direction-changing characters; `antibody allow` approves it and
+  `antibody reject` archives it. The imported file is read with a size limit, a
+  fingerprint check, text limits and a limit on how many entries it may add.
 - **Fail open.** Any internal error means no output and exit code 0.
 
 ## 10. Failure modes
