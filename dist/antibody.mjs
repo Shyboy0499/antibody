@@ -235,12 +235,15 @@ var CapTracker = class CapTracker {
 	*
 	* @param id - the entry the notice is about.
 	* @param fixed - whether the entry's status is `fixed`.
+	* @param promised - the notice carries a fix the session was told it would
+	*   be given (a claim hint's promise): the turn's budget does not hold it
+	*   back, though the step's and the entry's still do.
 	* @returns whether the notice may be emitted; nothing is taken when not.
 	*/
-	tryEmit(id, fixed = false) {
+	tryEmit(id, fixed = false, promised = false) {
 		const used = this.perId.get(id) ?? 0;
 		const perId = fixed ? this.limits.fixedPerSession : this.limits.perIdPerSession;
-		if (this.step >= this.limits.perStep || this.turn >= this.limits.perTurn || used >= perId) return false;
+		if (this.step >= this.limits.perStep || !promised && this.turn >= this.limits.perTurn || used >= perId) return false;
 		this.step++;
 		this.turn++;
 		this.perId.set(id, used + 1);
@@ -3137,9 +3140,11 @@ var Injector = class {
 	*
 	* @param event - the hit or the miss.
 	* @param observed - observe() already saw this hit; do not count it again.
+	* @param promised - the session was told this entry's fix would be passed
+	*   on (a claim hint): a fix is not held back by the turn's budget.
 	* @returns the notice to inject, or undefined to stay silent.
 	*/
-	offer(event, observed = false) {
+	offer(event, observed = false, promised = false) {
 		if (this.mode === "off") return void 0;
 		if (event.kind === "miss") {
 			if (this.mode !== "always" || !this.caps.tryEmit(event.id)) return void 0;
@@ -3151,7 +3156,7 @@ var Injector = class {
 		const carriesFix = oneLine(entry.fix) !== "";
 		const level = carriesFix ? this.trust.level(id, entry.fix) : "trusted";
 		if (level === "suppressed") return void 0;
-		if (!this.caps.tryEmit(id, entry.status === "fixed")) return void 0;
+		if (!this.caps.tryEmit(id, entry.status === "fixed", promised && carriesFix)) return void 0;
 		if (carriesFix) this.trust.injected(id, entry.fix, this.scope);
 		return notice(id, noticeText(event, level));
 	}
@@ -3867,6 +3872,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				} else await logClaim(found.id);
 			}
 		}
+		const promised = oneLine(entry.fix) !== "" && s.holding.includes(entry.fingerprint);
 		if (oneLine(entry.fix) !== "") s.holding = s.holding.filter((f) => f !== entry.fingerprint);
 		await tell(rt.injector.offer({
 			kind: "hit",
@@ -3874,7 +3880,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				...found,
 				entry
 			}
-		}), notices);
+		}, false, promised), notices);
 	}
 	async function onMiss(s, rt, record, notices) {
 		const outcome = await claims.claim({
@@ -3932,7 +3938,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			const notice = rt.injector.offer({
 				kind: "hit",
 				hit
-			}, true);
+			}, true, true);
 			if (notice === void 0 && entry.status !== "wontfix") waiting.push(fingerprint);
 			await tell(notice, notices);
 		}

@@ -345,6 +345,33 @@ describe("fleet: deliveries", () => {
     expect(later).toContain(`fix: ${FIX}`);
   });
 
+  it("delivers the promised fix even once the turn's budget is spent", async () => {
+    // s-b was told once in beforeEach; a second hint and a fix for another
+    // error spend the rest of its turn's three notices.
+    expect(await fleet("s-b").failure(capture, call)).toHaveLength(1);
+    await fleet("s-c").failure(other, otherCall);
+    await createStore(filesIn(memory)).update("E-0002", {
+      fix: "Use a branch of your own.",
+    });
+    expect(await fleet("s-b").failure(other, otherCall)).toHaveLength(1);
+    await recordFix();
+    const [notice] = await fleet("s-b").poll();
+    expect(notice).toContain(`fix: ${FIX}`);
+    expect(await holding("s-b")).toEqual([]);
+  });
+
+  it("hands the promised fix to a hit on the awaited entry once the turn's budget is spent", async () => {
+    expect(await fleet("s-b").failure(capture, call)).toHaveLength(1);
+    await fleet("s-c").failure(other, otherCall);
+    await createStore(filesIn(memory)).update("E-0002", {
+      fix: "Use a branch of your own.",
+    });
+    expect(await fleet("s-b").failure(other, otherCall)).toHaveLength(1);
+    await recordFix();
+    const [notice] = await fleet("s-b").failure(capture, call);
+    expect(notice).toContain(`fix: ${FIX}`);
+  });
+
   it("does nothing for a session that waits for nothing", async () => {
     expect(await fleet("s-c").poll()).toEqual([]);
   });

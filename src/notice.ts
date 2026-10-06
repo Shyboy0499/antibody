@@ -401,16 +401,19 @@ export class CapTracker {
    *
    * @param id - the entry the notice is about.
    * @param fixed - whether the entry's status is `fixed`.
+   * @param promised - the notice carries a fix the session was told it would
+   *   be given (a claim hint's promise): the turn's budget does not hold it
+   *   back, though the step's and the entry's still do.
    * @returns whether the notice may be emitted; nothing is taken when not.
    */
-  tryEmit(id: string, fixed = false): boolean {
+  tryEmit(id: string, fixed = false, promised = false): boolean {
     const used = this.perId.get(id) ?? 0;
     const perId = fixed
       ? this.limits.fixedPerSession
       : this.limits.perIdPerSession;
     if (
       this.step >= this.limits.perStep ||
-      this.turn >= this.limits.perTurn ||
+      (!promised && this.turn >= this.limits.perTurn) ||
       used >= perId
     )
       return false;

@@ -171,6 +171,20 @@ describe("Injector", () => {
     expect(later).toEqual([true, true, false]);
   });
 
+  it("lets a promised fix past the turn's budget, but not a promise without a fix", () => {
+    const injector = new Injector();
+    for (const id of ["E-1", "E-2", "E-3"]) {
+      injector.beginStep();
+      injector.offer(hit(id));
+    }
+    injector.beginStep();
+    expect(
+      injector.offer(hit("E-7", { fix: "" }), false, true),
+    ).toBeUndefined();
+    expect(injector.offer(hit("E-7"))).toBeUndefined();
+    expect(injector.offer(hit("E-7"), false, true)?.kind).toBe("hit");
+  });
+
   it("lets a fixed entry speak once per session", () => {
     const injector = new Injector();
     const fixed = () => hit("E-0007", { status: "fixed" });
