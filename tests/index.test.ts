@@ -23,6 +23,8 @@ import * as state from "../src/state";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
 import * as review from "../src/review";
+import * as exchange from "../src/exchange";
+import * as exchangeCli from "../src/exchange-cli";
 import * as tools from "../src/tools";
 import * as mcp from "../src/mcp";
 import * as setup from "../src/setup";
@@ -43,6 +45,8 @@ describe("public entry point", () => {
     ["notice", notice],
     ["trust", trust],
     ["review", review],
+    ["exchange", exchange],
+    ["exchange-cli", exchangeCli],
     ["resolve-detect", resolveDetect],
     ["injector", injector],
     ["state", state],

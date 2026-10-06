@@ -6,6 +6,7 @@
 //   antibody mcp [harness]      serve the agent tools over MCP on stdio
 //   antibody setup gemini       add the hooks and MCP server to Gemini CLI
 //   antibody setup codex        add the hooks to Codex CLI
+//   antibody export             write the fleet's fixes to ANTIBODIES.md
 //   antibody stats              print the memory's ledger, for people and scripts
 //   antibody watch              the live fleet view
 //   antibody --version          print the version
@@ -20,6 +21,7 @@ import { CLAUDE_CODE, hookResponse, parseHookInput } from "./claude-code";
 import { toCapture, toToolCall } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { CODEX, parseCodexInput } from "./codex";
+import { runExport } from "./exchange-cli";
 import { createFleet } from "./fleet";
 import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
@@ -182,6 +184,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
+       antibody export             write the fleet's fixes to ANTIBODIES.md
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -275,6 +278,7 @@ export async function main(
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
   if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
   if (command === "setup") return runSetup(rest, io, deps);
+  if (command === "export") return runExport(rest, io, deps);
   if (command === "stats") return runStats(rest, io, deps);
   if (command === "watch") return runWatch(rest, io, deps);
   if (command === "--version" || command === "-v") {
