@@ -6,6 +6,9 @@ lib/
 # Coverage output
 coverage/
 
+# Benchmark results, until they are published
+bench/results/
+
 # Editor and OS noise
 .vscode/
 .idea/
