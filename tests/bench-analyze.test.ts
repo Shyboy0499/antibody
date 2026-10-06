@@ -112,6 +112,27 @@ describe("trapOutcomes: entries as antibody stores them", () => {
   });
 });
 
+describe("trapOutcomes: an agent told to hold", () => {
+  it("met the trap, whether the error had its entry yet or not", () => {
+    clock = 0;
+    const events = [
+      event("a", "miss", "E-0002"),
+      // b and c met it while a was still writing it up, and while a held it.
+      event("b", "hold", "new error E-0002"),
+      event("c", "hold", "E-0002"),
+      event("c", "notice", "E-0002", { notice: "hit", tokens: 60 }),
+    ];
+    expect(trapOutcomes(events, ENTRIES).find((o) => o.trap === "env")).toEqual(
+      {
+        trap: "env",
+        met: 3,
+        helped: 1,
+        diagnosed: 2,
+      },
+    );
+  });
+});
+
 describe("summariseRun", () => {
   it("adds the diagnoses up, and counts beyond the first of each trap as repeats", () => {
     clock = 0;
