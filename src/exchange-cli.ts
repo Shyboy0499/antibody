@@ -14,6 +14,7 @@ import {
   exportDocument,
   holdImportedFix,
   planImport,
+  rejectedKeys,
 } from "./exchange";
 import type { ImportPlan, Skipped } from "./exchange";
 import { openMemory, shown } from "./memory-cli";
@@ -134,6 +135,7 @@ const WHY: Record<Skipped | "known", string> = {
   "no-fix": "without a working fix",
   duplicate: "repeated in the file",
   "bad-fingerprint": "with a fingerprint that is not one",
+  rejected: "that you rejected before",
   wontfix: "for errors marked wontfix here",
   full: `that did not fit: the memory holds at most ${DEFAULT_STORE_OPTIONS.maxEntries} entries`,
 };
@@ -148,6 +150,17 @@ function leftOut(plan: ImportPlan): string {
     .filter(([, n]) => n > 0)
     .map(([why, n]) => `${n} ${WHY[why]}`)
     .join(", ");
+}
+
+/** The fingerprints rejected in review, from the archive; none if it does not parse. */
+async function rejectedFixes(archive: string): Promise<Set<string>> {
+  try {
+    const text = (await nodeStoreFs().readFile(archive)) ?? "";
+    return rejectedKeys(parseDocument(text).blocks.map((b) => b.entry));
+  } catch (error) {
+    if (!(error instanceof ParseError)) throw error;
+    return new Set();
+  }
 }
 
 /**
@@ -212,7 +225,13 @@ export async function runImport(
     0,
     DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length,
   );
-  const plan = planImport(memory.entries, incoming, room, name);
+  const plan = planImport(
+    memory.entries,
+    incoming,
+    room,
+    name,
+    await rejectedFixes(memory.files.archive),
+  );
   const count = plan.add.length + plan.adopt.length;
   const left = leftOut(plan);
   if (count === 0) {

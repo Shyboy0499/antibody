@@ -10,6 +10,7 @@
 //   antibody import             read fixes from a committed ANTIBODIES.md
 //   antibody review             read what waits for your review
 //   antibody allow              approve it, so agents see it
+//   antibody reject             turn it down, so it is archived
 //   antibody stats              print the memory's ledger, for people and scripts
 //   antibody watch              the live fleet view
 //   antibody --version          print the version
@@ -32,7 +33,7 @@ import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
-import { runAllow, runReview } from "./review-cli";
+import { runAllow, runReject, runReview } from "./review-cli";
 import { runSetup } from "./setup";
 import type { SetupDeps } from "./setup";
 import { createTools } from "./tools";
@@ -192,6 +193,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody import             read fixes from a committed ANTIBODIES.md
        antibody review             read what waits for your review
        antibody allow ID... | --all   approve it, so agents see it
+       antibody reject ID... | --all  turn it down, so it is archived
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -289,6 +291,7 @@ export async function main(
   if (command === "import") return runImport(rest, io, deps);
   if (command === "review") return runReview(rest, io, deps);
   if (command === "allow") return runAllow(rest, io, deps);
+  if (command === "reject") return runReject(rest, io, deps);
   if (command === "stats") return runStats(rest, io, deps);
   if (command === "watch") return runWatch(rest, io, deps);
   if (command === "--version" || command === "-v") {

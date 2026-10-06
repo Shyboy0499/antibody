@@ -36,6 +36,14 @@ export const HOLD_TEXT = "text";
 /** The mark for an entry that came whole from outside. */
 export const REVIEW_ALL = `${HOLD_FIX}+${HOLD_TEXT}`;
 
+/**
+ * The mark an entry gets when a person rejects it, just before it moves to
+ * the archive. It is not a held part, so it holds everything, which does no
+ * harm to an entry that is on its way out; import reads it to leave the entry
+ * out next time.
+ */
+export const REVIEW_REJECTED = "rejected";
+
 /** What a lookup shows in place of an entry's held title. */
 export const HELD_TITLE = "(imported, waiting for review)";
 

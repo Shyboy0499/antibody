@@ -246,3 +246,81 @@ describe("antibody allow", () => {
     );
   });
 });
+
+describe("antibody reject", () => {
+  const archive = () => readFileSync(filesIn(memoryDir(clone)).archive, "utf8");
+
+  it("turns an entry down: it is archived, marked, and no agent sees it", async () => {
+    const { code, out } = await cli("reject", ["E-0001"]);
+    expect(code).toBe(0);
+    expect(out).toBe(
+      "Rejected E-0001. It moved to ANTIBODIES.archive.md, and an import will not bring it back.\n",
+    );
+    expect(entries().map((e) => e.id)).toEqual(["E-0002"]);
+    const archived = parseDocument(archive()).blocks.map((b) => b.entry);
+    expect(archived).toHaveLength(1);
+    expect(archived[0]?.meta.review).toBe("rejected");
+    expect(archived[0]?.notes).toMatch(/Archived .*: rejected in review$/);
+    const notices = await createFleet(
+      memoryDir(clone),
+      "claude-code@clone",
+      "s-9",
+    ).failure(...failure(ENOENT));
+    // A new error to the clone now: recorded, and nothing said.
+    expect(notices).toEqual([]);
+    expect(entries().map((e) => e.id)).toEqual(["E-0002", "E-0003"]);
+  });
+
+  it("is not undone by importing again", async () => {
+    await cli("reject", ["--all"]);
+    expect(entries()).toEqual([]);
+    const again = await cli("import", []);
+    expect(again.code).toBe(0);
+    expect(again.out).toBe(
+      "Nothing to import from ANTIBODIES.md (2 that you rejected before).\n",
+    );
+    expect(entries()).toEqual([]);
+  });
+
+  it("reads an archive that does not parse as rejecting nothing", async () => {
+    writeFileSync(
+      filesIn(memoryDir(clone)).archive,
+      "## E-0001 · x\n<!-- antibody: sig -->\n",
+    );
+    const { code, out } = await cli("import", []);
+    expect(code).toBe(0);
+    expect(out).toBe(
+      "Nothing to import from ANTIBODIES.md (2 already known here).\n",
+    );
+  });
+
+  it("takes IDs as allow does, and rejects nothing unless every one waits", async () => {
+    const bad = await cli("reject", ["E-0001", "E-0009"]);
+    expect([bad.code, bad.err]).toEqual([
+      1,
+      "antibody: no entry E-0009. Nothing was rejected.\n",
+    ]);
+    expect(entries()).toHaveLength(2);
+    const several = await cli("reject", ["e-2", "1"]);
+    expect(several.out).toBe(
+      "Rejected E-0002, E-0001. They moved to ANTIBODIES.archive.md, and an import will not bring them back.\n",
+    );
+    expect((await cli("reject", ["--all"])).out).toBe(
+      "Nothing waits for review.\n",
+    );
+  });
+
+  it("leaves an approved entry alone, and wants IDs or --all", async () => {
+    await cli("allow", ["E-0001"]);
+    const approved = await cli("reject", ["E-0001"]);
+    expect([approved.code, approved.err]).toEqual([
+      1,
+      "antibody: E-0001 is not waiting for review. Nothing was rejected.\n",
+    ]);
+    for (const args of [[], ["--all", "E-0001"], ["--fast"]]) {
+      const { code, err } = await cli("reject", args);
+      expect(code).toBe(2);
+      expect(err).toContain("usage: antibody reject");
+    }
+  });
+});

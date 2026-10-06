@@ -9,6 +9,7 @@ import {
   holdImportedFix,
   plain,
   planImport,
+  rejectedKeys,
 } from "../src/exchange";
 import { DOCUMENT_HEADER, parseDocument } from "../src/store";
 import type { Entry } from "../src/store";
@@ -233,6 +234,7 @@ describe("planImport", () => {
     "no-fix": 0,
     duplicate: 0,
     "bad-fingerprint": 0,
+    rejected: 0,
     wontfix: 0,
     full: 0,
   };
@@ -306,5 +308,43 @@ describe("holdImportedFix", () => {
     expect(holdImportedFix({})).toEqual({ review: "fix" });
     expect(holdImportedFix({ review: "fix" })).toEqual({ review: "fix" });
     expect(holdImportedFix({ review: "text" })).toEqual({ review: "fix+text" });
+  });
+});
+
+describe("rejectedKeys", () => {
+  it("names the entries a person rejected, and no others in the archive", () => {
+    const archive = [
+      entry(1, {}, { review: "rejected" }),
+      entry(2),
+      entry(3, {}, { review: "fix" }),
+    ];
+    expect([...rejectedKeys(archive)]).toEqual([FP(1)]);
+    expect(rejectedKeys([]).size).toBe(0);
+  });
+});
+
+describe("planImport: what a person rejected", () => {
+  it("is left out, even for an entry this machine met again since", () => {
+    const local = [entry(2, { fix: "", status: "open" })];
+    const plan = planImport(
+      local,
+      [entry(1), entry(2)],
+      10,
+      "f",
+      new Set([FP(1), FP(2)]),
+    );
+    expect(plan).toMatchObject({ add: [], adopt: [], known: 0 });
+    expect(plan.skipped.rejected).toBe(2);
+  });
+
+  it("counts a repeat of a rejected entry once", () => {
+    const plan = planImport(
+      [],
+      [entry(1), entry(1)],
+      10,
+      "f",
+      new Set([FP(1)]),
+    );
+    expect(plan.skipped).toMatchObject({ rejected: 1, duplicate: 1 });
   });
 });

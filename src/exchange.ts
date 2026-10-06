@@ -17,6 +17,7 @@ import {
   HOLD_FIX,
   REVIEW_ALL,
   REVIEW_KEY,
+  REVIEW_REJECTED,
   heldParts,
   pendingReview,
 } from "./review";
@@ -166,9 +167,21 @@ export function forImport(entry: Entry, source: string): NewEntry {
   };
 }
 
+/**
+ * The fingerprints of the entries a person rejected in review, from the
+ * archive they were moved to. Importing leaves these out.
+ *
+ * @param archive - the archive's entries.
+ */
+export function rejectedKeys(archive: readonly Entry[]): Set<string> {
+  return new Set(
+    archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf),
+  );
+}
+
 /** Why an incoming entry was left out. */
 export type Skipped =
-  "no-fix" | "duplicate" | "bad-fingerprint" | "wontfix" | "full";
+  "no-fix" | "duplicate" | "bad-fingerprint" | "rejected" | "wontfix" | "full";
 
 /** What `antibody import` will do. */
 export interface ImportPlan {
@@ -189,12 +202,14 @@ export interface ImportPlan {
  * @param incoming - the entries of the file.
  * @param room - how many new entries the memory has room for.
  * @param source - the file's name, noted on new entries.
+ * @param rejected - fingerprints a person turned down, from rejectedKeys().
  */
 export function planImport(
   local: readonly Entry[],
   incoming: readonly Entry[],
   room: number,
   source: string,
+  rejected: ReadonlySet<string> = new Set(),
 ): ImportPlan {
   const plan: ImportPlan = {
     add: [],
@@ -204,6 +219,7 @@ export function planImport(
       "no-fix": 0,
       duplicate: 0,
       "bad-fingerprint": 0,
+      rejected: 0,
       wontfix: 0,
       full: 0,
     },
@@ -218,6 +234,9 @@ export function planImport(
       plan.skipped["bad-fingerprint"]++;
     } else if (seen.has(key)) {
       plan.skipped.duplicate++;
+    } else if (rejected.has(key)) {
+      seen.add(key);
+      plan.skipped.rejected++;
     } else {
       seen.add(key);
       const mine = here.get(key);
