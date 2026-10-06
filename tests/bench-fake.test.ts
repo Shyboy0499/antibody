@@ -91,6 +91,19 @@ describe("the scripted agent", () => {
     expect(reports.flatMap((r) => r.recorded).length).toBeGreaterThan(0);
   }, 60_000);
 
+  it("is asked for each fix as it gets past its trap, and records it", async () => {
+    // Alone, and recording only when asked: each failure on the next trap
+    // asks for the fix of the one before.
+    const [report] = await fleet({}, [workspace.worktrees[0] as string]);
+    expect(report?.passed).toBe(true);
+    expect(report?.diagnosed).toHaveLength(4);
+    expect(report?.recorded.slice(0, 3)).toEqual([
+      "E-0001",
+      "E-0002",
+      "E-0003",
+    ]);
+  }, 60_000);
+
   it("stops waiting for a peer that leaves without a fix, and diagnoses it", async () => {
     const [mine, theirs] = workspace.worktrees as [string, string];
     const peer = (payload: Record<string, unknown>) =>
