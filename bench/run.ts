@@ -27,6 +27,7 @@ import { filesIn, PAUSE_FILE_NAME } from "../src/paths";
 import { parseDocument } from "../src/store";
 import { ARMS, renderResults, summariseArms, summariseRun } from "./analyze";
 import type { AgentResult, Arm, RunSummary } from "./analyze";
+import { claudeDriver } from "./claude";
 import { fakeDriver } from "./drivers";
 import type { Driver, DriverResult } from "./drivers";
 import { BENCH_DIR, TASKS, checkFile } from "./tasks";
@@ -206,8 +207,14 @@ export async function runBenchmark(
       );
       const run = await runOnce(arm, n, o);
       runs.push(run);
+      const spent = run.agents.reduce(
+        (sum, a) =>
+          sum +
+          (typeof a.details?.costUsd === "number" ? a.details.costUsd : 0),
+        0,
+      );
       o.log?.(
-        `  ${run.diagnoses} trap diagnoses (${run.repeatDiagnoses} repeats), ${run.agents.filter((a) => a.done).length} of ${run.agents.length} tasks done`,
+        `  ${run.diagnoses} trap diagnoses (${run.repeatDiagnoses} repeats), ${run.agents.filter((a) => a.done).length} of ${run.agents.length} tasks done${spent > 0 ? `, $${spent.toFixed(2)} spent` : ""}`,
       );
     }
   }
@@ -231,10 +238,15 @@ const USAGE = `usage: pnpm run bench -- [options]
   --out DIR             where results go (default bench/results/<time>)
   --timeout-min N       give up on an agent after N minutes (default 30)
   --keep                keep each run's workspace
+  --port N              the project's port, which each run keeps busy (default ${BENCH_PORT})
  the scripted agent:
   --speed X             multiply its pretend durations (default 1)
   --record asked|fixed  record fixes when asked, or once they work (default asked)
   --patience-ms N       how long it waits for a peer's fix
+ Claude Code (--agent claude), which costs money:
+  --max-budget-usd X    each agent's spending cap in dollars (required)
+  --model NAME          the model, by claude's own name for it
+  --claude-bin PATH     the claude command (default claude)
 `;
 
 /** The runner's options from its command line, or a usage error. */
@@ -261,6 +273,10 @@ export function parseArgs(
     "--speed",
     "--record",
     "--patience-ms",
+    "--max-budget-usd",
+    "--model",
+    "--claude-bin",
+    "--port",
   ];
   for (const flag of flags.keys())
     if (!known.includes(flag)) return { error: `unknown option: ${flag}` };
@@ -274,9 +290,11 @@ export function parseArgs(
   const agents = count("--agents", 8);
   const runs = count("--runs", 3);
   const timeout = count("--timeout-min", 30);
-  if ([agents, runs, timeout].some(Number.isNaN))
+  const port = count("--port", BENCH_PORT);
+  if ([agents, runs, timeout, port].some(Number.isNaN))
     return {
-      error: "--agents, --runs and --timeout-min take a whole number above 0",
+      error:
+        "--agents, --runs, --timeout-min and --port take a whole number above 0",
     };
   const arms = (flags.get("--arms") ?? ARMS.join(",")).split(",");
   if (
@@ -301,6 +319,19 @@ export function parseArgs(
       record,
       ...(patience === undefined ? {} : { patienceMs: Number(patience) }),
     });
+  } else if (agent === "claude") {
+    const cap = Number(flags.get("--max-budget-usd"));
+    if (!(cap > 0))
+      return {
+        error:
+          "--agent claude needs --max-budget-usd, each agent's cap in dollars",
+      };
+    const model = flags.get("--model");
+    driver = claudeDriver({
+      bin: flags.get("--claude-bin") ?? "claude",
+      maxBudgetUsd: cap,
+      ...(model === undefined ? {} : { model }),
+    });
   } else return { error: `unknown agent: ${agent}` };
 
   return {
@@ -313,6 +344,7 @@ export function parseArgs(
       join(BENCH_DIR, "results", now.toISOString().replace(/[:.]/g, "-")),
     timeoutMs: timeout * 60_000,
     keep: switches.has("--keep"),
+    port,
   };
 }
 
@@ -333,6 +365,12 @@ export async function main(
   if (!existsSync(BUNDLE)) {
     log(`bench: no bundle at ${BUNDLE}; run pnpm run build first`);
     return 1;
+  }
+  if (options.driver.capUsd !== undefined) {
+    const sessions = options.agents * options.runs * options.arms.length;
+    log(
+      `bench: ${sessions} real agent sessions, each capped at $${options.driver.capUsd}: up to $${(sessions * options.driver.capUsd).toFixed(2)} in all`,
+    );
   }
   const { markdown } = await runBenchmark({ ...options, log });
   log(`\n${markdown}\nResults in ${options.out}`);
