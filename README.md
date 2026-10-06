@@ -281,7 +281,8 @@ plays those payloads in every direction.
 
 It works under any orchestrator, because it only needs the agents' own hooks:
 herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or plain
-`git worktree add` and a few terminals.
+`git worktree add` and a few terminals. [Using antibody under an
+orchestrator](docs/integrations.md) has a note on each.
 
 ## What works today
 
@@ -345,6 +346,7 @@ personal paths, private e-mail addresses and credential-shaped tokens. See
 - [Design](docs/design.md): how capture, claims, storage, injection and the fleet view work, plus failure modes and open questions
 - [Landscape](docs/landscape.md): the October 2026 survey of about 40 multi-agent and agent-memory projects, and the gaps it found
 - [Roadmap](docs/roadmap.md): milestones from the core port to a published benchmark
+- [Integrations](docs/integrations.md): using antibody under herdr, vibe-kanban, superset, claude-squad, agent-orchestrator and paperclip
 
 ## License
 
