@@ -5,8 +5,9 @@
 // to the committed bundle exactly as Claude Code would (`antibody hook
 // claude-code` on stdin). When a test run fails on one of the traps it acts on
 // what the hook said: a fix notice is applied at once; a claim hint makes it
-// wait, re-running the tests, for as long as its patience lasts; otherwise it
-// diagnoses the trap itself, which costs it tokens and time. Its fixes are
+// wait, re-running the tests, for as long as its patience lasts or until it is
+// told no fix was recorded; otherwise it diagnoses the trap itself, which costs
+// it tokens and time. Its fixes are
 // recorded through `antibody mcp claude-code`, like a real agent's
 // antibody_record call: when the hook asks for one, which is antibody's own
 // protocol, or, with `record: "fixed"`, as soon as a fix is seen to work.
@@ -277,6 +278,8 @@ export async function runFakeAgent(
     }
     if (context.includes("has been diagnosing this"))
       held ??= { trap: trap.id, since: Date.now() };
+    // Nobody is on it any more and no fix was recorded: take it on.
+    if (context.includes("no fix recorded yet")) held = undefined;
     if (
       held?.trap === trap.id &&
       Date.now() - held.since < (o.patienceMs ?? FAKE_TIMINGS.patience * speed)
