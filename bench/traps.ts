@@ -44,7 +44,9 @@ export const TRAPS: readonly Trap[] = [
   {
     id: "generated",
     label: "Cannot find module './generated/client'",
-    pattern: /Cannot find module '[^']*generated\/client\.js'/,
+    // Redaction stores the path as <path>/client.js, so the directory is
+    // optional.
+    pattern: /Cannot find module '[^']*client\.js'/,
     fix: "Generate the client with `npm run generate`: generated/ is not committed.",
     apply: (wt) => node(wt, "scripts/generate.js"),
   },
