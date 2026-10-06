@@ -1981,7 +1981,7 @@ const IMPORT_META = [
 	"proj",
 	"first"
 ];
-const FINGERPRINT = /^[0-9a-f]{12}$/;
+const FINGERPRINT$1 = /^[0-9a-f]{12}$/;
 const UNSEEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
 /**
 * Text with what a terminal could act on, and what a reader cannot see, taken
@@ -1994,7 +1994,7 @@ function plain(text) {
 }
 const line = (text, max) => clip(oneLine(plain(text)), max);
 /** The key an entry is known by: the fingerprint matching uses. */
-const keyOf = (entry) => entry.meta.sig ?? entry.fingerprint;
+const keyOf$1 = (entry) => entry.meta.sig ?? entry.fingerprint;
 /**
 * An incoming entry as a new local entry: its texts cut and cleaned, its
 * machine fields cut down to the ones that matter, and the whole of it held
@@ -2011,7 +2011,7 @@ function forImport(entry, source) {
 	}
 	return {
 		title: line(entry.title, IMPORT_MAX_CHARS.title),
-		signature: keyOf(entry),
+		signature: keyOf$1(entry),
 		category: line(entry.category, IMPORT_MAX_CHARS.category),
 		meta,
 		trigger: line(entry.trigger, IMPORT_MAX_CHARS.trigger),
@@ -2028,7 +2028,7 @@ function forImport(entry, source) {
 * @param archive - the archive's entries.
 */
 function rejectedKeys(archive) {
-	return new Set(archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf));
+	return new Set(archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf$1));
 }
 /**
 * Decide what to do with each incoming entry. An entry already here keeps its
@@ -2054,12 +2054,12 @@ function planImport(local, incoming, room, source, rejected = /* @__PURE__ */ ne
 			full: 0
 		}
 	};
-	const here = new Map(local.map((e) => [keyOf(e), e]));
+	const here = new Map(local.map((e) => [keyOf$1(e), e]));
 	const seen = /* @__PURE__ */ new Set();
 	for (const entry of incoming) {
-		const key = keyOf(entry);
+		const key = keyOf$1(entry);
 		if (entry.status !== "fixed" || oneLine(entry.fix) === "") plan.skipped["no-fix"]++;
-		else if (!FINGERPRINT.test(key)) plan.skipped["bad-fingerprint"]++;
+		else if (!FINGERPRINT$1.test(key)) plan.skipped["bad-fingerprint"]++;
 		else if (seen.has(key)) plan.skipped.duplicate++;
 		else if (rejected.has(key)) {
 			seen.add(key);
@@ -4410,6 +4410,328 @@ async function importOnFirstSession(memory, root, env, fs = nodeStoreFs()) {
 	}, text, EXCHANGE_FILE);
 	return "error" in outcome || outcome.count === 0 ? void 0 : outcome.count;
 }
+/** The largest document a machine may push. */
+const RELAY_MAX_BYTES = IMPORT_MAX_BYTES;
+/** What a relay's documents say about themselves, below their title. */
+const RELAY_PREAMBLE = [
+	"Fixes shared through an antibody relay.",
+	"A machine that pulls them holds them for review unless it trusts the relay.",
+	""
+].join("\n");
+const FINGERPRINT = /^[0-9a-f]{12}$/;
+/** A relay with nothing yet. */
+function emptyRelay() {
+	return {
+		version: 1,
+		seq: 0,
+		fixes: []
+	};
+}
+const keyOf = (entry) => entry.meta.sig ?? entry.fingerprint;
+/**
+* Read a saved relay state.
+*
+* @param text - the file's contents.
+* @returns the state, or undefined when the text is not one.
+*/
+function parseRelayState(text) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return;
+	}
+	if (typeof value !== "object" || value === null) return void 0;
+	const raw = value;
+	if (raw.version !== 1 || !Number.isInteger(raw.seq) || !Array.isArray(raw.fixes)) return void 0;
+	const fixes = [];
+	for (const fix of raw.fixes) {
+		const f = fix;
+		if (typeof f?.seq !== "number" || typeof f.entry !== "object" || f.entry === null || typeof f.entry.fix !== "string" || typeof f.entry.meta !== "object" || f.entry.meta === null) return void 0;
+		fixes.push({
+			seq: f.seq,
+			entry: f.entry
+		});
+	}
+	return {
+		version: 1,
+		seq: raw.seq,
+		fixes
+	};
+}
+/**
+* Take in the fixes of a document a machine pushed. A fix for a fingerprint
+* the relay holds replaces it only when its text changed; either way the
+* relay redacts it again, as export did.
+*
+* @param state - the relay's state; not changed.
+* @param text - the pushed document, in the export's format.
+* @returns the new state and the counts, or why the document was refused.
+*/
+function acceptFixes(state, text) {
+	if (Buffer.byteLength(text) > RELAY_MAX_BYTES) return { error: `a document over ${RELAY_MAX_BYTES / 1024} KiB` };
+	let entries;
+	try {
+		entries = parseDocument$1(text).blocks.map((b) => b.entry);
+	} catch (error) {
+		if (!(error instanceof ParseError)) throw error;
+		return { error: `a document that does not parse: ${error.message}` };
+	}
+	const next = {
+		...state,
+		fixes: [...state.fixes]
+	};
+	const at = new Map(next.fixes.map((f, i) => [keyOf(f.entry), i]));
+	let accepted = 0;
+	let ignored = 0;
+	for (const incoming of entries) {
+		const key = keyOf(incoming);
+		if (!exportable(incoming) || !FINGERPRINT.test(key)) {
+			ignored++;
+			continue;
+		}
+		const entry = forExport(incoming);
+		const i = at.get(key);
+		if (i !== void 0) {
+			const held = next.fixes[i];
+			if (oneLine(held.entry.fix) === oneLine(entry.fix)) continue;
+			next.fixes[i] = {
+				seq: ++next.seq,
+				entry
+			};
+		} else if (next.fixes.length >= 5e3) {
+			ignored++;
+			continue;
+		} else {
+			at.set(key, next.fixes.length);
+			next.fixes.push({
+				seq: ++next.seq,
+				entry
+			});
+		}
+		accepted++;
+	}
+	return {
+		state: next,
+		accepted,
+		ignored
+	};
+}
+/**
+* The fixes that changed after `since`, oldest change first, as a document in
+* the export's format. Entries are numbered afresh, since machines' own IDs
+* collide; an importing machine gives them IDs of its own anyway.
+*
+* @param state - the relay's state.
+* @param since - the sequence number the machine last saw.
+*/
+function fixesSince(state, since) {
+	const changed = state.fixes.filter((f) => f.seq > since).sort((a, b) => a.seq - b.seq);
+	if (changed.length === 0) return {
+		seq: state.seq,
+		text: "",
+		count: 0
+	};
+	const blocks = changed.map((f, i) => renderEntry({
+		...f.entry,
+		id: `E-${String(i + 1).padStart(4, "0")}`
+	})).join("\n");
+	return {
+		seq: state.seq,
+		text: `${DOCUMENT_HEADER}\n${RELAY_PREAMBLE}\n${blocks}`,
+		count: changed.length
+	};
+}
+/** Why a saved state could not be loaded. */
+var RelayStateError = class extends Error {};
+/**
+* Load the saved state, or start empty when there is none.
+*
+* @throws RelayStateError when the file is there and is not a relay state.
+*/
+async function loadRelayState(dataFile, fs = nodeStoreFs()) {
+	const text = await fs.readFile(dataFile);
+	if (text === void 0) return emptyRelay();
+	const state = parseRelayState(text);
+	if (state === void 0) throw new RelayStateError(`${dataFile} is not a relay's state`);
+	return state;
+}
+const send = (res, status, body, type = "application/json") => {
+	const text = type === "application/json" ? JSON.stringify(body) : String(body);
+	res.writeHead(status, { "content-type": type });
+	res.end(text);
+};
+/**
+* The request's body, or undefined when it runs past `max` bytes: the rest is
+* read and dropped, so the answer can still be sent.
+*/
+function readBody(req, max) {
+	return new Promise((resolve, reject) => {
+		const parts = [];
+		let size = 0;
+		req.on("data", (part) => {
+			size += part.length;
+			if (size <= max) parts.push(part);
+		});
+		req.on("end", () => resolve(size > max ? void 0 : Buffer.concat(parts).toString("utf8")));
+		req.on("error", reject);
+	});
+}
+/**
+* Start a relay.
+*
+* @param o - the token, the state file, and where to listen.
+*/
+async function startRelay(o) {
+	if (o.token.length < 16) throw new RangeError(`the relay's token must be at least 16 characters`);
+	const fs = o.fs ?? nodeStoreFs();
+	let state = await loadRelayState(o.dataFile, fs);
+	const want = sha256Hex(`Bearer ${o.token}`);
+	let saving = Promise.resolve();
+	const save = (next) => {
+		saving = saving.then(() => writeFileAtomic(fs, o.dataFile, `${JSON.stringify(next)}\n`));
+		return saving;
+	};
+	const handle = async (req, res) => {
+		const url = new URL(req.url ?? "/", "http://relay");
+		if (url.pathname === "/health" && req.method === "GET") return send(res, 200, "ok\n", "text/plain");
+		if (url.pathname !== "/v1/fixes") return send(res, 404, { error: "not found" });
+		if (sha256Hex(req.headers.authorization ?? "") !== want) return send(res, 401, { error: "a missing or wrong token" });
+		if (req.method === "GET") {
+			const since = Number(url.searchParams.get("since") ?? 0);
+			if (!Number.isInteger(since) || since < 0) return send(res, 400, { error: "since takes a whole number" });
+			const { seq, text, count } = fixesSince(state, since);
+			return send(res, 200, {
+				seq,
+				count,
+				document: text
+			});
+		}
+		if (req.method !== "POST") return send(res, 405, { error: "GET or POST" });
+		const body = await readBody(req, RELAY_MAX_BYTES * 2);
+		if (body === void 0) return send(res, 413, { error: "too large" });
+		let document;
+		try {
+			document = JSON.parse(body).document;
+		} catch {
+			document = void 0;
+		}
+		if (typeof document !== "string") return send(res, 400, { error: "a body of { document }" });
+		const result = acceptFixes(state, document);
+		if ("error" in result) return send(res, 400, { error: result.error });
+		if (result.accepted > 0) {
+			state = result.state;
+			await save(state);
+		}
+		return send(res, 200, {
+			seq: state.seq,
+			accepted: result.accepted,
+			ignored: result.ignored
+		});
+	};
+	const server = process.getBuiltinModule("node:http").createServer((req, res) => {
+		handle(req, res).catch(() => {
+			if (!res.headersSent) send(res, 500, { error: "the relay failed" });
+			else res.end();
+		});
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(o.port, o.host, () => resolve());
+	});
+	const address = server.address();
+	return {
+		port: typeof address === "object" && address !== null ? address.port : o.port,
+		fixes: () => state.fixes.length,
+		close: () => new Promise((resolve) => {
+			server.close(() => resolve());
+			server.closeAllConnections();
+		})
+	};
+}
+//#endregion
+//#region src/relay-cli.ts
+/** The port a relay listens on unless told otherwise. */
+const RELAY_DEFAULT_PORT = 4880;
+/** The environment variable that holds the relay's token. */
+const RELAY_TOKEN_ENV = "ANTIBODY_RELAY_TOKEN";
+const RELAY_USAGE = `usage: antibody relay serve [--port N] [--host H] [--data FILE]
+  --port N     the port to listen on (default ${RELAY_DEFAULT_PORT})
+  --host H     the address to listen on (default 127.0.0.1)
+  --data FILE  where the relay keeps its fixes (default antibody-relay.json)
+The token every machine sends is read from ${RELAY_TOKEN_ENV}.
+`;
+/**
+* `antibody relay <command>`.
+*
+* @param args - the arguments after `relay`.
+* @param io - stdout, stderr and the environment.
+* @param deps - the working directory and the stop signal; injected in tests.
+*/
+async function runRelay(args, io, deps = {}) {
+	const [command, ...rest] = args;
+	if (command === "serve") return serve(rest, io, deps);
+	io.stderr(`antibody: ${command === void 0 ? "relay needs a command" : `unknown relay command: ${command}`}\n${RELAY_USAGE}`);
+	return 2;
+}
+/**
+* A signal that aborts on SIGINT or SIGTERM.
+*
+* @param emitter - where the signals arrive; the process by default.
+*/
+function interrupted(emitter = process) {
+	const stop = new AbortController();
+	for (const signal of ["SIGINT", "SIGTERM"]) emitter.once(signal, () => stop.abort());
+	return stop.signal;
+}
+async function serve(args, io, deps) {
+	const flags = /* @__PURE__ */ new Map();
+	for (let i = 0; i < args.length; i += 2) {
+		const flag = args[i];
+		const value = args[i + 1];
+		if (![
+			"--port",
+			"--host",
+			"--data"
+		].includes(flag) || value === void 0) {
+			io.stderr(`antibody: unknown or incomplete option: ${flag}\n${RELAY_USAGE}`);
+			return 2;
+		}
+		flags.set(flag, value);
+	}
+	const port = Number(flags.get("--port") ?? 4880);
+	if (!Number.isInteger(port) || port < 0 || port > 65535) {
+		io.stderr(`antibody: --port takes a port number\n${RELAY_USAGE}`);
+		return 2;
+	}
+	const token = io.env["ANTIBODY_RELAY_TOKEN"] ?? "";
+	if (token.length < 16) {
+		io.stderr(`antibody: set ${RELAY_TOKEN_ENV} to a secret of at least 16 characters; every machine sends it\n`);
+		return 1;
+	}
+	const host = flags.get("--host") ?? "127.0.0.1";
+	const cwd = deps.cwd ?? process.cwd();
+	const dataFile = resolve(cwd, flags.get("--data") ?? "antibody-relay.json");
+	let server;
+	try {
+		server = await startRelay({
+			token,
+			dataFile,
+			port,
+			host
+		});
+	} catch (error) {
+		io.stderr(`antibody: the relay could not start: ${error.message}\n`);
+		return 1;
+	}
+	io.stdout(`antibody relay: listening on http://${host}:${server.port}, holding ${server.fixes()} fixes in ${shown(cwd, dataFile)}\n`);
+	deps.onListening?.(server);
+	const signal = deps.signal ?? interrupted();
+	if (!signal.aborted) await new Promise((stop) => signal.addEventListener("abort", stop, { once: true }));
+	await server.close();
+	io.stdout(`antibody relay: stopped, holding ${server.fixes()} fixes\n`);
+	return 0;
+}
 //#endregion
 //#region src/review-cli.ts
 const REVIEW_USAGE = "usage: antibody review\n";
@@ -5867,6 +6189,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody reject ID... | --all  turn it down, so it is archived
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
+       antibody relay serve        share fixes between machines through a relay
        antibody --version
 `;
 /**
@@ -5951,6 +6274,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "reject") return runReject(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "watch") return runWatch(rest, io, deps);
+	if (command === "relay") return runRelay(rest, io, deps);
 	if (command === "--version" || command === "-v") {
 		io.stdout(`${VERSION}\n`);
 		return 0;
