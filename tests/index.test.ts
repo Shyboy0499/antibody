@@ -22,6 +22,7 @@ import * as signature from "../src/signature";
 import * as state from "../src/state";
 import * as store from "../src/store";
 import * as trust from "../src/trust";
+import * as transcript from "../src/transcript";
 import * as review from "../src/review";
 import * as exchange from "../src/exchange";
 import * as exchangeCli from "../src/exchange-cli";
@@ -46,6 +47,7 @@ describe("public entry point", () => {
     ["capture", capture],
     ["notice", notice],
     ["trust", trust],
+    ["transcript", transcript],
     ["review", review],
     ["exchange", exchange],
     ["exchange-cli", exchangeCli],

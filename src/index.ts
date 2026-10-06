@@ -9,6 +9,7 @@ export * from "./match";
 export * from "./capture";
 export * from "./notice";
 export * from "./trust";
+export * from "./transcript";
 export * from "./review";
 export * from "./exchange";
 export * from "./exchange-cli";
