@@ -28,7 +28,8 @@
     "lint": "oxlint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "bench": "vite-node bench/cli.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

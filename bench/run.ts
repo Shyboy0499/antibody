@@ -1,0 +1,340 @@
+// The benchmark's runner (roadmap M5): the same fleet, on the same tasks, with
+// antibody's injection on and with it off, several times each.
+//
+// A run builds a fresh workspace - the project committed, a worktree per agent
+// - holds the project's default port as another agent's server would, starts
+// every agent at once, each on its own task, and waits for them all. Then it
+// checks each agent's work with the task's hidden acceptance check, and reads
+// antibody's memory for who met which trap and who diagnosed it
+// (bench/analyze.ts). In the off arm the hooks still record, silently, so both
+// arms are measured the same way. Runs alternate which arm goes first, so
+// nothing that drifts over a session favours one.
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { parseEvents } from "../src/events";
+import { filesIn, PAUSE_FILE_NAME } from "../src/paths";
+import { parseDocument } from "../src/store";
+import { ARMS, renderResults, summariseArms, summariseRun } from "./analyze";
+import type { AgentResult, Arm, RunSummary } from "./analyze";
+import { fakeDriver } from "./drivers";
+import type { Driver, DriverResult } from "./drivers";
+import { BENCH_DIR, TASKS, checkFile } from "./tasks";
+import type { Task } from "./tasks";
+import { BENCH_PORT } from "./traps";
+import { createWorkspace, holdPort } from "./workspace";
+
+/** The antibody bundle the agents' hooks call. */
+export const BUNDLE = resolve(BENCH_DIR, "..", "dist", "antibody.mjs");
+
+/** What a benchmark runs. */
+export interface BenchOptions {
+  driver: Driver;
+  agents: number;
+  runs: number;
+  arms: readonly Arm[];
+  /** Where the results are written. */
+  out: string;
+  timeoutMs: number;
+  /** Keep each run's workspace, to look at afterwards. */
+  keep?: boolean;
+  /** The project's default port, which each run holds. */
+  port?: number;
+  log?: (line: string) => void;
+}
+
+/** One agent's result as the run's record keeps it. */
+export interface AgentRecord extends AgentResult {
+  session: string;
+  details?: Record<string, unknown>;
+  error?: string;
+}
+
+/** One run's summary, with each agent's full record. */
+export type RunRecord = Omit<RunSummary, "agents"> & { agents: AgentRecord[] };
+
+/**
+ * Check a task the way the benchmark scores it: the hidden check, in the
+ * agent's worktree. The traps are not what it measures, so its environment
+ * keeps them out of the way.
+ */
+export function checkTask(worktree: string, task: Task): boolean {
+  if (!existsSync(join(worktree, "generated", "client.js")))
+    execFileSync(process.execPath, ["scripts/generate.js"], {
+      cwd: worktree,
+      stdio: "ignore",
+    });
+  const run = spawnSync(process.execPath, ["--test", checkFile(task)], {
+    cwd: worktree,
+    env: { ...process.env, DATABASE_URL: "file:./check.db", PORT: "0" },
+    stdio: "ignore",
+  });
+  return run.status === 0;
+}
+
+/** Run an agent, giving up when it takes too long. */
+async function withTimeout(
+  work: Promise<DriverResult>,
+  ms: number,
+): Promise<DriverResult & { error?: string }> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<DriverResult & { error: string }>((done) => {
+    timer = setTimeout(() => done({ error: `timed out after ${ms} ms` }), ms);
+  });
+  try {
+    return await Promise.race([
+      work.catch((error: unknown) => ({ error: String(error) })),
+      late,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * One run of one arm.
+ *
+ * @param arm - injection on or off.
+ * @param n - the run's number, from 1.
+ * @param o - the benchmark's options.
+ */
+export async function runOnce(
+  arm: Arm,
+  n: number,
+  o: BenchOptions,
+): Promise<RunRecord> {
+  const root = realpathSync(
+    mkdtempSync(join(tmpdir(), `antibody-bench-${arm}-`)),
+  );
+  const runDir = join(o.out, `run-${n}-${arm}`);
+  mkdirSync(runDir, { recursive: true });
+  const workspace = createWorkspace(root, o.agents, o.port ?? BENCH_PORT);
+  // Off: the hooks record what happens and tell the agents nothing.
+  if (arm === "off") {
+    mkdirSync(workspace.memory, { recursive: true });
+    writeFileSync(
+      join(workspace.memory, PAUSE_FILE_NAME),
+      "benchmark: injection off\n",
+    );
+  }
+  const blocker = await holdPort(workspace.port);
+  let agents: AgentRecord[];
+  try {
+    agents = await Promise.all(
+      workspace.worktrees.map(async (worktree, i) => {
+        const task = TASKS[i % TASKS.length] as Task;
+        const session = randomUUID();
+        const started = Date.now();
+        const result = await withTimeout(
+          o.driver.run({
+            worktree,
+            task,
+            session,
+            arm,
+            runDir,
+            bundle: BUNDLE,
+            timeoutMs: o.timeoutMs,
+          }),
+          o.timeoutMs,
+        );
+        return {
+          agent: `claude-code@wt-${i + 1}`,
+          task: task.id,
+          session,
+          ...(result.tokens === undefined ? {} : { tokens: result.tokens }),
+          durationMs: Date.now() - started,
+          done: false,
+          ...(result.details === undefined ? {} : { details: result.details }),
+          ...(result.error === undefined ? {} : { error: result.error }),
+        };
+      }),
+    );
+  } finally {
+    blocker.close();
+  }
+  for (const [i, agent] of agents.entries())
+    agent.done = checkTask(
+      workspace.worktrees[i] as string,
+      TASKS[i % TASKS.length] as Task,
+    );
+
+  const files = filesIn(workspace.memory);
+  const events = existsSync(files.events)
+    ? parseEvents(readFileSync(files.events, "utf8")).events
+    : [];
+  const entries = existsSync(files.errors)
+    ? parseDocument(readFileSync(files.errors, "utf8")).blocks.map(
+        (b) => b.entry,
+      )
+    : [];
+  const summary = { ...summariseRun(arm, agents, events, entries), agents };
+  writeFileSync(
+    join(runDir, "summary.json"),
+    `${JSON.stringify(summary, null, 2)}\n`,
+  );
+  if (o.keep === true) o.log?.(`  workspace kept: ${root}`);
+  else rmSync(root, { recursive: true, force: true });
+  return summary;
+}
+
+/**
+ * The whole benchmark: every run of every arm, then the table.
+ *
+ * @returns each run's summary, and the results as Markdown.
+ */
+export async function runBenchmark(
+  o: BenchOptions,
+): Promise<{ runs: RunRecord[]; markdown: string }> {
+  mkdirSync(o.out, { recursive: true });
+  const runs: RunRecord[] = [];
+  for (let n = 1; n <= o.runs; n++) {
+    // Alternate which arm goes first.
+    const order = n % 2 === 1 ? o.arms : [...o.arms].reverse();
+    for (const arm of order) {
+      o.log?.(
+        `run ${n} of ${o.runs}, injection ${arm}: ${o.driver.describe(o.agents)}`,
+      );
+      const run = await runOnce(arm, n, o);
+      runs.push(run);
+      o.log?.(
+        `  ${run.diagnoses} trap diagnoses (${run.repeatDiagnoses} repeats), ${run.agents.filter((a) => a.done).length} of ${run.agents.length} tasks done`,
+      );
+    }
+  }
+  const markdown = renderResults(
+    summariseArms(runs),
+    o.driver.describe(o.agents),
+  );
+  writeFileSync(join(o.out, "results.md"), markdown);
+  writeFileSync(
+    join(o.out, "results.json"),
+    `${JSON.stringify(runs, null, 2)}\n`,
+  );
+  return { runs, markdown };
+}
+
+const USAGE = `usage: pnpm run bench -- [options]
+  --agent fake          the kind of agent (default fake)
+  --agents N            agents per run, one task each (default 8)
+  --runs N              runs per arm (default 3)
+  --arms on,off         which arms to run (default both)
+  --out DIR             where results go (default bench/results/<time>)
+  --timeout-min N       give up on an agent after N minutes (default 30)
+  --keep                keep each run's workspace
+ the scripted agent:
+  --speed X             multiply its pretend durations (default 1)
+  --record asked|fixed  record fixes when asked, or once they work (default asked)
+  --patience-ms N       how long it waits for a peer's fix
+`;
+
+/** The runner's options from its command line, or a usage error. */
+export function parseArgs(
+  argv: readonly string[],
+  now: Date = new Date(),
+): BenchOptions | { error: string } {
+  const flags = new Map<string, string>();
+  const switches = new Set<string>();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] as string;
+    if (arg === "--keep") switches.add(arg);
+    else if (arg.startsWith("--") && argv[i + 1] !== undefined)
+      flags.set(arg, argv[++i] as string);
+    else return { error: `unknown or incomplete option: ${arg}` };
+  }
+  const known = [
+    "--agent",
+    "--agents",
+    "--runs",
+    "--arms",
+    "--out",
+    "--timeout-min",
+    "--speed",
+    "--record",
+    "--patience-ms",
+  ];
+  for (const flag of flags.keys())
+    if (!known.includes(flag)) return { error: `unknown option: ${flag}` };
+
+  const count = (flag: string, fallback: number) => {
+    const value = flags.get(flag);
+    if (value === undefined) return fallback;
+    const n = Number(value);
+    return Number.isInteger(n) && n > 0 ? n : Number.NaN;
+  };
+  const agents = count("--agents", 8);
+  const runs = count("--runs", 3);
+  const timeout = count("--timeout-min", 30);
+  if ([agents, runs, timeout].some(Number.isNaN))
+    return {
+      error: "--agents, --runs and --timeout-min take a whole number above 0",
+    };
+  const arms = (flags.get("--arms") ?? ARMS.join(",")).split(",");
+  if (
+    arms.length === 0 ||
+    !arms.every((a) => (ARMS as readonly string[]).includes(a))
+  )
+    return { error: "--arms takes on, off, or on,off" };
+
+  const agent = flags.get("--agent") ?? "fake";
+  let driver: Driver;
+  if (agent === "fake") {
+    const speed = Number(flags.get("--speed") ?? 1);
+    const record = flags.get("--record") ?? "asked";
+    const patience = flags.get("--patience-ms");
+    if (!(speed > 0)) return { error: "--speed takes a number above 0" };
+    if (record !== "asked" && record !== "fixed")
+      return { error: "--record takes asked or fixed" };
+    if (patience !== undefined && !(Number(patience) >= 0))
+      return { error: "--patience-ms takes a number of milliseconds" };
+    driver = fakeDriver({
+      speed,
+      record,
+      ...(patience === undefined ? {} : { patienceMs: Number(patience) }),
+    });
+  } else return { error: `unknown agent: ${agent}` };
+
+  return {
+    driver,
+    agents,
+    runs,
+    arms: arms as Arm[],
+    out:
+      flags.get("--out") ??
+      join(BENCH_DIR, "results", now.toISOString().replace(/[:.]/g, "-")),
+    timeoutMs: timeout * 60_000,
+    keep: switches.has("--keep"),
+  };
+}
+
+/**
+ * The runner's command line.
+ *
+ * @returns the exit code: 0, 1 when the bundle is missing, 2 on usage.
+ */
+export async function main(
+  argv: readonly string[],
+  log: (line: string) => void = console.log,
+): Promise<number> {
+  const options = parseArgs(argv);
+  if ("error" in options) {
+    log(`bench: ${options.error}\n${USAGE}`);
+    return 2;
+  }
+  if (!existsSync(BUNDLE)) {
+    log(`bench: no bundle at ${BUNDLE}; run pnpm run build first`);
+    return 1;
+  }
+  const { markdown } = await runBenchmark({ ...options, log });
+  log(`\n${markdown}\nResults in ${options.out}`);
+  return 0;
+}
