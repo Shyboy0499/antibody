@@ -39,6 +39,7 @@ const view: FleetView = {
     noticeTokens: 250,
     avoided: 2,
     antibodies: 1,
+    measured: 0,
     entries: 3,
     open: 2,
     immunity: 1,
@@ -152,7 +153,9 @@ describe("renderView", () => {
     expect(text).toMatch(/ codex@wt-c +✓ immune +E-0001 · saved 740 tokens/);
     expect(text).toMatch(/ claude-code@wt-d +· working +last seen 12 s ago/);
     expect(text).toContain("tokens saved 1,350 (after 250 tokens of notices)");
-    expect(text).toContain("antibodies 1 / 3 (2 open) · fleet immunity 100%");
+    expect(text).toContain(
+      "antibodies 1 / 3 (2 open) · costs measured 0 / 1 · fleet immunity 100%",
+    );
     expect(text).toMatch(
       / E-0001 +pnpm dev → .* Copy \.env.* claude-code@… +2 +1,380 $/m,
     );
@@ -172,7 +175,7 @@ describe("renderView", () => {
     for (const line of wide) expect(cells(line)).toBe(180);
     expect(narrow).toMatch(/re-diagnoses avoided 2 *\n antibodies 1/);
     expect(wide.join("\n")).toContain(
-      "re-diagnoses avoided 2 · antibodies 1 / 3 (2 open) · fleet immunity 100%",
+      "re-diagnoses avoided 2 · antibodies 1 / 3 (2 open) · costs measured 0 / 1 · fleet immunity 100%",
     );
   });
 

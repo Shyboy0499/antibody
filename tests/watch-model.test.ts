@@ -196,6 +196,7 @@ describe("fleetView: memory and antibodies", () => {
       noticeTokens: 250,
       avoided: 2,
       antibodies: 1,
+      measured: 0,
       entries: 3,
       open: 2,
       immunity: 1,
@@ -250,6 +251,34 @@ describe("fleetView: memory and antibodies", () => {
     expect(view.antibodies[1]?.fix).toBe("Run X.");
   });
 
+  it("counts a diagnosis at what it was measured to cost", () => {
+    const entries = [
+      entry("E-0001", "aaaa", "Copy .env."),
+      entry("E-0002", "bbbb", "Run X."),
+    ];
+    const events = [
+      event("a", "fix", 50_000, { id: "E-0001", tokens: 3_000 }),
+      event("b", "notice", 40_000, {
+        id: "E-0001",
+        notice: "hit",
+        tokens: 100,
+      }),
+      event("c", "notice", 30_000, { id: "E-0002", notice: "hit", tokens: 50 }),
+    ];
+    const view = fleetView(events, entries, none, NOW);
+    // E-0001 measured at 3,000 and E-0002 assumed at 800, less 150 of notices.
+    expect(view.memory).toMatchObject({
+      tokensSaved: 3_000 + 800 - 150,
+      antibodies: 2,
+      measured: 1,
+    });
+    expect(view.antibodies.map((a) => a.saved)).toEqual([2_900, 750]);
+    expect(view.agents.find((a) => a.agent === "b")).toMatchObject({
+      state: "immune",
+      saved: 2_900,
+    });
+  });
+
   it("reads an empty memory as zeros", () => {
     expect(fleetView([], [], none, NOW)).toEqual({
       agents: [],
@@ -258,6 +287,7 @@ describe("fleetView: memory and antibodies", () => {
         noticeTokens: 0,
         avoided: 0,
         antibodies: 0,
+        measured: 0,
         entries: 0,
         open: 0,
         immunity: 0,
