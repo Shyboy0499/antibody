@@ -4543,6 +4543,54 @@ async function syncRelay(memory, config, deps = {}) {
 		return { error: error.message };
 	}
 }
+/** How long the last sync, as the server stops, may take per request. */
+const RELAY_LAST_SYNC_TIMEOUT_MS = 2e3;
+/**
+* Keep a memory in sync with the relay the environment names, in the
+* background: once at once, then every RELAY_SYNC_MS, never two at a time.
+* A configuration mistake is said once; a failed sync only under
+* ANTIBODY_DEBUG, so a relay that is down does not fill the harness's log.
+*
+* @param memory - finds the memory directory; a throw means there is none.
+* @param env - the environment that configures the relay.
+* @param deps - the interval, the sync and the log; injected in tests.
+* @returns a function that stops it, after one last sync to push what was
+*   recorded since the previous one.
+*/
+function startRelaySync(memory, env, deps = {}) {
+	const config = relayConfig(env);
+	const log = deps.log ?? (() => void 0);
+	if (config === void 0) return async () => void 0;
+	if ("error" in config) {
+		log(`antibody: no relay sync: ${config.error}\n`);
+		return async () => void 0;
+	}
+	let dir;
+	try {
+		dir = memory();
+	} catch {
+		return async () => void 0;
+	}
+	const sync = deps.sync ?? syncRelay;
+	const debug = env.ANTIBODY_DEBUG === "1";
+	let running;
+	const once = (timeoutMs) => {
+		running ??= sync(dir, config, timeoutMs === void 0 ? {} : { timeoutMs }).then((result) => {
+			if ("error" in result && debug) log(`antibody: relay sync failed: ${result.error}\n`);
+		}).finally(() => {
+			running = void 0;
+		});
+		return running;
+	};
+	once();
+	const timer = setInterval(() => void once(), deps.intervalMs ?? 3e4);
+	timer.unref();
+	return async () => {
+		clearInterval(timer);
+		await running;
+		await once(RELAY_LAST_SYNC_TIMEOUT_MS);
+	};
+}
 /** The largest document a machine may push. */
 const RELAY_MAX_BYTES = IMPORT_MAX_BYTES;
 /** What a relay's documents say about themselves, below their title. */
@@ -6384,14 +6432,20 @@ async function runMcp(harness, io, deps = {}) {
 		return 2;
 	}
 	const cwd = deps.cwd ?? (io.env.CLAUDE_PROJECT_DIR || process.cwd());
-	await serveLines(createMcpServer(createTools({
+	const server = createMcpServer(createTools({
 		memory: () => memoryDir(cwd, deps.git, io.env),
 		agent: agentName(name, worktreeRoot(cwd, deps.git), io.env),
 		session: io.env.CLAUDE_CODE_SESSION_ID || `mcp-${deps.pid ?? process.pid}`
 	}), {
 		name: "antibody",
 		version: VERSION
-	}), deps.input ?? process.stdin, io.stdout);
+	});
+	const stopSync = startRelaySync(() => memoryDir(cwd, deps.git, io.env), io.env, {
+		log: io.stderr,
+		...deps.relaySync
+	});
+	await serveLines(server, deps.input ?? process.stdin, io.stdout);
+	await stopSync();
 	return 0;
 }
 /**

@@ -12,14 +12,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { PassThrough } from "node:stream";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureInput } from "../src/capture";
+import { main } from "../src/cli";
 import type { CliIo } from "../src/cli";
 import { createFleet } from "../src/fleet";
 import { filesIn, memoryDir } from "../src/paths";
 import { runRelay } from "../src/relay-cli";
-import { RELAY_STATE_FILE, relayConfig, syncRelay } from "../src/relay-client";
+import {
+  RELAY_STATE_FILE,
+  relayConfig,
+  startRelaySync,
+  syncRelay,
+} from "../src/relay-client";
 import type { RelayConfig, SyncResult } from "../src/relay-client";
 import { startRelay } from "../src/relay-server";
 import type { RelayServer } from "../src/relay-server";
@@ -294,5 +301,130 @@ describe("antibody relay sync", () => {
     expect(wrong.err).toBe(
       "antibody: the relay sync failed: the relay answered 401: a missing or wrong token\n",
     );
+  });
+});
+
+describe("startRelaySync", () => {
+  const relayEnv = (extra: NodeJS.ProcessEnv = {}) => ({
+    ANTIBODY_RELAY: url,
+    ANTIBODY_RELAY_TOKEN: TOKEN,
+    ...extra,
+  });
+  const counting = (
+    delayMs = 0,
+    result: SyncResult | { error: string } = {
+      pushed: 0,
+      pulled: 0,
+      held: true,
+    },
+  ) => {
+    const calls: (number | undefined)[] = [];
+    let running = 0;
+    let most = 0;
+    const sync = async (
+      _m: string,
+      _c: RelayConfig,
+      deps: { timeoutMs?: number } = {},
+    ) => {
+      calls.push(deps.timeoutMs);
+      most = Math.max(most, ++running);
+      await new Promise((r) => setTimeout(r, delayMs));
+      running--;
+      return result;
+    };
+    return { sync: sync as typeof syncRelay, calls, most: () => most };
+  };
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("does nothing without a relay, or outside a repository", async () => {
+    const fake = counting();
+    await startRelaySync(() => memoryDir(shop), {}, { sync: fake.sync })();
+    await startRelaySync(
+      () => {
+        throw new Error("not a repository");
+      },
+      relayEnv(),
+      { sync: fake.sync },
+    )();
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("says once what is wrong with the configuration, and does not sync", async () => {
+    const fake = counting();
+    const lines: string[] = [];
+    await startRelaySync(
+      () => memoryDir(shop),
+      relayEnv({ ANTIBODY_RELAY_TRUST: "everyone" }),
+      { sync: fake.sync, log: (l) => lines.push(l) },
+    )();
+    expect(lines).toEqual([
+      "antibody: no relay sync: ANTIBODY_RELAY_TRUST takes review or fleet\n",
+    ]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("syncs at once, on its interval, never two at a time, and once more as it stops", async () => {
+    const fake = counting(30);
+    const stop = startRelaySync(() => memoryDir(shop), relayEnv(), {
+      sync: fake.sync,
+      intervalMs: 5,
+    });
+    await wait(120);
+    await stop();
+    expect(fake.calls.length).toBeGreaterThanOrEqual(3);
+    expect(fake.most()).toBe(1);
+    // The last one, as it stops, may take less time.
+    expect(fake.calls.at(-1)).toBe(2_000);
+    expect(fake.calls.slice(0, -1).every((t) => t === undefined)).toBe(true);
+  });
+
+  it("says a failed sync only under ANTIBODY_DEBUG", async () => {
+    for (const debug of [false, true]) {
+      const lines: string[] = [];
+      const fake = counting(0, { error: "the relay answered 503" });
+      await startRelaySync(
+        () => memoryDir(shop),
+        relayEnv(debug ? { ANTIBODY_DEBUG: "1" } : {}),
+        { sync: fake.sync, log: (l) => lines.push(l) },
+      )();
+      expect(lines).toEqual(
+        debug
+          ? [
+              "antibody: relay sync failed: the relay answered 503\n",
+              "antibody: relay sync failed: the relay answered 503\n",
+            ]
+          : [],
+      );
+    }
+  });
+});
+
+describe("antibody mcp with a relay", () => {
+  it("pushes a fix an agent recorded through it before it stops", async () => {
+    await meet(shop, ENOENT);
+    const input = new PassThrough();
+    const done = main(
+      ["mcp", "claude-code"],
+      {
+        readStdin: async () => "",
+        stdout: () => undefined,
+        stderr: () => undefined,
+        env: { ANTIBODY_RELAY: url, ANTIBODY_RELAY_TOKEN: TOKEN },
+      },
+      { cwd: shop, input },
+    );
+    const rpc = (id: number, method: string, params: object) =>
+      `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+    input.write(rpc(1, "initialize", { protocolVersion: "2025-06-18" }));
+    input.write(
+      rpc(2, "tools/call", {
+        name: "antibody_record",
+        arguments: { id: "E-0001", fix: FIX },
+      }),
+    );
+    input.end();
+    expect(await done).toBe(0);
+    expect(relay.fixes()).toBe(1);
+    expect((await sync(laptop)).pulled).toBe(1);
   });
 });
