@@ -3809,7 +3809,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			notice: "hold"
 		});
 	}
-	async function onHit(s, rt, found, record, notices) {
+	async function onHit(s, rt, machine, found, record, notices) {
 		const at = formatSeen(clock.now());
 		await state.update((m) => void addHit(m, found.id, at));
 		await log({
@@ -3817,21 +3817,31 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			id: found.id,
 			text: record.message
 		});
-		const entry = {
+		let entry = {
 			...found.entry,
 			hits: found.entry.hits + 1,
 			lastSeen: laterSeen(found.entry.lastSeen, at)
 		};
-		if (oneLine(entry.fix) !== "") s.holding = s.holding.filter((f) => f !== entry.fingerprint);
-		else if (found.injectable) {
+		if (oneLine(entry.fix) === "" && found.injectable) {
 			const outcome = await claims.claim({
 				id: entry.fingerprint,
 				agent,
 				session
 			});
 			if (!outcome.granted) return hold(s, rt, entry.fingerprint, found.id, outcome, notices);
-			if (fresh(outcome)) await logClaim(found.id);
+			if (fresh(outcome)) {
+				const now = (await readEntries(machine)).find((e) => e.id === found.id);
+				if (now !== void 0 && oneLine(now.fix) !== "") {
+					await claims.release(entry.fingerprint, session);
+					entry = {
+						...now,
+						hits: entry.hits,
+						lastSeen: entry.lastSeen
+					};
+				} else await logClaim(found.id);
+			}
 		}
+		if (oneLine(entry.fix) !== "") s.holding = s.holding.filter((f) => f !== entry.fingerprint);
 		await tell(rt.injector.offer({
 			kind: "hit",
 			hit: {
@@ -4009,7 +4019,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				let id;
 				if (found.matched) {
 					id = found.id;
-					await onHit(s, rt, found, record, notices);
+					await onHit(s, rt, machine, found, record, notices);
 				} else id = await onMiss(s, rt, record, notices);
 				if (!outcome.ok && id !== void 0) rt.tracker.occurred(id, outcome.key);
 				await deliver(s, rt, machine, notices);
