@@ -92,7 +92,9 @@ A hit has three outcomes:
   that found it, so the receiving model can weigh it.
 - **Claimed.** Another agent opened this entry and is still working on it. antibody
   returns a short claim hint ("codex-2 has been diagnosing this for 40 s; its fix
-  will be passed to you"). The agent is informed, never blocked.
+  will be passed to you"). The agent is informed, never blocked, and the promise is
+  kept: the fix reaches it at most one hook call after it is recorded, whatever the
+  turn's budget has left (§10).
 - **Unknown.** antibody opens a new entry and records a claim for this agent.
 
 A miss costs no model tokens. The hook prints nothing.
@@ -101,10 +103,14 @@ A miss costs no model tokens. The hook prints nothing.
 
 An entry gets its fix in one of two ways:
 
-1. **Automatic.** dsh-errkb's resolution detection: when the claiming agent's next
-   comparable command succeeds after the failure, the commands and edits between the
-   two are summarized into a candidate fix, and the agent gets one short prompt to
-   confirm or correct it with `antibody_record`.
+1. **Asked for.** dsh-errkb's resolution detection notices that the agent got past
+   the error: its next comparable call succeeded, or the same command line failed
+   again on a different error (a test run that stopped on a stale lockfile now stops
+   on a missing `.env`). An entry without a fix then gets one short request to
+   record it with `antibody_record`. A request the notice budget cannot carry yet
+   waits in the session for a later hook call rather than being dropped. A tool's
+   failures say too little to tell one error from the next, so for them only a
+   success counts.
 2. **Explicit.** The agent, or a person, calls `antibody_record` with the entry id
    and the fix.
 
@@ -327,7 +333,7 @@ Milestone M5 replaces these estimates with a measured benchmark.
 | --- | --- |
 | Two different errors share a fingerprint | Normalization keeps words, codes and file names; the collision rate is tested on real logs in M1 |
 | A stale fix keeps getting injected | Trust decay; suppression after two failures; `antibody_forget` |
-| Too many notices in one session | Per-session caps from dsh-errkb (notices per hour and tokens per session) |
+| Too many notices in one session | Caps from dsh-errkb: one notice per hook call, three per turn, two per entry per session (one once it is fixed). A turn's budget starts again every ten hook calls, so a headless agent, whose whole task is one turn, is not silenced after three. A claim hint and the fix it promises are a hand-over between two agents: the turn's budget neither holds them back nor is spent by them |
 | A claimant crashes | Claim time to live, release on session end |
 | Concurrent writers corrupt the store | Append-only log, lock plus rename for rewrites, the eight-writer test |
 | A slow hook delays the agent | 50 ms budget, 2 s hard timeout, fail open |

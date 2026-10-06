@@ -91,9 +91,15 @@ What happens next is automatic:
 - Another session hits the same error. If the first is still on it, the second is
   told who is diagnosing it, and waits for the fix instead of starting over. If a fix
   is known, it is pushed into the agent's context, within 120 tokens.
-- The agent gets past the error. antibody notices the next comparable call succeed
-  and asks once for the fix, which the agent records with `antibody_record`. The
-  sessions that were waiting get it at their next tool call.
+- The agent gets past the error. antibody notices the next comparable call succeed,
+  or the same command fail on a different error, and asks once for the fix, which
+  the agent records with `antibody_record`. The sessions that were waiting get it at
+  their next tool call.
+
+antibody says at most one thing per tool call and three per turn. In a long turn,
+such as a headless run, the three start again every ten tool calls. Telling an agent
+that a peer is on its error, and then handing it the peer's fix, never counts against
+the three. A request for a fix that could not be sent yet waits for the next call.
 
 The MCP server gives every session five tools: `antibody_lookup`, `antibody_record`,
 `antibody_list`, `antibody_forget` and `antibody_stats`. The memory is plain files

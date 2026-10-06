@@ -111,6 +111,25 @@ Each milestone ends with something that can be checked, not just written.
   agents run through the committed bundle end to end, and the Claude Code driver
   against a stand-in for `claude` that runs the hooks it was given. It lives in this
   repository; a separate public benchmark repo is still open.
+- **Protocol fixes the benchmark found (done).** Scripted agents in the harness
+  showed antibody's protocol holding its own fixes back:
+  - a hook that claimed an error could read the memory just before a peer's fix
+    landed, and tell its agent there was none (#115);
+  - a request for a fix that the notice budget refused was lost for good (#117);
+  - a test run that stops on one setup error after another resolved none of them
+    until the whole run passed, so their fixes were asked for late (#118);
+  - claim hints spent the turn's budget that the fix they promised needed, and a
+    headless agent, whose task is one long turn, heard three notices in all (#120,
+    #121, #122).
+
+  **Checked:** eight scripted agents, fixes recorded only when asked, two runs per
+  arm at real speed. With injection on: 5 trap diagnoses (1 repeat) and 76,470
+  tokens, against 32 (28 repeats) and 126,400 tokens off, so 40% fewer tokens.
+  Before the fixes, recording only when asked, injection changed nothing (four
+  agents: 16 diagnoses either way). Wall time was 28% longer with injection on: a
+  scripted diagnosis takes 4 seconds, about as long as a hand-over, so waiting for a
+  peer's fix does not pay there. Real diagnoses take far longer, which the real runs
+  will show.
 - Run an eight-agent Claude Code fleet with injection on and off, several times
   each. This needs a real run's budget.
 - Put the measured numbers at the top of the README.
