@@ -275,6 +275,7 @@ export function createFleet(
   async function onHit(
     s: SessionState,
     rt: Runtime,
+    machine: MachineState,
     found: Hit,
     record: CaptureRecord,
     notices: string[],
@@ -283,15 +284,12 @@ export function createFleet(
     await state.update((m) => void addHit(m, found.id, at));
     await log({ kind: "hit", id: found.id, text: record.message });
     // The notice counts the hit it reports.
-    const entry = {
+    let entry = {
       ...found.entry,
       hits: found.entry.hits + 1,
       lastSeen: laterSeen(found.entry.lastSeen, at),
     };
-    // A hit that carries the fix answers any wait on it, too.
-    if (oneLine(entry.fix) !== "")
-      s.holding = s.holding.filter((f) => f !== entry.fingerprint);
-    else if (found.injectable) {
+    if (oneLine(entry.fix) === "" && found.injectable) {
       const outcome = await claims.claim({
         id: entry.fingerprint,
         agent,
@@ -299,8 +297,19 @@ export function createFleet(
       });
       if (!outcome.granted)
         return hold(s, rt, entry.fingerprint, found.id, outcome, notices);
-      if (fresh(outcome)) await logClaim(found.id);
+      if (fresh(outcome)) {
+        // The holder may have recorded its fix and let the claim go since
+        // this call read the memory: look again before taking the error on.
+        const now = (await readEntries(machine)).find((e) => e.id === found.id);
+        if (now !== undefined && oneLine(now.fix) !== "") {
+          await claims.release(entry.fingerprint, session);
+          entry = { ...now, hits: entry.hits, lastSeen: entry.lastSeen };
+        } else await logClaim(found.id);
+      }
     }
+    // A hit that carries the fix answers any wait on it, too.
+    if (oneLine(entry.fix) !== "")
+      s.holding = s.holding.filter((f) => f !== entry.fingerprint);
     await tell(
       rt.injector.offer({ kind: "hit", hit: { ...found, entry } }),
       notices,
@@ -500,7 +509,7 @@ export function createFleet(
         let id: string | undefined;
         if (found.matched) {
           id = found.id;
-          await onHit(s, rt, found, record, notices);
+          await onHit(s, rt, machine, found, record, notices);
         } else id = await onMiss(s, rt, record, notices);
         if (!outcome.ok && id !== undefined)
           rt.tracker.occurred(id, outcome.key);

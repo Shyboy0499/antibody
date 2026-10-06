@@ -8,7 +8,7 @@ import { createFleet } from "../src/fleet";
 import type { FleetDeps, FleetOptions } from "../src/fleet";
 import { parseClaims } from "../src/claims";
 import { nodeStoreFs } from "../src/store";
-import type { StoreClock } from "../src/store";
+import type { StoreClock, StoreFs } from "../src/store";
 import { filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { parseState } from "../src/state";
@@ -490,6 +490,49 @@ describe("fleet: recording a fix", () => {
     await fleet("s-a").recordFix("E-0001", FIX);
     expect((await fleet("s-b").poll())[0]).toContain(`fix: ${FIX}`);
     expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
+  });
+
+  it("hands over a fix recorded while the next agent was claiming the error", async () => {
+    await fail("s-a");
+    // s-a records its fix and lets the claim go after s-b's hook has read the
+    // memory, but before s-b claims the error for itself.
+    const files = filesIn(memory);
+    const real = nodeStoreFs();
+    let recorded = false;
+    const racing: StoreFs = {
+      ...real,
+      async createExclusive(path, data) {
+        if (
+          !recorded &&
+          path === files.lock &&
+          (await events()).some((e) => e.kind === "hit")
+        ) {
+          recorded = true;
+          await fleet("s-a").recordFix("E-0001", FIX);
+        }
+        return real.createExclusive(path, data);
+      },
+    };
+    const notices = await createFleet(
+      memory,
+      "agent-s-b",
+      "s-b",
+      {},
+      { fs: racing },
+    ).failure(capture, call);
+    expect(recorded).toBe(true);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(`fix: ${FIX}`);
+    // It did not take the error on: no claim stays, and none was logged.
+    expect(await readFile(files.claims, "utf8")).not.toContain("agent-s-b");
+    expect(
+      (await events())
+        .filter((e) => e.agent === "agent-s-b")
+        .map((e) => [e.kind, e.notice]),
+    ).toEqual([
+      ["hit", undefined],
+      ["notice", "hit"],
+    ]);
   });
 
   it("does not log a release when nobody held the claim", async () => {
