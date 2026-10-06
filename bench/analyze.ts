@@ -211,8 +211,13 @@ const thousands = (n: number) =>
   Number.isNaN(n) ? "-" : Math.round(n).toLocaleString("en-US");
 const seconds = (ms: number) =>
   Number.isNaN(ms) ? "-" : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
-const percent = (part: number, whole: number) =>
-  whole === 0 ? "-" : `${Math.round((part / whole) * 100)}%`;
+// How the on arm compares with the off arm, in words that go either way:
+// "43% fewer tokens", or "11% more wall time" when injection cost time.
+const change = (off: number, on: number, fewer: string, more: string) => {
+  if (Number.isNaN(off) || Number.isNaN(on) || off === 0) return `- ${fewer}`;
+  const share = Math.round((Math.abs(off - on) / off) * 100);
+  return `${share}% ${on <= off ? fewer : more}`;
+};
 
 /**
  * The results as a Markdown table, with what injection changed when both arms
@@ -240,7 +245,7 @@ export function renderResults(
   if (on !== undefined && off !== undefined) {
     lines.push(
       "",
-      `With injection on: ${percent(off.tokens - on.tokens, off.tokens)} fewer tokens, ${percent(off.wallMs - on.wallMs, off.wallMs)} less wall time, ${thousands(off.repeatDiagnoses - on.repeatDiagnoses)} fewer repeat diagnoses per run.`,
+      `With injection on: ${change(off.tokens, on.tokens, "fewer tokens", "more tokens")}, ${change(off.wallMs, on.wallMs, "less wall time", "more wall time")}, ${thousands(Math.abs(off.repeatDiagnoses - on.repeatDiagnoses))} ${on.repeatDiagnoses <= off.repeatDiagnoses ? "fewer" : "more"} repeat diagnoses per run.`,
     );
   }
   const unmeasured = arms.reduce((sum, a) => sum + a.unmeasured, 0);
