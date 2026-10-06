@@ -100,6 +100,18 @@ const agent = (
   done,
 });
 
+describe("trapOutcomes: entries as antibody stores them", () => {
+  it("knows the generated client from its redacted path", () => {
+    clock = 0;
+    const stored = entry(
+      "E-0009",
+      "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '<path>/client.js' imported from <path>/db.js",
+    );
+    const outcomes = trapOutcomes([event("a", "miss", "E-0009")], [stored]);
+    expect(outcomes.find((o) => o.trap === "generated")?.met).toBe(1);
+  });
+});
+
 describe("summariseRun", () => {
   it("adds the diagnoses up, and counts beyond the first of each trap as repeats", () => {
     clock = 0;
