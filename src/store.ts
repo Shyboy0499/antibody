@@ -569,8 +569,16 @@ export interface EntryPatch {
   trigger?: string;
   lastSeen?: string;
   hits?: number;
-  /** Machine fields to set, or to remove with null; the rest are kept. */
-  meta?: Record<string, string | null>;
+  /**
+   * Machine fields to set, or to remove with null; the rest are kept. A
+   * function is given the entry's current fields, inside the store's lock, and
+   * returns the change.
+   */
+  meta?:
+    | Record<string, string | null>
+    | ((
+        current: Readonly<Record<string, string>>,
+      ) => Record<string, string | null>);
 }
 
 // A machine field's name: one word, so it cannot split the comment's pairs.
@@ -864,8 +872,12 @@ export function createStore(
         if (patch.status !== undefined) entry.status = patch.status;
         if (patch.hits !== undefined) entry.hits = patch.hits;
         if (patch.meta !== undefined) {
+          const changes =
+            typeof patch.meta === "function"
+              ? patch.meta(entry.meta)
+              : patch.meta;
           entry.meta = { ...entry.meta };
-          for (const [key, value] of Object.entries(patch.meta)) {
+          for (const [key, value] of Object.entries(changes)) {
             if (!META_KEY.test(key))
               throw new RangeError(`not a machine field name: "${key}"`);
             if (value === null) delete entry.meta[key];

@@ -32,7 +32,7 @@ import type { InjectMode, Notice } from "./notice";
 import { filesIn } from "./paths";
 import { ResolutionTracker, callOutcome } from "./resolve-detect";
 import type { ToolCall } from "./resolve-detect";
-import { REVIEW_KEY, forAgents } from "./review";
+import { afterOwnFix, forAgents } from "./review";
 import { createSessionFile } from "./session";
 import type { SessionState } from "./session";
 import { addHit, createStateFile, effectiveEntry, laterSeen } from "./state";
@@ -389,11 +389,12 @@ export function createFleet(
 
     async recordFix(id, fix) {
       if (oneLine(fix) === "") throw new RangeError("a fix cannot be blank");
-      // A fix found in this fleet needs no review, so the mark goes too.
+      // A fix found in this fleet needs no review; text imported with the
+      // entry still does.
       const entry = await store.update(id, {
         fix: fix.trim(),
         status: "fixed",
-        meta: { [REVIEW_KEY]: null },
+        meta: afterOwnFix,
       });
       if (entry === undefined) return undefined;
       await log({ kind: "fix", id, text: entry.fix });

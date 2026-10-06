@@ -24,7 +24,7 @@ import { FIX_NOTICE_KINDS, clip, elapsedText, oneLine } from "./notice";
 import type { NoticeKind, TrustLevel } from "./notice";
 import { filesIn } from "./paths";
 import type { KbFiles } from "./paths";
-import { forAgents } from "./review";
+import { displayTitle, forAgents } from "./review";
 import { normalize, signature } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
 import type { MachineState } from "./state";
@@ -419,7 +419,7 @@ export function createTools(context: ToolsContext): Tool[] {
     full: boolean,
   ): Promise<string> {
     const lines = [
-      `${entry.id} · ${entry.title}`,
+      `${entry.id} · ${displayTitle(entry)}`,
       `category: ${entry.category} · hits: ${entry.hits} · status: ${entry.status} · matched by ${via}`,
       oneLine(entry.fix) === "" ? "fix: (none recorded)" : `fix: ${entry.fix}`,
     ];
@@ -510,7 +510,7 @@ export function createTools(context: ToolsContext): Tool[] {
         `${head} Closest:`,
         ...closest.map(
           ({ i, similarity }) =>
-            `${i.entry.id} ${short(i.entry.title, TITLE_MAX_CHARS)} (similarity ${round(similarity)})`,
+            `${i.entry.id} ${short(displayTitle(i.entry), TITLE_MAX_CHARS)} (similarity ${round(similarity)})`,
         ),
       ].join("\n");
     },
@@ -555,7 +555,7 @@ export function createTools(context: ToolsContext): Tool[] {
       return [
         ...shown.map(
           ({ entry }) =>
-            `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(entry.title, TITLE_MAX_CHARS)}`,
+            `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(displayTitle(entry), TITLE_MAX_CHARS)}`,
         ),
         `${shown.length} of ${matches.length} shown.`,
       ].join("\n");
