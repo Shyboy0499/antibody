@@ -2,7 +2,8 @@
 
 Status: draft, October 2026. Milestones M1 (core and shared memory), M2 (the
 Claude Code plugin and the MCP server), M3 (the Gemini CLI and Codex CLI adapters)
-and M4 (`antibody watch`) are implemented, and M6 has begun with export and import.
+and M4 (`antibody watch`) are implemented, M5 has begun with measured diagnosis cost,
+and M6 with export and import.
 Statements about other tools' hook APIs come from their public documentation and
 are marked where they still need to be checked against a running copy.
 
@@ -287,16 +288,24 @@ possible later if the two codebases need to share fixes.
 | Environment broadcast (off by default) | At most 300 per session start |
 
 Tokens saved per reused fix = the recorded diagnosis cost − the notice. The recorded
-cost is measured from the claimant's own diagnosis (token usage between the failure
-and the fix, where the harness reports it), falling back to dsh-errkb's conservative
-800-token assumption. `antibody stats` never reports a negative saving.
+cost is measured from the claimant's own transcript: the claim event names the file
+the harness gave the hook, and when the fix is recorded antibody adds up what the
+model newly read or wrote between the claim and the fix - input, cache writes and
+output, not the context re-read from the prompt cache each turn, which is the same
+measure as a notice's tokens. It is an upper bound when the claimant did other work
+in between. Without a transcript antibody can read, it falls back to dsh-errkb's
+conservative 800-token assumption, and `antibody stats` and `antibody watch` say how
+many costs were measured. `antibody stats` never reports a negative saving.
 
 Milestone M5 replaces these estimates with a measured benchmark.
 
 ## 9. Safety and privacy
 
 - **Redaction before every write.** Keys, tokens, passwords, emails and absolute paths
-  are removed or collapsed by dsh-errkb's redaction before anything reaches disk.
+  are removed or collapsed by dsh-errkb's redaction before anything reaches disk. The
+  one exception is the claimant's transcript path on a claim event, kept as it is
+  because it is read back to measure the diagnosis: it names a file on this machine,
+  and `events.jsonl` is never exported.
 - **Local by default.** Memory never leaves the machine unless someone runs
   `antibody export` or configures a relay.
 - **Prompt injection.** Injected fixes are text other agents wrote, so they are an

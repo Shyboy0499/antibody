@@ -90,8 +90,16 @@ Each milestone ends with something that can be checked, not just written.
 - **Open:** opening one entry on its own (the design's `enter`), the fleet pane's task
   column and diagnosis progress bar, and the memory pane's sparkline.
 
-## M5 · Proof
+## M5 · Proof (started)
 
+- **Measured diagnosis cost (done).** A fix records what its diagnosis cost, read from
+  the claimant's transcript between its claim and the fix (`src/transcript.ts`, for
+  the Claude Code, Codex CLI 0.160.1 and Gemini CLI 0.62.0 formats), and
+  `antibody stats` and `antibody watch` count each reused fix at that cost instead of
+  the assumed 800 tokens, saying how many were measured. **Checked:** the reader
+  matches a count by hand on a real 22 MB Claude Code transcript, and the built bundle
+  carried a measured cost from a hook's claim, through `antibody mcp`'s
+  `antibody_record`, into `stats` and `watch`.
 - A public benchmark repo with eight realistic tasks and the setup traps from the
   design's table.
 - Run an eight-agent fleet with injection on and off, several times each, and record
