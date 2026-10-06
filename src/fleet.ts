@@ -307,11 +307,18 @@ export function createFleet(
         } else await logClaim(found.id);
       }
     }
-    // A hit that carries the fix answers any wait on it, too.
+    // A hit that carries the fix answers any wait on it, too: the fix the
+    // claim hint promised.
+    const promised =
+      oneLine(entry.fix) !== "" && s.holding.includes(entry.fingerprint);
     if (oneLine(entry.fix) !== "")
       s.holding = s.holding.filter((f) => f !== entry.fingerprint);
     await tell(
-      rt.injector.offer({ kind: "hit", hit: { ...found, entry } }),
+      rt.injector.offer(
+        { kind: "hit", hit: { ...found, entry } },
+        false,
+        promised,
+      ),
       notices,
     );
   }
@@ -386,7 +393,8 @@ export function createFleet(
         similarity: 1,
         injectable: entry.status !== "wontfix",
       };
-      const notice = rt.injector.offer({ kind: "hit", hit }, true);
+      // The fix the claim hint promised.
+      const notice = rt.injector.offer({ kind: "hit", hit }, true, true);
       if (notice === undefined && entry.status !== "wontfix")
         waiting.push(fingerprint);
       await tell(notice, notices);

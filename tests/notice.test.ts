@@ -347,6 +347,22 @@ describe("CapTracker", () => {
     expect(caps.tryEmit("E-0008")).toBe(true);
   });
 
+  it("lets a promised fix past the turn's budget, not the step's or the entry's", () => {
+    const caps = new CapTracker();
+    for (const id of ["E-1", "E-2", "E-3"]) {
+      caps.beginStep();
+      caps.tryEmit(id);
+    }
+    caps.beginStep();
+    expect(caps.tryEmit("E-4")).toBe(false);
+    expect(caps.tryEmit("E-4", true, true)).toBe(true);
+    // Still one per step.
+    expect(caps.tryEmit("E-5", false, true)).toBe(false);
+    caps.beginStep();
+    // Still once for a fixed entry.
+    expect(caps.tryEmit("E-4", true, true)).toBe(false);
+  });
+
   it("only lowers limits", () => {
     const caps = new CapTracker({ perTurn: 1, perStep: 5 });
     expect(caps.limits).toEqual({ ...DEFAULT_CAP_LIMITS, perTurn: 1 });

@@ -58,9 +58,15 @@ export class Injector {
    *
    * @param event - the hit or the miss.
    * @param observed - observe() already saw this hit; do not count it again.
+   * @param promised - the session was told this entry's fix would be passed
+   *   on (a claim hint): a fix is not held back by the turn's budget.
    * @returns the notice to inject, or undefined to stay silent.
    */
-  offer(event: NoticeEvent, observed = false): Notice | undefined {
+  offer(
+    event: NoticeEvent,
+    observed = false,
+    promised = false,
+  ): Notice | undefined {
     if (this.mode === "off") return undefined;
     if (event.kind === "miss") {
       if (this.mode !== "always" || !this.caps.tryEmit(event.id))
@@ -74,7 +80,10 @@ export class Injector {
     const carriesFix = oneLine(entry.fix) !== "";
     const level = carriesFix ? this.trust.level(id, entry.fix) : "trusted";
     if (level === "suppressed") return undefined;
-    if (!this.caps.tryEmit(id, entry.status === "fixed")) return undefined;
+    if (
+      !this.caps.tryEmit(id, entry.status === "fixed", promised && carriesFix)
+    )
+      return undefined;
     if (carriesFix) this.trust.injected(id, entry.fix, this.scope);
     return notice(id, noticeText(event, level));
   }
