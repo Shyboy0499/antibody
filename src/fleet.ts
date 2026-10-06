@@ -22,7 +22,7 @@ import type { CaptureRecord } from "./capture";
 import { CLAIM_TTL_MS, activeClaim, createClaimsFile } from "./claims";
 import type { ClaimOutcome } from "./claims";
 import type { CaptureInput, CaptureOptions } from "./capture";
-import { appendEvent } from "./events";
+import { appendEvent, readEventsFrom } from "./events";
 import type { NewEvent } from "./events";
 import { Injector } from "./injector";
 import { indexEntries, match } from "./match";
@@ -39,6 +39,7 @@ import { addHit, createStateFile, effectiveEntry, laterSeen } from "./state";
 import type { MachineState } from "./state";
 import { createStore, formatSeen, nodeStoreFs, systemClock } from "./store";
 import type { Entry, StoreClock, StoreFs } from "./store";
+import { diagnosisTokens } from "./transcript";
 import { FixTrust, memoryTrustStore } from "./trust";
 import type { TrustRecord } from "./trust";
 
@@ -409,7 +410,16 @@ export function createFleet(
         meta: afterOwnFix,
       });
       if (entry === undefined) return undefined;
-      await log({ kind: "fix", id, text: entry.fix });
+      // What the diagnosis cost, from the claimant's transcript, rides on the
+      // fix event: every later agent given the fix saves about that much.
+      const { events } = await readEventsFrom(files.events);
+      const tokens = diagnosisTokens(events, entry.id, agent, clock.now());
+      await log({
+        kind: "fix",
+        id,
+        text: entry.fix,
+        ...(tokens === undefined ? {} : { tokens }),
+      });
       if (await claims.release(entry.fingerprint))
         await log({ kind: "release", id, text: "fix recorded" });
       return entry;

@@ -2,8 +2,10 @@ import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import type { MemoryEvent } from "../src/events";
 import {
   TRANSCRIPT_MAX_BYTES,
+  diagnosisTokens,
   tokensBetween,
   transcriptTokens,
 } from "../src/transcript";
@@ -262,5 +264,86 @@ describe("transcriptTokens", () => {
     writeFileSync(big, "");
     truncateSync(big, TRANSCRIPT_MAX_BYTES + 1);
     expect(transcriptTokens(big, SINCE, UNTIL)).toBeUndefined();
+  });
+});
+
+describe("diagnosisTokens", () => {
+  const claim = (
+    agent: string,
+    minute: number,
+    extra: Partial<MemoryEvent> = {},
+  ): MemoryEvent => ({
+    v: 1,
+    t: at(minute),
+    kind: "claim",
+    agent,
+    session: `s-${agent}`,
+    id: "E-0001",
+    transcript: `/tmp/${agent}.jsonl`,
+    ...extra,
+  });
+  // A reader that says whose transcript it read, and from when.
+  const reads: string[] = [];
+  const read = (path: string, since: Date, until: Date) => {
+    reads.push(`${path} ${since.toISOString()} ${until.toISOString()}`);
+    return 1_234.4;
+  };
+
+  it("measures the recording agent's own claim, to the moment of the fix", () => {
+    reads.length = 0;
+    const events = [
+      claim("a", 10),
+      claim("b", 12),
+      claim("a", 14, { id: "E-0002" }),
+    ];
+    expect(diagnosisTokens(events, "E-0001", "a", UNTIL, read)).toBe(1_234);
+    expect(reads).toEqual([`/tmp/a.jsonl ${at(10)} ${at(20)}`]);
+  });
+
+  it("falls back to the latest claim with a transcript", () => {
+    reads.length = 0;
+    const events = [
+      claim("b", 11),
+      claim("c", 12),
+      claim("d", 13, { transcript: undefined }),
+      { ...claim("e", 14), kind: "hit" as const },
+    ];
+    expect(diagnosisTokens(events, "E-0001", "a", UNTIL, read)).toBe(1_234);
+    expect(reads).toEqual([`/tmp/c.jsonl ${at(12)} ${at(20)}`]);
+  });
+
+  it("measures nothing without a claim, with a bad time, or with nothing spent", () => {
+    expect(diagnosisTokens([], "E-0001", "a", UNTIL, read)).toBeUndefined();
+    expect(
+      diagnosisTokens(
+        [claim("a", 10, { t: "soon" })],
+        "E-0001",
+        "a",
+        UNTIL,
+        read,
+      ),
+    ).toBeUndefined();
+    expect(
+      diagnosisTokens([claim("a", 30)], "E-0001", "a", UNTIL, read),
+    ).toBeUndefined();
+    for (const result of [undefined, 0])
+      expect(
+        diagnosisTokens([claim("a", 10)], "E-0001", "a", UNTIL, () => result),
+      ).toBeUndefined();
+  });
+
+  it("reads the transcript file by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "antibody-diagnosis-"));
+    const file = join(dir, "a.jsonl");
+    writeFileSync(file, jsonl(claude(15, "m", { output_tokens: 77 })));
+    expect(
+      diagnosisTokens(
+        [claim("a", 10, { transcript: file })],
+        "E-0001",
+        "a",
+        UNTIL,
+      ),
+    ).toBe(77);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -58,7 +58,10 @@ export interface MemoryEvent {
   session: string;
   /** The entry it concerns, when there is one. */
   id?: string;
-  /** Tokens spent or saved, when known. */
+  /**
+   * Tokens, when known: for a notice, its size; for a fix, what the diagnosis
+   * cost, measured from the claimant's transcript.
+   */
   tokens?: number;
   /**
    * For a notice: which one it was, a NoticeKind or `hold` for a claim hint.
