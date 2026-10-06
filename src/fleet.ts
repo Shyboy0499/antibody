@@ -394,15 +394,42 @@ export function createFleet(
     s.holding = waiting;
   }
 
+  // Ask for the fixes of entries this session got past without one. An ask
+  // the budget cannot carry now waits for a later hook call rather than being
+  // lost; one whose entry has a fix by now, or is gone, is dropped.
+  async function askPending(
+    s: SessionState,
+    rt: Runtime,
+    machine: MachineState,
+    notices: string[],
+  ): Promise<void> {
+    if (s.asking.length === 0) return;
+    const entries = await readEntries(machine);
+    const waiting: string[] = [];
+    for (const id of s.asking) {
+      const entry = entries.find((e) => e.id === id);
+      if (entry === undefined || oneLine(entry.fix) !== "") continue;
+      const notice = rt.injector.ask(id);
+      if (notice === undefined) {
+        waiting.push(id);
+        continue;
+      }
+      rt.tracker.ask(id);
+      await tell(notice, notices);
+    }
+    s.asking = waiting;
+  }
+
   return {
     async poll() {
       return sessionFile.update(async (s) => {
-        if (s.holding.length === 0) return [];
+        if (s.holding.length === 0 && s.asking.length === 0) return [];
         const machine = (await state.read()).state;
         const before = structuredClone(machine.trust);
         const rt = restore(s, machine.trust);
         rt.injector.beginStep();
         const notices: string[] = [];
+        await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;
@@ -442,6 +469,7 @@ export function createFleet(
         rt.injector.beginTurn();
         rt.tracker.beginTurn();
         const notices: string[] = [];
+        await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;
@@ -473,10 +501,11 @@ export function createFleet(
             if (entry === undefined) continue;
             await log({ kind: "resolve", id });
             if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
-            else if (rt.tracker.ask(id))
-              await tell(rt.injector.ask(id), notices);
+            else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id))
+              s.asking.push(id);
           }
         }
+        await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;
@@ -513,6 +542,7 @@ export function createFleet(
         } else id = await onMiss(s, rt, record, notices);
         if (!outcome.ok && id !== undefined)
           rt.tracker.occurred(id, outcome.key);
+        await askPending(s, rt, machine, notices);
         await deliver(s, rt, machine, notices);
         await persist(s, rt, before);
         return notices;

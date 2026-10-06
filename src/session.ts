@@ -39,6 +39,8 @@ export interface SessionState {
   trustTurn: string[];
   /** Entries this session hit while another agent was diagnosing them. */
   holding: string[];
+  /** Entries this session got past without a fix, still to be asked for one. */
+  asking: string[];
 }
 
 /** A session with nothing remembered yet. */
@@ -50,6 +52,7 @@ export function freshSession(session: string): SessionState {
     resolution: { turn: 0, watches: [], asked: [] },
     trustTurn: [],
     holding: [],
+    asking: [],
   };
 }
 
@@ -106,6 +109,7 @@ export function parseSession(
       : fresh.resolution,
     trustTurn: strings(raw.trustTurn),
     holding: strings(raw.holding),
+    asking: strings(raw.asking),
   };
 }
 

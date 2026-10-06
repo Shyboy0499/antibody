@@ -372,6 +372,66 @@ describe("fleet: successes", () => {
     );
   });
 
+  describe("two entries got past in one call", () => {
+    const other: CaptureInput = {
+      kind: "tool",
+      toolName: "Read",
+      isError: true,
+      message: "EACCES: permission denied, open 'secrets.json'",
+    };
+    const otherCall: ToolCall = {
+      toolName: "Read",
+      isError: true,
+      text: other.message,
+    };
+    const fleet = () => createFleet(memory, "agent-s-a", "s-a");
+    const asking = async () =>
+      JSON.parse(await readFile(join(memory, "sessions", "s-a.json"), "utf8"))
+        .asking;
+
+    beforeEach(async () => {
+      await fail("s-a");
+      await fleet().failure(other, otherCall);
+    });
+
+    it("asks for the second fix on the next call, not never", async () => {
+      // One notice per call: the first ask goes now, the second waits.
+      expect(await succeed("s-a")).toEqual([
+        "[antibody] E-0001 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
+      ]);
+      expect(await asking()).toEqual(["E-0002"]);
+      expect(await fleet().poll()).toEqual([
+        "[antibody] E-0002 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
+      ]);
+      expect(await asking()).toEqual([]);
+      expect(await fleet().poll()).toEqual([]);
+    });
+
+    it("asks when a prompt arrives, too", async () => {
+      await succeed("s-a");
+      expect(await fleet().beginTurn()).toEqual([
+        "[antibody] E-0002 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
+      ]);
+    });
+
+    it("drops an ask whose fix was recorded meanwhile", async () => {
+      await succeed("s-a");
+      await createStore(filesIn(memory)).update("E-0002", {
+        fix: FIX,
+        status: "fixed",
+      });
+      expect(await fleet().poll()).toEqual([]);
+      expect(await asking()).toEqual([]);
+    });
+
+    it("drops an ask whose entry is gone", async () => {
+      await succeed("s-a");
+      await createStore(filesIn(memory)).archive("E-0002", "test");
+      expect(await fleet().poll()).toEqual([]);
+      expect(await asking()).toEqual([]);
+    });
+  });
+
   it("gives a fix that worked its trust", async () => {
     await fail("s-a");
     await recordFix("open");

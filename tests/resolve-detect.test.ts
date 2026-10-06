@@ -203,7 +203,9 @@ describe("ResolutionTracker: recurrence", () => {
 describe("ResolutionTracker: the prompt is taken once", () => {
   it("ask() is true the first time per entry, and never again", () => {
     const t = new ResolutionTracker();
+    expect(t.hasAsked("E-0001")).toBe(false);
     expect(t.ask("E-0001")).toBe(true);
+    expect(t.hasAsked("E-0001")).toBe(true);
     expect(t.ask("E-0001")).toBe(false);
     expect(t.ask("E-0002")).toBe(true);
   });
