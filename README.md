@@ -130,6 +130,13 @@ median hook call takes:
 The roadmap's target is under 50 ms per call. On the runner every kind of call meets
 it; in the development container a failing call is still about 10 ms over.
 
+`antibody stats` and `antibody watch` count a reused fix at what its diagnosis was
+measured to cost. When an agent records a fix, antibody reads the claimant's own
+transcript (every supported CLI names it in its hook calls) and adds up the tokens the
+model newly read or wrote between the claim and the fix, leaving out the context it
+re-read from its prompt cache. Where there is no transcript to read, a diagnosis is
+assumed to cost 800 tokens, and both commands say how many costs were measured.
+
 ## Install in Gemini CLI and Codex CLI
 
 Neither CLI can share this repository as a plugin, so `antibody setup` writes
@@ -292,6 +299,7 @@ herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or pl
 | `antibody setup` for Gemini CLI and Codex CLI | `src/setup.ts` | Built |
 | `antibody watch` and `antibody stats` | `src/watch.ts`, `src/watch-model.ts`, `src/watch-render.ts`, `src/cli.ts` | Built |
 | `antibody export`, `import`, `review`, `allow` and `reject`, and the review gate | `src/exchange.ts`, `src/exchange-cli.ts`, `src/review.ts`, `src/review-cli.ts`, `src/memory-cli.ts` | Built |
+| The diagnosis cost, read from Claude Code, Codex CLI and Gemini CLI transcripts | `src/transcript.ts`, `src/fleet.ts`, `src/tools.ts` | Built |
 
 ## Built on dsh-errkb
 
