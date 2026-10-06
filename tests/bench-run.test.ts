@@ -37,6 +37,7 @@ describe("parseArgs", () => {
       arms: ["on", "off"],
       timeoutMs: 30 * 60_000,
       keep: false,
+      port: 4817,
       out: join(BENCH_DIR, "results", "2026-10-06T09-00-00-000Z"),
     });
     expect(o.driver.describe(8)).toBe(
@@ -66,6 +67,8 @@ describe("parseArgs", () => {
         "fixed",
         "--patience-ms",
         "0",
+        "--port",
+        "5000",
       ]),
     );
     expect(o).toMatchObject({
@@ -75,6 +78,7 @@ describe("parseArgs", () => {
       out: "elsewhere",
       timeoutMs: 5 * 60_000,
       keep: true,
+      port: 5000,
     });
     expect(o.driver.describe(1)).toBe(
       "1 scripted agent (fixes recorded once they work)",
@@ -85,14 +89,15 @@ describe("parseArgs", () => {
     [["--agents"], "unknown or incomplete option: --agents"],
     [["agents"], "unknown or incomplete option: agents"],
     [["--colour", "red"], "unknown option: --colour"],
-    [["--agents", "0"], "--agents, --runs and --timeout-min"],
-    [["--runs", "1.5"], "--agents, --runs and --timeout-min"],
-    [["--timeout-min", "soon"], "--agents, --runs and --timeout-min"],
+    [["--agents", "0"], "--agents, --runs, --timeout-min and --port"],
+    [["--runs", "1.5"], "--agents, --runs, --timeout-min and --port"],
+    [["--timeout-min", "soon"], "--agents, --runs, --timeout-min and --port"],
+    [["--port", "-1"], "--agents, --runs, --timeout-min and --port"],
     [["--arms", "on,maybe"], "--arms takes on, off, or on,off"],
     [["--speed", "0"], "--speed takes a number above 0"],
     [["--record", "never"], "--record takes asked or fixed"],
     [["--patience-ms", "-1"], "--patience-ms takes a number"],
-    [["--agent", "claude"], "unknown agent: claude"],
+    [["--agent", "aider"], "unknown agent: aider"],
   ])("refuses %j", (argv, message) => {
     const o = parseArgs(argv);
     expect("error" in o && o.error).toContain(message);

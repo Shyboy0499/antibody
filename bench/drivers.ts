@@ -36,6 +36,8 @@ export interface Driver {
   /** How the results name the fleet: "8 scripted agents". */
   describe(agents: number): string;
   run(context: AgentContext): Promise<DriverResult>;
+  /** What one agent may spend at most, in dollars, for agents that cost. */
+  capUsd?: number;
 }
 
 /** Settings for the scripted agent, from the runner's options. */
