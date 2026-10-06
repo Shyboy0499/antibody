@@ -1,7 +1,8 @@
 // The scripted agent drives the real hooks and MCP server through the
 // committed bundle: in a fleet with injection off it diagnoses every trap
 // itself; with injection on, and its fixes recorded once they work, a peer's
-// fix reaches it.
+// fix reaches it; and it stops waiting for a peer that leaves without one.
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -40,9 +41,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-const fleet = (extra: Partial<FakeAgentOptions> = {}) =>
+const fleet = (
+  extra: Partial<FakeAgentOptions> = {},
+  worktrees: string[] = workspace.worktrees,
+) =>
   Promise.all(
-    workspace.worktrees.map((worktree, i) =>
+    worktrees.map((worktree, i) =>
       runFakeAgent({
         worktree,
         task: TASKS[i] as (typeof TASKS)[number],
@@ -86,4 +90,36 @@ describe("the scripted agent", () => {
     expect(reports.flatMap((r) => r.helped).length).toBeGreaterThan(0);
     expect(reports.flatMap((r) => r.recorded).length).toBeGreaterThan(0);
   }, 60_000);
+
+  it("stops waiting for a peer that leaves without a fix, and diagnoses it", async () => {
+    const [mine, theirs] = workspace.worktrees as [string, string];
+    const peer = (payload: Record<string, unknown>) =>
+      execFileSync(process.execPath, [BUNDLE, "hook", "claude-code"], {
+        cwd: theirs,
+        input: JSON.stringify({ session_id: "peer", cwd: theirs, ...payload }),
+      });
+    // A peer meets the lockfile trap first, and claims it.
+    const test = spawnSync("npm", ["test"], { cwd: theirs, encoding: "utf8" });
+    peer({
+      hook_event_name: "PostToolUseFailure",
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+      error: `Exit code 1\n${test.stdout}${test.stderr}`,
+    });
+    // Then it leaves without recording a fix, which lets its claim go.
+    const leaves = setTimeout(
+      () => peer({ hook_event_name: "SessionEnd", reason: "exit" }),
+      1_500,
+    );
+    const started = Date.now();
+    try {
+      const [report] = await fleet({ patienceMs: 60_000 }, [mine]);
+      expect(report?.passed).toBe(true);
+      expect(report?.diagnosed).toContain("lockfile");
+      // Told no fix was recorded, it did not wait out its patience.
+      expect(Date.now() - started).toBeLessThan(30_000);
+    } finally {
+      clearTimeout(leaves);
+    }
+  }, 90_000);
 });
