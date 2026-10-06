@@ -38,6 +38,7 @@ describe("parseSession", () => {
       ...freshSession("s-1"),
       trustTurn: ["E-1"],
       holding: ["E-2"],
+      asking: ["E-4"],
     };
     expect(parseSession(JSON.stringify(state), "s-1")).toEqual(state);
   });
@@ -59,10 +60,12 @@ describe("parseSession", () => {
       resolution: "x",
       trustTurn: ["E-1", 2],
       holding: "E-3",
+      asking: [5, "E-5"],
     });
     expect(parseSession(text, "s-1")).toEqual({
       ...freshSession("s-1"),
       trustTurn: ["E-1"],
+      asking: ["E-5"],
     });
   });
 });

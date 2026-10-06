@@ -225,6 +225,11 @@ export class ResolutionTracker {
     return [...this.watches.keys()];
   }
 
+  /** Whether `id` has had its fix prompt in this session. */
+  hasAsked(id: string): boolean {
+    return this.asked.has(id);
+  }
+
   /**
    * Take the one fix prompt `id` gets in this session.
    *

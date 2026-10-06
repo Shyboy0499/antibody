@@ -2936,6 +2936,10 @@ var ResolutionTracker = class ResolutionTracker {
 	watched() {
 		return [...this.watches.keys()];
 	}
+	/** Whether `id` has had its fix prompt in this session. */
+	hasAsked(id) {
+		return this.asked.has(id);
+	}
 	/**
 	* Take the one fix prompt `id` gets in this session.
 	*
@@ -3304,7 +3308,8 @@ function freshSession(session) {
 			asked: []
 		},
 		trustTurn: [],
-		holding: []
+		holding: [],
+		asking: []
 	};
 }
 const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -3343,7 +3348,8 @@ function parseSession(text, session) {
 		caps: record(raw.caps) ? raw.caps : fresh.caps,
 		resolution: record(raw.resolution) ? raw.resolution : fresh.resolution,
 		trustTurn: strings(raw.trustTurn),
-		holding: strings(raw.holding)
+		holding: strings(raw.holding),
+		asking: strings(raw.asking)
 	};
 }
 /**
@@ -3912,15 +3918,33 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 		}
 		s.holding = waiting;
 	}
+	async function askPending(s, rt, machine, notices) {
+		if (s.asking.length === 0) return;
+		const entries = await readEntries(machine);
+		const waiting = [];
+		for (const id of s.asking) {
+			const entry = entries.find((e) => e.id === id);
+			if (entry === void 0 || oneLine(entry.fix) !== "") continue;
+			const notice = rt.injector.ask(id);
+			if (notice === void 0) {
+				waiting.push(id);
+				continue;
+			}
+			rt.tracker.ask(id);
+			await tell(notice, notices);
+		}
+		s.asking = waiting;
+	}
 	return {
 		async poll() {
 			return sessionFile.update(async (s) => {
-				if (s.holding.length === 0) return [];
+				if (s.holding.length === 0 && s.asking.length === 0) return [];
 				const machine = (await state.read()).state;
 				const before = structuredClone(machine.trust);
 				const rt = restore(s, machine.trust);
 				rt.injector.beginStep();
 				const notices = [];
+				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);
 				return notices;
@@ -3957,6 +3981,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				rt.injector.beginTurn();
 				rt.tracker.beginTurn();
 				const notices = [];
+				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);
 				return notices;
@@ -3992,9 +4017,10 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 							id
 						});
 						if (oneLine(entry.fix) !== "") rt.trust.succeeded(id, entry.fix);
-						else if (rt.tracker.ask(id)) await tell(rt.injector.ask(id), notices);
+						else if (!rt.tracker.hasAsked(id) && !s.asking.includes(id)) s.asking.push(id);
 					}
 				}
+				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);
 				return notices;
@@ -4022,6 +4048,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 					await onHit(s, rt, machine, found, record, notices);
 				} else id = await onMiss(s, rt, record, notices);
 				if (!outcome.ok && id !== void 0) rt.tracker.occurred(id, outcome.key);
+				await askPending(s, rt, machine, notices);
 				await deliver(s, rt, machine, notices);
 				await persist(s, rt, before);
 				return notices;
