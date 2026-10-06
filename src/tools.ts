@@ -24,7 +24,7 @@ import { FIX_NOTICE_KINDS, clip, elapsedText, oneLine } from "./notice";
 import type { NoticeKind, TrustLevel } from "./notice";
 import { filesIn } from "./paths";
 import type { KbFiles } from "./paths";
-import { displayTitle, forAgents } from "./review";
+import { displayTitle, forAgents, pendingReview } from "./review";
 import { normalize, signature } from "./signature";
 import { createStateFile, effectiveEntry } from "./state";
 import type { MachineState } from "./state";
@@ -849,6 +849,7 @@ export function createTools(context: ToolsContext): Tool[] {
         `Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
         `Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × ${ASSUMED_DIAGNOSIS_TOKENS} − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
         `Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
+        `Waiting for a person's review, not shown to agents: ${ids(entries.filter(pendingReview))}`,
         `Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
         `Distrusted fixes, not injected: ${ids(withFix.filter((e) => level(e) === "suppressed"))}`,
       ].join("\n");

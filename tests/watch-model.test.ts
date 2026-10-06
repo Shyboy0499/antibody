@@ -199,6 +199,7 @@ describe("fleetView: memory and antibodies", () => {
       entries: 3,
       open: 2,
       immunity: 1,
+      held: 0,
     });
     expect(view.antibodies).toEqual([
       {
@@ -223,6 +224,32 @@ describe("fleetView: memory and antibodies", () => {
     expect(view.antibodies[2]).not.toHaveProperty("diagnosing");
   });
 
+  it("keeps what waits for review out of the antibodies, and counts it", () => {
+    const held = {
+      ...entry("E-0001", "aaaa", "Copy .env."),
+      title: `[tool] hidden\u202e text${String.fromCodePoint(0xe0041)}`,
+      meta: { sig: "aaaa", review: "fix+text" },
+    };
+    const entries = [held, entry("E-0002", "bbbb", "Run X.")];
+    const view = fleetView(
+      [],
+      entries,
+      claims({ id: "aaaa", agent: "a", msAgo: 1_000 }),
+      NOW,
+    );
+    expect(view.memory).toMatchObject({ antibodies: 1, held: 1, open: 0 });
+    expect(view.antibodies[0]).toMatchObject({
+      id: "E-0001",
+      title: "[tool] hidden text",
+      fix: "",
+      held: true,
+    });
+    // Waiting for review comes before who is diagnosing it.
+    expect(view.antibodies[0]).not.toHaveProperty("diagnosing");
+    expect(view.antibodies[1]).not.toHaveProperty("held");
+    expect(view.antibodies[1]?.fix).toBe("Run X.");
+  });
+
   it("reads an empty memory as zeros", () => {
     expect(fleetView([], [], none, NOW)).toEqual({
       agents: [],
@@ -234,6 +261,7 @@ describe("fleetView: memory and antibodies", () => {
         entries: 0,
         open: 0,
         immunity: 0,
+        held: 0,
       },
       antibodies: [],
       events: [],

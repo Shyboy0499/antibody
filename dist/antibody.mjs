@@ -4898,6 +4898,7 @@ function createTools(context) {
 				`Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
 				`Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × 800 − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
 				`Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
+				`Waiting for a person's review, not shown to agents: ${ids(entries.filter(pendingReview))}`,
 				`Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
 				`Distrusted fixes, not injected: ${ids(withFix.filter((e) => level(e) === "suppressed"))}`
 			].join("\n");
@@ -4983,7 +4984,7 @@ function fleetView(events, entries, claims, now) {
 	const notices = events.filter((e) => e.kind === "notice");
 	const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
 	const fixNotices = notices.filter(fixNotice);
-	const withFix = entries.filter((e) => oneLine(e.fix) !== "");
+	const withFix = entries.filter((e) => oneLine(e.fix) !== "" && !pendingReview(e));
 	const fixedIds = new Set(withFix.map((e) => e.id));
 	const hitsOnFixed = events.filter((e) => e.kind === "hit" && e.id !== void 0 && fixedIds.has(e.id)).length;
 	const reuse = /* @__PURE__ */ new Map();
@@ -5008,15 +5009,17 @@ function fleetView(events, entries, claims, now) {
 		};
 		const beatenBy = fixedBy.get(entry.id);
 		const claim = claimOf.get(entry.fingerprint);
-		const hasFix = oneLine(entry.fix) !== "";
+		const held = pendingReview(entry);
+		const hasFix = oneLine(entry.fix) !== "" && !held;
 		return {
 			id: entry.id,
 			fingerprint: entry.fingerprint,
-			category: entry.category,
-			title: entry.title,
+			category: plain(entry.category),
+			title: plain(entry.title),
 			status: entry.status,
-			fix: oneLine(entry.fix),
-			...!hasFix && claim !== void 0 ? { diagnosing: claim.agent } : {},
+			fix: held ? "" : oneLine(entry.fix),
+			...held ? { held: true } : {},
+			...!hasFix && !held && claim !== void 0 ? { diagnosing: claim.agent } : {},
 			...beatenBy === void 0 ? {} : { beatenBy },
 			reused: count,
 			saved: Math.max(0, count * 800 - tokens)
@@ -5031,7 +5034,8 @@ function fleetView(events, entries, claims, now) {
 			antibodies: withFix.length,
 			entries: entries.length,
 			open: entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length,
-			immunity: hitsOnFixed === 0 ? 0 : Math.min(1, fixNotices.length / hitsOnFixed)
+			immunity: hitsOnFixed === 0 ? 0 : Math.min(1, fixNotices.length / hitsOnFixed),
+			held: entries.filter(pendingReview).length
 		},
 		antibodies,
 		events: events.slice(-200).map(eventLine)
@@ -5178,14 +5182,15 @@ function renderView(view, o) {
 		`tokens saved ${thousands(m.tokensSaved)} (after ${thousands(m.noticeTokens)} tokens of notices)`,
 		`re-diagnoses avoided ${m.avoided}`,
 		`antibodies ${m.antibodies} / ${m.entries} (${m.open} open)`,
-		`fleet immunity ${Math.round(m.immunity * 100)}%`
+		`fleet immunity ${Math.round(m.immunity * 100)}%`,
+		...m.held > 0 ? [`${m.held} waiting for review`] : []
 	];
 	const memoryLines = cells(memoryParts.join(" · ")) + 2 <= width ? [memoryParts.join(" · ")] : [memoryParts.slice(0, 2).join(" · "), memoryParts.slice(2).join(" · ")];
 	const byWidth = Math.min(22, Math.floor(width * .18));
 	const flexible = width - 9 - byWidth - 8 - 9;
 	const titleWidth = Math.floor(flexible * .45);
 	const antibodyRow = (a) => {
-		const [fix, style] = a.fix !== "" ? [a.fix, "green"] : a.diagnosing !== void 0 ? [`diagnosing (${a.diagnosing})`, "yellow"] : [a.status === "wontfix" ? "wontfix" : "open", "red"];
+		const [fix, style] = a.held ? ["waiting for review", "yellow"] : a.fix !== "" ? [a.fix, "green"] : a.diagnosing !== void 0 ? [`diagnosing (${a.diagnosing})`, "yellow"] : [a.status === "wontfix" ? "wontfix" : "open", "red"];
 		return row([
 			` ${a.id}`,
 			9,
