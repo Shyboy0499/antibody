@@ -68,10 +68,17 @@ export function trapOutcomes(
   events: readonly MemoryEvent[],
   entries: readonly Entry[],
 ): TrapOutcome[] {
+  // Events name an entry by its ID, or, while an error is too new to have
+  // one, as "new error <fingerprint>": a peer told to hold met it all the same.
   const trapOfEntry = new Map<string, Trap["id"]>();
   for (const entry of entries) {
     const trap = trapOf(`${entry.title}\n${entry.raw}`);
-    if (trap !== undefined) trapOfEntry.set(entry.id, trap.id);
+    if (trap === undefined) continue;
+    trapOfEntry.set(entry.id, trap.id);
+    trapOfEntry.set(
+      `new error ${entry.meta.sig ?? entry.fingerprint}`,
+      trap.id,
+    );
   }
   // Per trap and agent: when it met it, got a fix, and got past it.
   const met = new Map<string, Set<string>>();
@@ -83,7 +90,7 @@ export function trapOutcomes(
     if (trap === undefined) continue;
     const k = key(trap, e.agent);
     const t = Date.parse(e.t);
-    if (e.kind === "hit" || e.kind === "miss") {
+    if (e.kind === "hit" || e.kind === "miss" || e.kind === "hold") {
       const agents = met.get(trap) ?? new Set<string>();
       agents.add(e.agent);
       met.set(trap, agents);
