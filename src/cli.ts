@@ -33,6 +33,8 @@ import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
 import { autoImportText, importOnFirstSession } from "./auto-import";
 import { runRelay } from "./relay-cli";
+import { startRelaySync } from "./relay-client";
+import type { BackgroundSyncDeps } from "./relay-client";
 import type { RelayDeps } from "./relay-cli";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
@@ -68,6 +70,8 @@ export interface HookDeps {
 /** What the mcp command needs from the machine; injected in tests. */
 export interface McpDeps {
   git?: GitRunner;
+  /** The relay sync's interval and sync; injected in tests. */
+  relaySync?: BackgroundSyncDeps;
   /** The message stream; process.stdin by default. */
   input?: NodeJS.ReadableStream;
   /** The working directory; process.cwd() by default. */
@@ -256,7 +260,15 @@ export async function runMcp(
     session: io.env.CLAUDE_CODE_SESSION_ID || `mcp-${deps.pid ?? process.pid}`,
   });
   const server = createMcpServer(tools, { name: "antibody", version: VERSION });
+  // With a relay configured, the memory is kept in sync with it while the
+  // server runs (src/relay-client.ts), so no agent runs a command for it.
+  const stopSync = startRelaySync(
+    () => memoryDir(cwd, deps.git, io.env),
+    io.env,
+    { log: io.stderr, ...deps.relaySync },
+  );
   await serveLines(server, deps.input ?? process.stdin, io.stdout);
+  await stopSync();
   return 0;
 }
 

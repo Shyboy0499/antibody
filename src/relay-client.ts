@@ -235,3 +235,74 @@ export async function syncRelay(
     return { error: (error as Error).message };
   }
 }
+
+/** How often the MCP server syncs with the relay. */
+export const RELAY_SYNC_MS = 30_000;
+
+/** How long the last sync, as the server stops, may take per request. */
+export const RELAY_LAST_SYNC_TIMEOUT_MS = 2_000;
+
+/** What startRelaySync() takes from its caller; injected in tests. */
+export interface BackgroundSyncDeps {
+  intervalMs?: number;
+  sync?: typeof syncRelay;
+  /** Where a configuration mistake, or a failed sync under ANTIBODY_DEBUG, is said. */
+  log?: (line: string) => void;
+}
+
+/**
+ * Keep a memory in sync with the relay the environment names, in the
+ * background: once at once, then every RELAY_SYNC_MS, never two at a time.
+ * A configuration mistake is said once; a failed sync only under
+ * ANTIBODY_DEBUG, so a relay that is down does not fill the harness's log.
+ *
+ * @param memory - finds the memory directory; a throw means there is none.
+ * @param env - the environment that configures the relay.
+ * @param deps - the interval, the sync and the log; injected in tests.
+ * @returns a function that stops it, after one last sync to push what was
+ *   recorded since the previous one.
+ */
+export function startRelaySync(
+  memory: () => string,
+  env: NodeJS.ProcessEnv,
+  deps: BackgroundSyncDeps = {},
+): () => Promise<void> {
+  const config = relayConfig(env);
+  const log = deps.log ?? (() => undefined);
+  if (config === undefined) return async () => undefined;
+  if ("error" in config) {
+    log(`antibody: no relay sync: ${config.error}\n`);
+    return async () => undefined;
+  }
+  let dir: string;
+  try {
+    dir = memory();
+  } catch {
+    return async () => undefined;
+  }
+  const sync = deps.sync ?? syncRelay;
+  const debug = env.ANTIBODY_DEBUG === "1";
+  let running: Promise<void> | undefined;
+  const once = (timeoutMs?: number) => {
+    running ??= sync(dir, config, timeoutMs === undefined ? {} : { timeoutMs })
+      .then((result) => {
+        if ("error" in result && debug)
+          log(`antibody: relay sync failed: ${result.error}\n`);
+      })
+      .finally(() => {
+        running = undefined;
+      });
+    return running;
+  };
+  void once();
+  const timer = setInterval(
+    () => void once(),
+    deps.intervalMs ?? RELAY_SYNC_MS,
+  );
+  timer.unref();
+  return async () => {
+    clearInterval(timer);
+    await running;
+    await once(RELAY_LAST_SYNC_TIMEOUT_MS);
+  };
+}
