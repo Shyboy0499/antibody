@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   EXCHANGE_PREAMBLE,
+  IMPORT_MAX_CHARS,
   exportDocument,
   exportable,
   forExport,
+  forImport,
+  holdImportedFix,
+  plain,
+  planImport,
 } from "../src/exchange";
 import { DOCUMENT_HEADER, parseDocument } from "../src/store";
 import type { Entry } from "../src/store";
@@ -126,5 +131,180 @@ describe("exportDocument", () => {
   it("gives the same text for the same entries, so a re-export changes nothing", () => {
     const entries = [entry(1), entry(2)];
     expect(exportDocument(entries).text).toBe(exportDocument(entries).text);
+  });
+});
+
+// Fingerprints, as signature() writes them.
+const FP = (n: number) => `00000000000${n}`;
+
+describe("plain", () => {
+  it("takes out what a terminal could act on, and keeps text, tabs and newlines", () => {
+    expect(plain("a\u001b[31mred\u001b[0m\u0007b\u0000c")).toBe(
+      "a[31mred[0mbc",
+    );
+    expect(plain("line one\n\tline two — 日本語 ✓")).toBe(
+      "line one\n\tline two — 日本語 ✓",
+    );
+    expect(plain("a\u009bb\u007fc")).toBe("abc");
+  });
+
+  it("takes out what hides from a reader: zero-width, direction and tag characters", () => {
+    expect(plain("a\u200bb\u200dc\u2060d\ufeffe")).toBe("abcde");
+    expect(plain("fix \u202etxet\u202c \u2066x\u2069")).toBe("fix txet x");
+    // "ignore" written in tag characters, which render as nothing.
+    const hidden = Array.from("ignore", (c) =>
+      String.fromCodePoint(0xe0000 + c.charCodeAt(0)),
+    ).join("");
+    expect(plain(`run it${hidden}`)).toBe("run it");
+  });
+});
+
+describe("forImport", () => {
+  const incoming = (
+    extra: Partial<Entry> = {},
+    meta: Record<string, string> = {},
+  ) => entry(1, extra, meta);
+
+  it("holds the whole entry for review, and notes where it came from", () => {
+    const out = forImport(incoming(), "ANTIBODIES.md");
+    expect(out).toEqual({
+      title: "[tool:Bash] failure number 1",
+      signature: FP(1),
+      category: "tool / Bash",
+      meta: { review: "fix+text", cat: "tool", first: "2026-10-05" },
+      trigger: "pnpm test",
+      raw: "failure number 1",
+      fix: "Fix number 1.",
+      status: "fixed",
+      notes: "Imported from ANTIBODIES.md.",
+    });
+  });
+
+  it("keeps only the machine fields that matter, and none the file can use to vouch for itself", () => {
+    const out = forImport(
+      incoming(
+        {},
+        { review: "", misjudged: "true", code: "E1", proj: "shop", extra: "x" },
+      ),
+      "f.md",
+    );
+    expect(out.meta).toEqual({
+      review: "fix+text",
+      cat: "tool",
+      code: "E1",
+      proj: "shop",
+      first: "2026-10-05",
+    });
+  });
+
+  it("puts each text on a line, takes the control characters out, and cuts it to length", () => {
+    const out = forImport(
+      incoming({
+        title: `[tool] \u001b[2Jwipe\nscreen ${"t".repeat(300)}`,
+        category: "x".repeat(200),
+        trigger: "a\u0007\nb",
+        raw: "raw\u001b[31m text",
+        fix: `  ${"f".repeat(1500)}\u0000  `,
+      }),
+      "f.md",
+    );
+    expect(out.title).toHaveLength(IMPORT_MAX_CHARS.title);
+    expect(out.title.startsWith("[tool] [2Jwipe screen ttt")).toBe(true);
+    expect(out.category).toHaveLength(IMPORT_MAX_CHARS.category);
+    expect(out.trigger).toBe("a b");
+    expect(out.raw).toBe("raw[31m text");
+    expect(out.fix).toHaveLength(IMPORT_MAX_CHARS.fix);
+    expect(out.fix?.endsWith("…")).toBe(true);
+  });
+
+  it("identifies the entry by its machine fingerprint, then by its own", () => {
+    expect(
+      forImport(incoming({ fingerprint: FP(7) }, { sig: FP(2) }), "f")
+        .signature,
+    ).toBe(FP(2));
+    const bare = incoming({ fingerprint: FP(7) });
+    delete bare.meta.sig;
+    expect(forImport(bare, "f").signature).toBe(FP(7));
+  });
+});
+
+describe("planImport", () => {
+  const none = {
+    "no-fix": 0,
+    duplicate: 0,
+    "bad-fingerprint": 0,
+    wontfix: 0,
+    full: 0,
+  };
+
+  it("adds what this machine has not met, held for review", () => {
+    const plan = planImport([], [entry(1), entry(2)], 10, "f.md");
+    expect(plan.add.map((e) => e.signature)).toEqual([FP(1), FP(2)]);
+    expect(plan.add[0]?.meta?.review).toBe("fix+text");
+    expect(plan).toMatchObject({ adopt: [], known: 0, skipped: none });
+  });
+
+  it("leaves an entry that already has a fix alone, held or not", () => {
+    const local = [entry(1), entry(2, {}, { review: "fix" })];
+    const plan = planImport(
+      local,
+      [entry(1, { fix: "Other." }), entry(2)],
+      10,
+      "f",
+    );
+    expect(plan).toMatchObject({ add: [], adopt: [], known: 2, skipped: none });
+  });
+
+  it("gives a fix to an entry that has none", () => {
+    const local = [entry(1, { fix: "", status: "open", id: "E-0009" })];
+    const plan = planImport(
+      local,
+      [entry(1, { fix: "A\u0007 fix." })],
+      10,
+      "f",
+    );
+    expect(plan.adopt).toEqual([{ id: "E-0009", fix: "A fix." }]);
+    expect(plan.add).toEqual([]);
+  });
+
+  it("respects a wontfix", () => {
+    const local = [entry(1, { fix: "", status: "wontfix" })];
+    const plan = planImport(local, [entry(1)], 10, "f");
+    expect(plan).toMatchObject({ add: [], adopt: [] });
+    expect(plan.skipped.wontfix).toBe(1);
+  });
+
+  it("skips what is not a working fix, not a fingerprint, or a repeat", () => {
+    const incoming = [
+      entry(1, { fix: "" }),
+      entry(2, { status: "open" }),
+      entry(3, { fingerprint: "../etc", meta: { sig: "../etc" } }),
+      entry(4),
+      entry(4, { fix: "A second answer." }),
+    ];
+    const plan = planImport([], incoming, 10, "f");
+    expect(plan.add.map((e) => e.signature)).toEqual([FP(4)]);
+    expect(plan.add[0]?.fix).toBe("Fix number 4.");
+    expect(plan.skipped).toEqual({
+      ...none,
+      "no-fix": 2,
+      "bad-fingerprint": 1,
+      duplicate: 1,
+    });
+  });
+
+  it("adds no more than the memory has room for", () => {
+    const plan = planImport([], [entry(1), entry(2), entry(3)], 1, "f");
+    expect(plan.add.map((e) => e.signature)).toEqual([FP(1)]);
+    expect(plan.skipped.full).toBe(2);
+    expect(planImport([], [entry(1)], 0, "f").skipped.full).toBe(1);
+  });
+});
+
+describe("holdImportedFix", () => {
+  it("holds the fix, and keeps held text held", () => {
+    expect(holdImportedFix({})).toEqual({ review: "fix" });
+    expect(holdImportedFix({ review: "fix" })).toEqual({ review: "fix" });
+    expect(holdImportedFix({ review: "text" })).toEqual({ review: "fix+text" });
   });
 });

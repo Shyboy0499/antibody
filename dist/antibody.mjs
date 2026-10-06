@@ -1149,6 +1149,8 @@ function redactSample(raw, options = {}) {
 /** The machine field that marks what an entry holds for review. */
 const REVIEW_KEY = "review";
 const HOLD_TEXT = "text";
+/** The mark for an entry that came whole from outside. */
+const REVIEW_ALL = `fix+${HOLD_TEXT}`;
 /** What a lookup shows in place of an entry's held title. */
 const HELD_TITLE = "(imported, waiting for review)";
 /** Which parts of an entry are held, read from its machine fields. */
@@ -1927,22 +1929,130 @@ function exportDocument(entries) {
 		exported: chosen.length
 	};
 }
+/** A file larger than this is refused. */
+const IMPORT_MAX_BYTES = 512 * 1024;
+/** The longest each imported text is kept, in code points. */
+const IMPORT_MAX_CHARS = {
+	title: 200,
+	category: 80,
+	trigger: 200,
+	meta: 80,
+	fix: 1e3
+};
+const IMPORT_META = [
+	"cat",
+	"code",
+	"proj",
+	"first"
+];
+const FINGERPRINT = /^[0-9a-f]{12}$/;
+const UNSEEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u{e0000}-\u{e007f}]/gu;
+/**
+* Text with what a terminal could act on, and what a reader cannot see, taken
+* out: control characters, zero-width and direction-changing characters, and
+* the invisible "tag" characters that can hide a whole sentence from a person
+* who reads the text and not from a model.
+*/
+function plain(text) {
+	return text.replace(UNSEEN, "");
+}
+const line = (text, max) => clip(oneLine(plain(text)), max);
+/** The key an entry is known by: the fingerprint matching uses. */
+const keyOf = (entry) => entry.meta.sig ?? entry.fingerprint;
+/**
+* An incoming entry as a new local entry: its texts cut and cleaned, its
+* machine fields cut down to the ones that matter, and the whole of it held
+* for review.
+*
+* @param entry - an entry of the file being imported, with a working fix.
+* @param source - where it came from, noted on the entry.
+*/
+function forImport(entry, source) {
+	const meta = { [REVIEW_KEY]: REVIEW_ALL };
+	for (const key of IMPORT_META) {
+		const value = entry.meta[key];
+		if (value !== void 0) meta[key] = line(value, IMPORT_MAX_CHARS.meta);
+	}
+	return {
+		title: line(entry.title, IMPORT_MAX_CHARS.title),
+		signature: keyOf(entry),
+		category: line(entry.category, IMPORT_MAX_CHARS.category),
+		meta,
+		trigger: line(entry.trigger, IMPORT_MAX_CHARS.trigger),
+		raw: plain(entry.raw),
+		fix: clip(plain(entry.fix).trim(), IMPORT_MAX_CHARS.fix),
+		status: "fixed",
+		notes: `Imported from ${source}.`
+	};
+}
+/**
+* Decide what to do with each incoming entry. An entry already here keeps its
+* own fix, so importing twice, or in the clone that exported, changes nothing.
+*
+* @param local - the memory's entries.
+* @param incoming - the entries of the file.
+* @param room - how many new entries the memory has room for.
+* @param source - the file's name, noted on new entries.
+*/
+function planImport(local, incoming, room, source) {
+	const plan = {
+		add: [],
+		adopt: [],
+		known: 0,
+		skipped: {
+			"no-fix": 0,
+			duplicate: 0,
+			"bad-fingerprint": 0,
+			wontfix: 0,
+			full: 0
+		}
+	};
+	const here = new Map(local.map((e) => [keyOf(e), e]));
+	const seen = /* @__PURE__ */ new Set();
+	for (const entry of incoming) {
+		const key = keyOf(entry);
+		if (entry.status !== "fixed" || oneLine(entry.fix) === "") plan.skipped["no-fix"]++;
+		else if (!FINGERPRINT.test(key)) plan.skipped["bad-fingerprint"]++;
+		else if (seen.has(key)) plan.skipped.duplicate++;
+		else {
+			seen.add(key);
+			const mine = here.get(key);
+			if (mine === void 0) if (plan.add.length < room) plan.add.push(forImport(entry, source));
+			else plan.skipped.full++;
+			else if (mine.status === "wontfix") plan.skipped.wontfix++;
+			else if (oneLine(mine.fix) !== "") plan.known++;
+			else plan.adopt.push({
+				id: mine.id,
+				fix: clip(plain(entry.fix).trim(), IMPORT_MAX_CHARS.fix)
+			});
+		}
+	}
+	return plan;
+}
+/** The change to an entry's machine fields when it is given an imported fix. */
+function holdImportedFix(meta) {
+	return { [REVIEW_KEY]: heldParts(meta).text ? REVIEW_ALL : "fix" };
+}
 //#endregion
 //#region src/exchange-cli.ts
 const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
   --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
   --print     print the document instead of writing a file
 `;
-/** The memory's entries as the document holds them, or the reason it cannot be read. */
-async function readEntries(cwd, io, deps) {
+/** The memory's store and its entries as the document holds them, or why not. */
+async function openMemory(cwd, io, deps) {
 	let memory;
 	try {
 		memory = memoryDir(cwd, deps.git, io.env);
 	} catch (error) {
 		return { error: error.message };
 	}
+	const store = createStore(filesIn(memory));
 	try {
-		return { entries: (await createStore(filesIn(memory)).read()).blocks.map((b) => b.entry) };
+		return {
+			store,
+			entries: (await store.read()).blocks.map((b) => b.entry)
+		};
 	} catch (error) {
 		return { error: `could not read ANTIBODIES.md: ${error.message}` };
 	}
@@ -1979,7 +2089,7 @@ async function runExport(args, io, deps = {}) {
 		return 2;
 	}
 	const cwd = deps.cwd ?? process.cwd();
-	const read = await readEntries(cwd, io, deps);
+	const read = await openMemory(cwd, io, deps);
 	if ("error" in read) {
 		io.stderr(`antibody: ${read.error}\n`);
 		return 1;
@@ -2013,6 +2123,91 @@ async function runExport(args, io, deps = {}) {
 		`Exported ${exported} of ${read.entries.length} entries to ${name}.`,
 		...left > 0 ? [`${left} left out: no fix yet, or a fix still waiting for review.`] : [],
 		"Look it over, then commit it.",
+		""
+	].join("\n"));
+	return 0;
+}
+const IMPORT_USAGE = `usage: antibody import [FILE] [--dry-run]
+  FILE       the file to read; ${EXCHANGE_FILE} in the repository root by default
+  --dry-run  say what would be imported, and change nothing
+`;
+const WHY = {
+	known: "already known here",
+	"no-fix": "without a working fix",
+	duplicate: "repeated in the file",
+	"bad-fingerprint": "with a fingerprint that is not one",
+	wontfix: "for errors marked wontfix here",
+	full: `that did not fit: the memory holds at most ${DEFAULT_STORE_OPTIONS.maxEntries} entries`
+};
+/** What an import left out, as "1 already known, 2 without a working fix". */
+function leftOut(plan) {
+	return [["known", plan.known], ...Object.entries(plan.skipped)].filter(([, n]) => n > 0).map(([why, n]) => `${n} ${WHY[why]}`).join(", ");
+}
+/**
+* `antibody import`: read the fixes of a committed ANTIBODIES.md into this
+* clone's memory, where each waits for a person's review (src/review.ts)
+* before any agent sees it. A fix is added as a new entry for an error this
+* machine has not met, or given to an entry it has and has no fix for; an
+* entry that already has a fix keeps it.
+*
+* @param args - the arguments after `import`.
+* @param io - stdout for the report, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+*/
+async function runImport(args, io, deps = {}) {
+	let file;
+	let dry = false;
+	for (const arg of args) if (arg === "--dry-run") dry = true;
+	else if (!arg.startsWith("-") && file === void 0) file = arg;
+	else {
+		io.stderr(`antibody: unknown option: ${arg}\n${IMPORT_USAGE}`);
+		return 2;
+	}
+	const cwd = deps.cwd ?? process.cwd();
+	const memory = await openMemory(cwd, io, deps);
+	if ("error" in memory) {
+		io.stderr(`antibody: ${memory.error}\n`);
+		return 1;
+	}
+	const target = resolve(cwd, file ?? resolve(worktreeRoot(cwd, deps.git), "ANTIBODIES.md"));
+	const name = shown(cwd, target);
+	const text = await nodeStoreFs().readFile(target);
+	if (text === void 0) {
+		io.stderr(`antibody: no such file: ${name}\n`);
+		return 1;
+	}
+	if (Buffer.byteLength(text) > 524288) {
+		io.stderr(`antibody: ${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it\n`);
+		return 1;
+	}
+	let incoming;
+	try {
+		incoming = parseDocument(text).blocks.map((b) => b.entry);
+	} catch (error) {
+		if (!(error instanceof ParseError)) throw error;
+		io.stderr(`antibody: could not read ${name}: ${error.message}\n`);
+		return 1;
+	}
+	const room = Math.max(0, DEFAULT_STORE_OPTIONS.maxEntries - memory.entries.length);
+	const plan = planImport(memory.entries, incoming, room, name);
+	const count = plan.add.length + plan.adopt.length;
+	const left = leftOut(plan);
+	if (count === 0) {
+		io.stdout(`Nothing to import from ${name}${left === "" ? "" : ` (${left})`}.\n`);
+		return 0;
+	}
+	if (!dry) {
+		for (const entry of plan.add) await memory.store.append(entry);
+		for (const { id, fix } of plan.adopt) await memory.store.update(id, {
+			fix,
+			status: "fixed",
+			meta: holdImportedFix
+		});
+	}
+	io.stdout([
+		`${dry ? "Would import" : "Imported"} ${count} ${count === 1 ? "fix" : "fixes"} from ${name}: ${plan.add.length} for new errors, ${plan.adopt.length} for errors this machine had no fix for.`,
+		...dry ? [] : ["They wait for your review, and no agent sees them until you approve them."],
+		...left === "" ? [] : [`Left out: ${left}.`],
 		""
 	].join("\n"));
 	return 0;
@@ -5131,6 +5326,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
        antibody export             write the fleet's fixes to ANTIBODIES.md
+       antibody import             read fixes from a committed ANTIBODIES.md
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -5211,6 +5407,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
 	if (command === "setup") return runSetup(rest, io, deps);
 	if (command === "export") return runExport(rest, io, deps);
+	if (command === "import") return runImport(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "watch") return runWatch(rest, io, deps);
 	if (command === "--version" || command === "-v") {
