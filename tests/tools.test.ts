@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureInput } from "../src/capture";
 import { createClaimsFile, parseClaims } from "../src/claims";
-import { readEventsFrom } from "../src/events";
+import { appendEvent, readEventsFrom } from "../src/events";
 import { createFleet } from "../src/fleet";
 import { NotInGitRepoError, filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
@@ -785,7 +785,8 @@ describe("antibody_stats", () => {
       `Memory: ${memory}`,
       "Entries: 0 · hits: 0 · open without a fix: 0",
       "Notices (the fleet): 0, 0 with a fix, 0 tokens, across 0 agents",
-      "Estimated tokens saved: 0 (estimate: 0 fix notices × 800 − 0 notice tokens)",
+      "Estimated tokens saved: 0 (0 fix notices sparing 0 diagnosis tokens − 0 notice tokens)",
+      "Diagnosis cost: measured from the claimant's transcript for 0 of 0 fixes, 800 tokens assumed for the rest",
       "Being diagnosed: none",
       "Waiting for a person's review, not shown to agents: none",
       "Doubted fixes, injected with a warning: none",
@@ -797,7 +798,7 @@ describe("antibody_stats", () => {
     await fail();
     now = new Date(now.getTime() + 2 * 60_000);
     await fail("s-b"); // held: a claim hint, no fix
-    expect((await stats())[4]).toBe(
+    expect((await stats())[5]).toBe(
       "Being diagnosed: E-0001 by claude-code@s-a (2 min)",
     );
     await text("antibody_record", { id: "E-0001", fix: FIX });
@@ -808,7 +809,8 @@ describe("antibody_stats", () => {
       `Memory: ${memory}`,
       "Entries: 1 · hits: 3 · open without a fix: 0",
       `Notices (the fleet): 3, 2 with a fix, ${all} tokens, across 4 agents`,
-      `Estimated tokens saved: ${1600 - all} (estimate: 2 fix notices × 800 − ${all} notice tokens)`,
+      `Estimated tokens saved: ${1600 - all} (2 fix notices sparing 1600 diagnosis tokens − ${all} notice tokens)`,
+      "Diagnosis cost: measured from the claimant's transcript for 0 of 1 fix, 800 tokens assumed for the rest",
       "Being diagnosed: none",
       "Waiting for a person's review, not shown to agents: none",
       "Doubted fixes, injected with a warning: none",
@@ -822,7 +824,31 @@ describe("antibody_stats", () => {
       ),
     ).toEqual([
       `Notices (claude-code@s-b): 2, 1 with a fix, ${mine} tokens`,
-      `Estimated tokens saved: ${800 - mine} (estimate: 1 fix notice × 800 − ${mine} notice tokens)`,
+      `Estimated tokens saved: ${800 - mine} (1 fix notice sparing 800 diagnosis tokens − ${mine} notice tokens)`,
+    ]);
+  });
+
+  it("counts a fix's measured diagnosis cost instead of the assumed one", async () => {
+    await fail();
+    await text("antibody_record", { id: "E-0001", fix: FIX });
+    // What the claimant's transcript said the diagnosis cost.
+    await appendEvent(
+      filesIn(memory).events,
+      {
+        kind: "fix",
+        agent: "claude-code@s-a",
+        session: "s-a",
+        id: "E-0001",
+        tokens: 2_500,
+      },
+      now,
+    );
+    await fail("s-c"); // a hit with the fix
+    const all = await tokens();
+    const lines = await stats();
+    expect(lines.slice(3, 5)).toEqual([
+      `Estimated tokens saved: ${2_500 - all} (1 fix notice sparing 2500 diagnosis tokens − ${all} notice tokens)`,
+      "Diagnosis cost: measured from the claimant's transcript for 1 of 1 fix, 800 tokens assumed for the rest",
     ]);
   });
 
@@ -832,7 +858,7 @@ describe("antibody_stats", () => {
     await fail("s-a");
     const spent = await tokens();
     expect((await stats())[3]).toBe(
-      `Estimated tokens saved: 0 (estimate: 0 fix notices × 800 − ${spent} notice tokens = −${spent}, shown as 0)`,
+      `Estimated tokens saved: 0 (0 fix notices sparing 0 diagnosis tokens − ${spent} notice tokens = −${spent}, shown as 0)`,
     );
   });
 
@@ -842,7 +868,7 @@ describe("antibody_stats", () => {
       agent: "codex@wt-c",
       session: "s-c",
     });
-    expect((await stats())[4]).toBe(
+    expect((await stats())[5]).toBe(
       "Being diagnosed: new error a8f3c1d2e4b5 by codex@wt-c (0 s)",
     );
   });
@@ -884,12 +910,12 @@ describe("antibody_stats", () => {
       m.trust["E-0001"] = record(FIX, 1);
       m.trust["E-0002"] = record("Run corepack enable.", 2);
     });
-    expect((await stats()).slice(6)).toEqual([
+    expect((await stats()).slice(7)).toEqual([
       "Doubted fixes, injected with a warning: E-0001",
       "Distrusted fixes, not injected: E-0002",
     ]);
     // Trust is about one fix text; a new fix starts trusted.
     await store().update("E-0002", { fix: "Install pnpm globally." });
-    expect((await stats())[7]).toBe("Distrusted fixes, not injected: none");
+    expect((await stats())[8]).toBe("Distrusted fixes, not injected: none");
   });
 });

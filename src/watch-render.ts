@@ -186,6 +186,9 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     `tokens saved ${thousands(m.tokensSaved)} (after ${thousands(m.noticeTokens)} tokens of notices)`,
     `re-diagnoses avoided ${m.avoided}`,
     `antibodies ${m.antibodies} / ${m.entries} (${m.open} open)`,
+    ...(m.antibodies > 0
+      ? [`costs measured ${m.measured} / ${m.antibodies}`]
+      : []),
     `fleet immunity ${Math.round(m.immunity * 100)}%`,
     ...(m.held > 0 ? [`${m.held} waiting for review`] : []),
   ];

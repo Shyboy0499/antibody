@@ -19,7 +19,7 @@ import { FIX_NOTICE_KINDS, oneLine } from "./notice";
 import type { NoticeKind } from "./notice";
 import { pendingReview } from "./review";
 import type { Entry } from "./store";
-import { ASSUMED_DIAGNOSIS_TOKENS } from "./tools";
+import { diagnosisCost, measuredCosts } from "./tools";
 
 /** An agent counts as part of the fleet for this long after its last event. */
 export const ACTIVE_WINDOW_MS = 30 * 60 * 1000;
@@ -50,13 +50,18 @@ export interface AgentRow {
 
 /** The memory pane's figures. */
 export interface MemoryFigures {
-  /** Fix notices × the assumed diagnosis, minus every notice's tokens; ≥ 0. */
+  /**
+   * Each fix notice's diagnosis - measured, or assumed - minus every notice's
+   * tokens; ≥ 0.
+   */
   tokensSaved: number;
   noticeTokens: number;
   /** Notices that carried a fix: re-diagnoses avoided. */
   avoided: number;
   /** Entries with a fix, and all entries. */
   antibodies: number;
+  /** Antibodies whose diagnosis cost was measured from a transcript. */
+  measured: number;
   entries: number;
   open: number;
   /** Fix notices over hits of entries that had a fix to give, 0 to 1. */
@@ -166,6 +171,8 @@ export function fleetView(
   now: Date,
 ): FleetView {
   const at = now.getTime();
+  // What each entry's diagnosis cost, where its fix event measured it.
+  const costs = measuredCosts(events);
   const byFingerprint = new Map(entries.map((e) => [e.fingerprint, e]));
   const live = Object.values(claims.claims).filter(
     (c) => activeClaim(claims, c.id, now) !== undefined,
@@ -215,7 +222,10 @@ export function fleetView(
       Object.assign(row, {
         state: "immune",
         ...(immune.id === undefined ? {} : { id: immune.id }),
-        saved: Math.max(0, ASSUMED_DIAGNOSIS_TOKENS - (immune.tokens ?? 0)),
+        saved: Math.max(
+          0,
+          diagnosisCost(costs, immune.id) - (immune.tokens ?? 0),
+        ),
       });
     }
     agents.push(row);
@@ -268,7 +278,7 @@ export function fleetView(
         : {}),
       ...(beatenBy === undefined ? {} : { beatenBy }),
       reused: count,
-      saved: Math.max(0, count * ASSUMED_DIAGNOSIS_TOKENS - tokens),
+      saved: Math.max(0, count * diagnosisCost(costs, entry.id) - tokens),
     };
   });
 
@@ -277,11 +287,13 @@ export function fleetView(
     memory: {
       tokensSaved: Math.max(
         0,
-        fixNotices.length * ASSUMED_DIAGNOSIS_TOKENS - noticeTokens,
+        fixNotices.reduce((sum, e) => sum + diagnosisCost(costs, e.id), 0) -
+          noticeTokens,
       ),
       noticeTokens,
       avoided: fixNotices.length,
       antibodies: withFix.length,
+      measured: withFix.filter((e) => costs.has(e.id)).length,
       entries: entries.length,
       open: entries.filter((e) => e.status === "open" && oneLine(e.fix) === "")
         .length,

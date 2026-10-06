@@ -4591,6 +4591,26 @@ const DEFAULT_TOOLS_OPTIONS = {
 };
 /** Category of an entry antibody_record creates from a message without one. */
 const DEFAULT_RECORD_CATEGORY = "agent";
+/**
+* What diagnosing each entry cost, measured from its claimant's transcript:
+* the tokens on its latest fix event that carries them (src/transcript.ts).
+*
+* @param events - events.jsonl, oldest first.
+* @returns tokens by entry ID, for the entries that were measured.
+*/
+function measuredCosts(events) {
+	const costs = /* @__PURE__ */ new Map();
+	for (const e of events) if (e.kind === "fix" && e.id !== void 0 && e.tokens !== void 0) costs.set(e.id, e.tokens);
+	return costs;
+}
+/**
+* The diagnosis a fix for an entry spares the agent it reaches: what it cost
+* when that was measured, and the assumed {@link ASSUMED_DIAGNOSIS_TOKENS}
+* otherwise.
+*/
+function diagnosisCost(costs, id) {
+	return (id === void 0 ? void 0 : costs.get(id)) ?? 800;
+}
 /** Scopes antibody_stats counts notices over. */
 const STATS_SCOPES = ["fleet", "agent"];
 /** A query quoted back in a miss is clipped to this. */
@@ -5047,9 +5067,12 @@ function createTools(context) {
 			const now = clock.now();
 			const events = log.events.filter((e) => scope === "fleet" || e.agent === context.agent);
 			const notices = events.filter((e) => e.kind === "notice");
-			const fixNotices = notices.filter((e) => FIX_NOTICE_KINDS.includes(e.notice)).length;
+			const fixNoticeEvents = notices.filter((e) => FIX_NOTICE_KINDS.includes(e.notice));
+			const fixNotices = fixNoticeEvents.length;
 			const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-			const net = fixNotices * 800 - noticeTokens;
+			const costs = measuredCosts(log.events);
+			const spared = fixNoticeEvents.reduce((sum, e) => sum + diagnosisCost(costs, e.id), 0);
+			const net = spared - noticeTokens;
 			const agents = new Set(events.map((e) => e.agent)).size;
 			const level = (entry) => {
 				const trust = machine.trust[entry.id];
@@ -5067,7 +5090,8 @@ function createTools(context) {
 				`Memory: ${memory.dir}`,
 				`Entries: ${entries.length} · hits: ${entries.reduce((sum, e) => sum + e.hits, 0)} · open without a fix: ${entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length}`,
 				`Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
-				`Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × 800 − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+				`Estimated tokens saved: ${Math.max(0, net)} (${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} sparing ${spared} diagnosis tokens − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+				`Diagnosis cost: measured from the claimant's transcript for ${withFix.filter((e) => costs.has(e.id)).length} of ${withFix.length} ${withFix.length === 1 ? "fix" : "fixes"}, 800 tokens assumed for the rest`,
 				`Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
 				`Waiting for a person's review, not shown to agents: ${ids(entries.filter(pendingReview))}`,
 				`Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
@@ -5109,6 +5133,7 @@ function eventLine(event) {
 */
 function fleetView(events, entries, claims, now) {
 	const at = now.getTime();
+	const costs = measuredCosts(events);
 	const byFingerprint = new Map(entries.map((e) => [e.fingerprint, e]));
 	const live = Object.values(claims.claims).filter((c) => activeClaim(claims, c.id, now) !== void 0);
 	const entryIdOf = (fingerprint) => byFingerprint.get(fingerprint)?.id ?? `new ${fingerprint}`;
@@ -5147,7 +5172,7 @@ function fleetView(events, entries, claims, now) {
 		else if (immune !== void 0 && at - Date.parse(immune.t) <= 12e4) Object.assign(row, {
 			state: "immune",
 			...immune.id === void 0 ? {} : { id: immune.id },
-			saved: Math.max(0, 800 - (immune.tokens ?? 0))
+			saved: Math.max(0, diagnosisCost(costs, immune.id) - (immune.tokens ?? 0))
 		});
 		agents.push(row);
 	}
@@ -5193,16 +5218,17 @@ function fleetView(events, entries, claims, now) {
 			...!hasFix && !held && claim !== void 0 ? { diagnosing: claim.agent } : {},
 			...beatenBy === void 0 ? {} : { beatenBy },
 			reused: count,
-			saved: Math.max(0, count * 800 - tokens)
+			saved: Math.max(0, count * diagnosisCost(costs, entry.id) - tokens)
 		};
 	});
 	return {
 		agents,
 		memory: {
-			tokensSaved: Math.max(0, fixNotices.length * 800 - noticeTokens),
+			tokensSaved: Math.max(0, fixNotices.reduce((sum, e) => sum + diagnosisCost(costs, e.id), 0) - noticeTokens),
 			noticeTokens,
 			avoided: fixNotices.length,
 			antibodies: withFix.length,
+			measured: withFix.filter((e) => costs.has(e.id)).length,
 			entries: entries.length,
 			open: entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length,
 			immunity: hitsOnFixed === 0 ? 0 : Math.min(1, fixNotices.length / hitsOnFixed),
@@ -5353,6 +5379,7 @@ function renderView(view, o) {
 		`tokens saved ${thousands(m.tokensSaved)} (after ${thousands(m.noticeTokens)} tokens of notices)`,
 		`re-diagnoses avoided ${m.avoided}`,
 		`antibodies ${m.antibodies} / ${m.entries} (${m.open} open)`,
+		...m.antibodies > 0 ? [`costs measured ${m.measured} / ${m.antibodies}`] : [],
 		`fleet immunity ${Math.round(m.immunity * 100)}%`,
 		...m.held > 0 ? [`${m.held} waiting for review`] : []
 	];

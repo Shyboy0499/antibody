@@ -15,7 +15,7 @@ import { CLAIM_TTL_MS, activeClaim, createClaimsFile } from "./claims";
 import type { Claim, ClaimsFile } from "./claims";
 import { extractHeadline, safeErrorText } from "./capture";
 import { appendEvent, readEventsFrom } from "./events";
-import type { NewEvent } from "./events";
+import type { MemoryEvent, NewEvent } from "./events";
 import { createFleet } from "./fleet";
 import type { Fleet, FleetDeps } from "./fleet";
 import { indexEntries, jaccard, match, tokenize } from "./match";
@@ -126,6 +126,37 @@ export const DEFAULT_RECORD_CATEGORY = "agent";
  * the low end, so the estimate errs towards too little.
  */
 export const ASSUMED_DIAGNOSIS_TOKENS = 800;
+
+/**
+ * What diagnosing each entry cost, measured from its claimant's transcript:
+ * the tokens on its latest fix event that carries them (src/transcript.ts).
+ *
+ * @param events - events.jsonl, oldest first.
+ * @returns tokens by entry ID, for the entries that were measured.
+ */
+export function measuredCosts(
+  events: readonly MemoryEvent[],
+): Map<string, number> {
+  const costs = new Map<string, number>();
+  for (const e of events)
+    if (e.kind === "fix" && e.id !== undefined && e.tokens !== undefined)
+      costs.set(e.id, e.tokens);
+  return costs;
+}
+
+/**
+ * The diagnosis a fix for an entry spares the agent it reaches: what it cost
+ * when that was measured, and the assumed {@link ASSUMED_DIAGNOSIS_TOKENS}
+ * otherwise.
+ */
+export function diagnosisCost(
+  costs: ReadonlyMap<string, number>,
+  id: string | undefined,
+): number {
+  return (
+    (id === undefined ? undefined : costs.get(id)) ?? ASSUMED_DIAGNOSIS_TOKENS
+  );
+}
 
 /** Scopes antibody_stats counts notices over. */
 export const STATS_SCOPES = ["fleet", "agent"] as const;
@@ -817,11 +848,18 @@ export function createTools(context: ToolsContext): Tool[] {
         (e) => scope === "fleet" || e.agent === context.agent,
       );
       const notices = events.filter((e) => e.kind === "notice");
-      const fixNotices = notices.filter((e) =>
+      const fixNoticeEvents = notices.filter((e) =>
         FIX_NOTICE_KINDS.includes(e.notice as NoticeKind),
-      ).length;
+      );
+      const fixNotices = fixNoticeEvents.length;
       const noticeTokens = notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0);
-      const net = fixNotices * ASSUMED_DIAGNOSIS_TOKENS - noticeTokens;
+      // What a diagnosis cost is the entry's, whoever's notices are counted.
+      const costs = measuredCosts(log.events);
+      const spared = fixNoticeEvents.reduce(
+        (sum, e) => sum + diagnosisCost(costs, e.id),
+        0,
+      );
+      const net = spared - noticeTokens;
       const agents = new Set(events.map((e) => e.agent)).size;
 
       const level = (entry: Entry): TrustLevel => {
@@ -847,7 +885,8 @@ export function createTools(context: ToolsContext): Tool[] {
         `Memory: ${memory.dir}`,
         `Entries: ${entries.length} · hits: ${entries.reduce((sum, e) => sum + e.hits, 0)} · open without a fix: ${entries.filter((e) => e.status === "open" && oneLine(e.fix) === "").length}`,
         `Notices (${where}): ${notices.length}, ${fixNotices} with a fix, ${noticeTokens} tokens${scope === "fleet" ? `, across ${agents} ${agents === 1 ? "agent" : "agents"}` : ""}`,
-        `Estimated tokens saved: ${Math.max(0, net)} (estimate: ${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} × ${ASSUMED_DIAGNOSIS_TOKENS} − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+        `Estimated tokens saved: ${Math.max(0, net)} (${fixNotices} fix ${fixNotices === 1 ? "notice" : "notices"} sparing ${spared} diagnosis tokens − ${noticeTokens} notice tokens${net < 0 ? ` = −${-net}, shown as 0` : ""})`,
+        `Diagnosis cost: measured from the claimant's transcript for ${withFix.filter((e) => costs.has(e.id)).length} of ${withFix.length} ${withFix.length === 1 ? "fix" : "fixes"}, ${ASSUMED_DIAGNOSIS_TOKENS} tokens assumed for the rest`,
         `Being diagnosed: ${diagnosing.length === 0 ? "none" : diagnosing.join(", ")}`,
         `Waiting for a person's review, not shown to agents: ${ids(entries.filter(pendingReview))}`,
         `Doubted fixes, injected with a warning: ${ids(withFix.filter((e) => level(e) === "doubted"))}`,
