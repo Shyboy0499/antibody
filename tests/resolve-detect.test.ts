@@ -200,6 +200,40 @@ describe("ResolutionTracker: recurrence", () => {
   });
 });
 
+describe("ResolutionTracker: moving past", () => {
+  const test = "command:npm test";
+
+  it("resolves what a command was watched for once it fails on something else", () => {
+    const t = new ResolutionTracker();
+    t.occurred("E-0001", test);
+    t.occurred("E-0003", "command:npm run build");
+    expect(t.movedPast("E-0002", test)).toEqual(["E-0001"]);
+    expect(t.watched()).toEqual(["E-0003"]);
+  });
+
+  it("is not a move past when the same error comes back", () => {
+    const t = new ResolutionTracker();
+    t.occurred("E-0001", test);
+    expect(t.movedPast("E-0001", test)).toEqual([]);
+    expect(t.watched()).toEqual(["E-0001"]);
+  });
+
+  it("says nothing for a tool's key", () => {
+    const t = new ResolutionTracker();
+    t.occurred("E-0001", "tool:Read");
+    expect(t.movedPast("E-0002", "tool:Read")).toEqual([]);
+    expect(t.watched()).toEqual(["E-0001"]);
+  });
+
+  it("keeps to the window", () => {
+    const t = new ResolutionTracker();
+    t.occurred("E-0001", test, 0);
+    t.occurred("E-0002", test, 3);
+    expect(t.movedPast("E-0009", test, 2)).toEqual([]);
+    expect(t.movedPast("E-0009", test, 4)).toEqual(["E-0002"]);
+  });
+});
+
 describe("ResolutionTracker: the prompt is taken once", () => {
   it("ask() is true the first time per entry, and never again", () => {
     const t = new ResolutionTracker();

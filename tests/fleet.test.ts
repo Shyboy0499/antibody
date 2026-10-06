@@ -432,6 +432,53 @@ describe("fleet: successes", () => {
     });
   });
 
+  describe("a command that fails on something else", () => {
+    const run = (output: string): [CaptureInput, ToolCall] => {
+      const text = `${output}\n[exit code: 1]`;
+      return [
+        { kind: "command", toolName: "Bash", command: "npm test", text },
+        { toolName: "Bash", command: "npm test", isError: false, text },
+      ];
+    };
+    const lockfile = run("ERR_PNPM_OUTDATED_LOCKFILE deps.lock is out of date");
+    const env = run("Error: Environment variable not found: DATABASE_URL.");
+    const fleet = (session: string) =>
+      createFleet(memory, `agent-${session}`, session);
+
+    it("has got past its first error, and is asked for that fix", async () => {
+      expect(await fleet("s-a").failure(...lockfile)).toEqual([]);
+      expect(await fleet("s-a").failure(...env)).toEqual([
+        "[antibody] E-0001 looks resolved. Record the fix with antibody_record in one sentence so it can be reused.",
+      ]);
+      expect(
+        (await events()).filter((e) => e.kind === "resolve").map((e) => e.id),
+      ).toEqual(["E-0001"]);
+    });
+
+    it("has not got past an error that comes back", async () => {
+      await fleet("s-a").failure(...lockfile);
+      expect(await fleet("s-a").failure(...lockfile)).toEqual([
+        "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
+      ]);
+      expect((await events()).some((e) => e.kind === "resolve")).toBe(false);
+    });
+
+    it("gives a fix that got an agent past its error its trust", async () => {
+      await fleet("s-a").failure(...lockfile);
+      await createStore(filesIn(memory)).update("E-0001", {
+        fix: FIX,
+        status: "open",
+      });
+      expect((await fleet("s-b").failure(...lockfile))[0]).toContain(FIX);
+      await fleet("s-b").failure(...env);
+      const state = parseState(await readFile(filesIn(memory).state, "utf8"));
+      expect(state?.trust["E-0001"]).toMatchObject({
+        injected: 1,
+        succeeded: 1,
+      });
+    });
+  });
+
   it("gives a fix that worked its trust", async () => {
     await fail("s-a");
     await recordFix("open");
