@@ -293,12 +293,13 @@ describe("caps on the body", () => {
 });
 
 describe("CapTracker", () => {
-  it("defaults to 1 per step, 3 per turn, 2 per ID, 1 for a fixed entry", () => {
+  it("defaults to 1 per step, 3 per turn renewed every 10 steps, 2 per ID, 1 for a fixed entry", () => {
     expect(DEFAULT_CAP_LIMITS).toEqual({
       perStep: 1,
       perTurn: 3,
       perIdPerSession: 2,
       fixedPerSession: 1,
+      renewAfterSteps: 10,
     });
     expect(new CapTracker().limits).toEqual(DEFAULT_CAP_LIMITS);
   });
@@ -320,6 +321,29 @@ describe("CapTracker", () => {
     expect(emitted).toEqual([true, true, true, false]);
     caps.beginTurn();
     expect(caps.tryEmit("E-4")).toBe(true);
+  });
+
+  it("starts a long turn's budget again every ten steps", () => {
+    const caps = new CapTracker();
+    const emitted = Array.from({ length: 12 }, (_, i) => {
+      caps.beginStep();
+      return caps.tryEmit(`E-${i + 1}`);
+    });
+    // Steps 1 to 3 spend the turn's budget; step 10 starts it again.
+    expect(emitted).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+    ]);
   });
 
   it("allows at most two notices per ID per session, across turns", () => {
@@ -363,7 +387,13 @@ describe("CapTracker", () => {
     expect(caps.tryEmit("E-4", true, true)).toBe(false);
   });
 
-  it("only lowers limits", () => {
+  it("only tightens limits", () => {
+    expect(new CapTracker({ renewAfterSteps: 5 }).limits.renewAfterSteps).toBe(
+      10,
+    );
+    expect(new CapTracker({ renewAfterSteps: 20 }).limits.renewAfterSteps).toBe(
+      20,
+    );
     const caps = new CapTracker({ perTurn: 1, perStep: 5 });
     expect(caps.limits).toEqual({ ...DEFAULT_CAP_LIMITS, perTurn: 1 });
     expect(caps.tryEmit("E-1")).toBe(true);
@@ -403,6 +433,7 @@ describe("CapTracker snapshots", () => {
     expect(next.snapshot()).toEqual({
       step: 1,
       turn: 1,
+      steps: 0,
       perId: { "E-0001": 1 },
     });
     expect(next.tryEmit("E-0002")).toBe(false);
@@ -412,9 +443,24 @@ describe("CapTracker snapshots", () => {
     expect(next.tryEmit("E-0001")).toBe(false);
   });
 
+  it("carries the steps toward the turn's next budget over, too", () => {
+    const first = new CapTracker();
+    for (let i = 0; i < 3; i++) {
+      first.beginStep();
+      first.tryEmit(`E-${i}`);
+    }
+    for (let i = 3; i < 9; i++) first.beginStep();
+    const next = CapTracker.restore(
+      JSON.parse(JSON.stringify(first.snapshot())),
+    );
+    expect(next.snapshot().steps).toBe(9);
+    next.beginStep();
+    expect(next.tryEmit("E-9")).toBe(true);
+  });
+
   it("starts fresh without a snapshot, and keeps the limits it is given", () => {
     const caps = CapTracker.restore(undefined, { perTurn: 1 });
-    expect(caps.snapshot()).toEqual({ step: 0, turn: 0, perId: {} });
+    expect(caps.snapshot()).toEqual({ step: 0, turn: 0, steps: 0, perId: {} });
     expect(caps.limits.perTurn).toBe(1);
   });
 
@@ -422,14 +468,20 @@ describe("CapTracker snapshots", () => {
     const caps = CapTracker.restore({
       step: -1,
       turn: 2.5,
+      steps: "3" as unknown as number,
       perId: { "E-1": "2" as unknown as number, "E-2": 1, "E-3": -4, "E-4": 0 },
     });
-    expect(caps.snapshot()).toEqual({ step: 0, turn: 0, perId: { "E-2": 1 } });
+    expect(caps.snapshot()).toEqual({
+      step: 0,
+      turn: 0,
+      steps: 0,
+      perId: { "E-2": 1 },
+    });
     expect(
       CapTracker.restore({
         perId: null as unknown as Record<string, number>,
       }).snapshot(),
-    ).toEqual({ step: 0, turn: 0, perId: {} });
+    ).toEqual({ step: 0, turn: 0, steps: 0, perId: {} });
   });
 });
 

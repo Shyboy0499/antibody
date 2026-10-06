@@ -308,13 +308,22 @@ export function claimHintText(
 // ---------------------------------------------------------------------------
 // Caps
 
-/** The notice budget (§7). Every limit can only be lowered. */
+/**
+ * The notice budget (§7). Every limit can only be tightened: the counts
+ * lowered, and `renewAfterSteps` raised.
+ */
 export interface CapLimits {
   perStep: number;
   perTurn: number;
   perIdPerSession: number;
   /** For an entry whose status is `fixed`. */
   fixedPerSession: number;
+  /**
+   * Steps after which a long turn's budget starts again, as a new turn's
+   * would. A headless run is one turn however long it works, so without this
+   * it would hear three notices in all.
+   */
+  renewAfterSteps: number;
 }
 
 export const DEFAULT_CAP_LIMITS: CapLimits = {
@@ -322,12 +331,15 @@ export const DEFAULT_CAP_LIMITS: CapLimits = {
   perTurn: 3,
   perIdPerSession: 2,
   fixedPerSession: 1,
+  renewAfterSteps: 10,
 };
 
 /** CapTracker's counts as plain data, so a hook process can save them between calls. */
 export interface CapSnapshot {
   step: number;
   turn: number;
+  /** Steps since the turn's budget last started. */
+  steps: number;
   perId: Record<string, number>;
 }
 
@@ -344,13 +356,17 @@ export class CapTracker {
   readonly limits: CapLimits;
   private step = 0;
   private turn = 0;
+  private steps = 0;
   private readonly perId = new Map<string, number>();
 
-  /** @param limits - lower limits; a value above the default is ignored. */
+  /** @param limits - tighter limits; a looser value is ignored. */
   constructor(limits: Partial<CapLimits> = {}) {
     const l = { ...DEFAULT_CAP_LIMITS };
     for (const key of Object.keys(l) as (keyof CapLimits)[])
-      l[key] = Math.min(l[key], limits[key] ?? l[key]);
+      l[key] =
+        key === "renewAfterSteps"
+          ? Math.max(l[key], limits[key] ?? l[key])
+          : Math.min(l[key], limits[key] ?? l[key]);
     this.limits = l;
   }
 
@@ -369,6 +385,7 @@ export class CapTracker {
     const caps = new CapTracker(limits);
     caps.step = count(snapshot?.step);
     caps.turn = count(snapshot?.turn);
+    caps.steps = count(snapshot?.steps);
     const perId = snapshot?.perId;
     if (typeof perId === "object" && perId !== null)
       for (const [id, used] of Object.entries(perId))
@@ -381,6 +398,7 @@ export class CapTracker {
     return {
       step: this.step,
       turn: this.turn,
+      steps: this.steps,
       perId: Object.fromEntries(this.perId),
     };
   }
@@ -389,11 +407,19 @@ export class CapTracker {
   beginTurn(): void {
     this.turn = 0;
     this.step = 0;
+    this.steps = 0;
   }
 
-  /** A new step within the turn: the step budget starts again. */
+  /**
+   * A new step within the turn: the step budget starts again, and so does the
+   * turn's once the turn has gone on for `renewAfterSteps` steps.
+   */
   beginStep(): void {
     this.step = 0;
+    if (++this.steps >= this.limits.renewAfterSteps) {
+      this.turn = 0;
+      this.steps = 0;
+    }
   }
 
   /**

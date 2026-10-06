@@ -558,6 +558,33 @@ describe("fleet: turns and session end", () => {
     expect(state?.trust["E-0001"]?.recurredAfterInject).toBe(0);
   });
 
+  it("starts a long turn's notice budget again every ten hook calls", async () => {
+    // Four known errors, each with a fix; s-y works through them in one turn,
+    // as a headless agent does, one hook process per call.
+    const errors = [
+      "ENOENT: no such file or directory, open 'config/app.yml'",
+      "EACCES: permission denied, mkdir 'var/run/shop'",
+      "TypeError: Cannot read properties of undefined (reading 'price')",
+      "SyntaxError: Unexpected token } in JSON",
+    ].map((message): [CaptureInput, ToolCall] => {
+      return [
+        { kind: "tool", toolName: "Read", isError: true, message },
+        { toolName: "Read", isError: true, text: message },
+      ];
+    });
+    for (const [c, t] of errors) await fleet("s-x").failure(c, t);
+    for (const id of ["E-0001", "E-0002", "E-0003", "E-0004"])
+      await createStore(filesIn(memory)).update(id, { fix: FIX });
+    await fleet("s-y").beginTurn();
+    const told: number[] = [];
+    for (let call = 0; call < 10; call++) {
+      const [c, t] = errors[Math.min(call, 3)] as [CaptureInput, ToolCall];
+      told.push((await fleet("s-y").failure(c, t)).length);
+    }
+    // Three notices spend the turn; the tenth call starts it again.
+    expect(told).toEqual([1, 1, 1, 0, 0, 0, 0, 0, 0, 1]);
+  });
+
   it("lets a watch lapse after the next turn", async () => {
     await fail("s-a");
     await fleet("s-a").beginTurn();

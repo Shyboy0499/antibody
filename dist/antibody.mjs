@@ -177,7 +177,8 @@ const DEFAULT_CAP_LIMITS = {
 	perStep: 1,
 	perTurn: 3,
 	perIdPerSession: 2,
-	fixedPerSession: 1
+	fixedPerSession: 1,
+	renewAfterSteps: 10
 };
 const count$1 = (value) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 /**
@@ -188,11 +189,12 @@ var CapTracker = class CapTracker {
 	limits;
 	step = 0;
 	turn = 0;
+	steps = 0;
 	perId = /* @__PURE__ */ new Map();
-	/** @param limits - lower limits; a value above the default is ignored. */
+	/** @param limits - tighter limits; a looser value is ignored. */
 	constructor(limits = {}) {
 		const l = { ...DEFAULT_CAP_LIMITS };
-		for (const key of Object.keys(l)) l[key] = Math.min(l[key], limits[key] ?? l[key]);
+		for (const key of Object.keys(l)) l[key] = key === "renewAfterSteps" ? Math.max(l[key], limits[key] ?? l[key]) : Math.min(l[key], limits[key] ?? l[key]);
 		this.limits = l;
 	}
 	/**
@@ -207,6 +209,7 @@ var CapTracker = class CapTracker {
 		const caps = new CapTracker(limits);
 		caps.step = count$1(snapshot?.step);
 		caps.turn = count$1(snapshot?.turn);
+		caps.steps = count$1(snapshot?.steps);
 		const perId = snapshot?.perId;
 		if (typeof perId === "object" && perId !== null) {
 			for (const [id, used] of Object.entries(perId)) if (count$1(used) > 0) caps.perId.set(id, count$1(used));
@@ -218,6 +221,7 @@ var CapTracker = class CapTracker {
 		return {
 			step: this.step,
 			turn: this.turn,
+			steps: this.steps,
 			perId: Object.fromEntries(this.perId)
 		};
 	}
@@ -225,10 +229,18 @@ var CapTracker = class CapTracker {
 	beginTurn() {
 		this.turn = 0;
 		this.step = 0;
+		this.steps = 0;
 	}
-	/** A new step within the turn: the step budget starts again. */
+	/**
+	* A new step within the turn: the step budget starts again, and so does the
+	* turn's once the turn has gone on for `renewAfterSteps` steps.
+	*/
 	beginStep() {
 		this.step = 0;
+		if (++this.steps >= this.limits.renewAfterSteps) {
+			this.turn = 0;
+			this.steps = 0;
+		}
 	}
 	/**
 	* Take one notice from every budget, if every budget has one left.
@@ -3325,6 +3337,7 @@ function freshSession(session) {
 		caps: {
 			step: 0,
 			turn: 0,
+			steps: 0,
 			perId: {}
 		},
 		resolution: {

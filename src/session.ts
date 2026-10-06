@@ -48,7 +48,7 @@ export function freshSession(session: string): SessionState {
   return {
     version: SESSION_VERSION,
     session,
-    caps: { step: 0, turn: 0, perId: {} },
+    caps: { step: 0, turn: 0, steps: 0, perId: {} },
     resolution: { turn: 0, watches: [], asked: [] },
     trustTurn: [],
     holding: [],
