@@ -709,6 +709,20 @@ describe("store: update", () => {
     ).rejects.toThrow(RangeError);
   });
 
+  it("gives a function the entry's machine fields, and applies what it returns", async () => {
+    const { store } = memoryStore();
+    await store.append(input(1, { meta: { cat: "tool", review: "fix+text" } }));
+    let seen: Record<string, string> = {};
+    const updated = await store.update("E-0001", {
+      meta: (current) => {
+        seen = { ...current };
+        return { review: "text", extra: "1" };
+      },
+    });
+    expect(seen).toMatchObject({ cat: "tool", review: "fix+text" });
+    expect(updated?.meta).toMatchObject({ review: "text", extra: "1" });
+  });
+
   it("returns undefined for an unknown ID and writes nothing", async () => {
     const { store, text } = memoryStore();
     await store.append(input(1));

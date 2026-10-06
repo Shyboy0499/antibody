@@ -12,6 +12,7 @@ import type { StoreClock } from "../src/store";
 import { filesIn } from "../src/paths";
 import type { ToolCall } from "../src/resolve-detect";
 import { parseState } from "../src/state";
+import { REVIEW_ALL } from "../src/review";
 import { createStore, parseDocument } from "../src/store";
 
 // Every call builds a new engine, as every hook call is a new process.
@@ -532,18 +533,21 @@ describe("fleet: injection off (paused)", () => {
 describe("fleet: the review gate", () => {
   const fleet = (session: string) =>
     createFleet(memory, `agent-${session}`, session);
-  // An imported fix that no person has approved yet.
-  const pending = () =>
+  // A fix that came from outside and no person has approved yet.
+  const held = (mark: string) =>
     createStore(filesIn(memory)).update("E-0001", {
       fix: FIX,
       status: "fixed",
-      meta: { review: "pending" },
+      meta: { review: mark },
     });
+  const mark = async () =>
+    parseDocument(await readFile(filesIn(memory).errors, "utf8")).blocks[0]
+      ?.entry.meta.review;
 
   it("offers no fix that waits for a person, so the agent diagnoses it", async () => {
     await fail("s-a");
     await fleet("s-a").endSession();
-    await pending();
+    await held(REVIEW_ALL);
     expect(await fail("s-b")).toEqual([
       "[antibody] E-0001 seen before (2 hits), no fix recorded yet.",
     ]);
@@ -556,15 +560,24 @@ describe("fleet: the review gate", () => {
   it("does not deliver it to an agent that waits", async () => {
     await fail("s-a");
     await fail("s-b");
-    await pending();
+    await held("fix");
     expect(await fleet("s-b").poll()).toEqual([]);
   });
 
-  it("lets a fix recorded in the fleet clear the mark", async () => {
+  it("lets a fix recorded in the fleet release a held fix", async () => {
     await fail("s-a");
-    await pending();
+    await held("fix");
     const entry = await fleet("s-a").recordFix("E-0001", FIX);
     expect(entry?.meta).not.toHaveProperty("review");
+    expect(await mark()).toBeUndefined();
+    expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
+  });
+
+  it("keeps imported text held when the fix is the fleet's own", async () => {
+    await fail("s-a");
+    await held(REVIEW_ALL);
+    await fleet("s-a").recordFix("E-0001", FIX);
+    expect(await mark()).toBe("text");
     expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
   });
 });

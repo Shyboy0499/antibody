@@ -1146,25 +1146,68 @@ function redactSample(raw, options = {}) {
 }
 //#endregion
 //#region src/review.ts
-/** The machine field that marks an entry as waiting for a person. */
+/** The machine field that marks what an entry holds for review. */
 const REVIEW_KEY = "review";
-/** Its value while the entry waits. */
-const REVIEW_PENDING = "pending";
-/** Whether an entry's fix is waiting for a person to approve it. */
+const HOLD_TEXT = "text";
+/** What a lookup shows in place of an entry's held title. */
+const HELD_TITLE = "(imported, waiting for review)";
+/** Which parts of an entry are held, read from its machine fields. */
+function heldParts(meta) {
+	const mark = meta[REVIEW_KEY];
+	if (mark === void 0 || mark === "") return {
+		fix: false,
+		text: false
+	};
+	const parts = mark.split("+");
+	if (!parts.every((p) => p === "fix" || p === "text")) return {
+		fix: true,
+		text: true
+	};
+	return {
+		fix: parts.includes("fix"),
+		text: parts.includes(HOLD_TEXT)
+	};
+}
+/** Whether something in an entry is waiting for a person to approve it. */
 function pendingReview(entry) {
-	return entry.meta[REVIEW_KEY] === REVIEW_PENDING;
+	const held = heldParts(entry.meta);
+	return held.fix || held.text;
 }
 /**
-* An entry as agents may see it: unchanged, or, while its fix waits for a
-* person, without the fix and open again.
+* An entry as agents may see it: unchanged, or, while parts of it wait for a
+* person, without them. A held fix leaves the entry open; a held text leaves
+* the title to displayTitle().
 */
 function forAgents(entry) {
-	if (!pendingReview(entry)) return entry;
+	const held = heldParts(entry.meta);
+	if (!held.fix && !held.text) return entry;
 	return {
 		...entry,
-		fix: "",
-		status: entry.status === "fixed" ? "open" : entry.status
+		...held.fix ? {
+			fix: "",
+			status: entry.status === "fixed" ? "open" : entry.status
+		} : {},
+		...held.text ? {
+			title: "",
+			category: "",
+			trigger: "",
+			raw: "",
+			notes: ""
+		} : {}
 	};
+}
+/** An entry's title as a lookup shows it. */
+function displayTitle(entry) {
+	return heldParts(entry.meta).text ? HELD_TITLE : entry.title;
+}
+/**
+* The change to an entry's machine fields when an agent of this fleet records
+* its fix: the fix is no longer held, the text, if it was, still is.
+*
+* @param meta - the entry's machine fields.
+*/
+function afterOwnFix(meta) {
+	return { [REVIEW_KEY]: heldParts(meta).text ? HOLD_TEXT : null };
 }
 //#endregion
 //#region src/store.ts
@@ -1720,8 +1763,9 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 				if (patch.status !== void 0) entry.status = patch.status;
 				if (patch.hits !== void 0) entry.hits = patch.hits;
 				if (patch.meta !== void 0) {
+					const changes = typeof patch.meta === "function" ? patch.meta(entry.meta) : patch.meta;
 					entry.meta = { ...entry.meta };
-					for (const [key, value] of Object.entries(patch.meta)) {
+					for (const [key, value] of Object.entries(changes)) {
 						if (!META_KEY.test(key)) throw new RangeError(`not a machine field name: "${key}"`);
 						if (value === null) delete entry.meta[key];
 						else entry.meta[key] = clean(value);
@@ -3475,7 +3519,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			const entry = await store.update(id, {
 				fix: fix.trim(),
 				status: "fixed",
-				meta: { [REVIEW_KEY]: null }
+				meta: afterOwnFix
 			});
 			if (entry === void 0) return void 0;
 			await log({
@@ -4177,7 +4221,7 @@ function createTools(context) {
 	}
 	async function describe(memory, entry, via, full) {
 		const lines = [
-			`${entry.id} · ${entry.title}`,
+			`${entry.id} · ${displayTitle(entry)}`,
 			`category: ${entry.category} · hits: ${entry.hits} · status: ${entry.status} · matched by ${via}`,
 			oneLine(entry.fix) === "" ? "fix: (none recorded)" : `fix: ${entry.fix}`
 		];
@@ -4241,7 +4285,7 @@ function createTools(context) {
 		})).filter((c) => c.similarity > 0).sort((a, b) => b.similarity - a.similarity || a.order - b.order).slice(0, 3);
 		const head = `No entry matches "${short(q, QUERY_MAX_CHARS)}".`;
 		if (closest.length === 0) return head;
-		return [`${head} Closest:`, ...closest.map(({ i, similarity }) => `${i.entry.id} ${short(i.entry.title, 120)} (similarity ${round(similarity)})`)].join("\n");
+		return [`${head} Closest:`, ...closest.map(({ i, similarity }) => `${i.entry.id} ${short(displayTitle(i.entry), 120)} (similarity ${round(similarity)})`)].join("\n");
 	});
 	const list = define("antibody_list", "List the entries in the fleet's shared antibody memory: ID, hits, status and title only, no bodies.", true, {
 		cat: {
@@ -4263,7 +4307,7 @@ function createTools(context) {
 		const matches = indexEntries(await memory.entries()).filter((i) => (cat === void 0 || i.category.toLowerCase() === cat || i.entry.category.toLowerCase() === cat) && (args.status === void 0 || i.entry.status === args.status));
 		if (matches.length === 0) return "No entries.";
 		const shown = matches.slice(0, limit);
-		return [...shown.map(({ entry }) => `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(entry.title, 120)}`), `${shown.length} of ${matches.length} shown.`].join("\n");
+		return [...shown.map(({ entry }) => `${entry.id} (${entry.hits} ${entry.hits === 1 ? "hit" : "hits"}, ${entry.status}) ${short(displayTitle(entry), 120)}`), `${shown.length} of ${matches.length} shown.`].join("\n");
 	});
 	/** Notes with one more line. */
 	const withNote = (notes, note) => notes === "" ? note : `${notes}\n${note}`;
