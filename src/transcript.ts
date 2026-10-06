@@ -27,6 +27,7 @@
 //   JSON document with a `messages` array, which reads the same way.
 //
 // Pure apart from transcriptTokens(), which reads the file and never throws.
+import type { MemoryEvent } from "./events";
 import { nodeFs } from "./lazy";
 
 /** A transcript larger than this is not read. */
@@ -223,4 +224,42 @@ export function transcriptTokens(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * What diagnosing an entry cost: the tokens the claimant's transcript records
+ * from its claim to `until`. The claim event names the transcript (the hook
+ * recorded it); the claim made by `agent` is preferred, since it is the agent
+ * recording the fix, and otherwise the latest claim with a transcript. It is
+ * an upper bound when the claimant did other work in between.
+ *
+ * @param events - events.jsonl, oldest first.
+ * @param id - the entry whose fix is being recorded.
+ * @param agent - the agent recording it.
+ * @param until - when the fix was recorded.
+ * @param read - reads a transcript; transcriptTokens() by default.
+ * @returns whole tokens, or undefined when nothing could be measured.
+ */
+export function diagnosisTokens(
+  events: readonly MemoryEvent[],
+  id: string,
+  agent: string,
+  until: Date,
+  read: typeof transcriptTokens = transcriptTokens,
+): number | undefined {
+  let latest: MemoryEvent | undefined;
+  let mine: MemoryEvent | undefined;
+  for (const event of events) {
+    if (event.kind !== "claim" || event.id !== id) continue;
+    if (event.transcript === undefined) continue;
+    latest = event;
+    if (event.agent === agent) mine = event;
+  }
+  const claim = mine ?? latest;
+  if (claim === undefined) return undefined;
+  const since = new Date(claim.t);
+  if (Number.isNaN(since.getTime()) || since > until) return undefined;
+  const tokens = read(claim.transcript as string, since, until);
+  // Nothing spent is no measurement: the transcript was not the diagnosis.
+  return tokens === undefined || tokens <= 0 ? undefined : Math.round(tokens);
 }

@@ -179,7 +179,7 @@ const DEFAULT_CAP_LIMITS = {
 	perIdPerSession: 2,
 	fixedPerSession: 1
 };
-const count = (value) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+const count$1 = (value) => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 /**
 * Counts one session's notices. Create one per session; call beginTurn() and
 * beginStep() at those boundaries, and tryEmit() before each notice.
@@ -205,11 +205,11 @@ var CapTracker = class CapTracker {
 	*/
 	static restore(snapshot, limits = {}) {
 		const caps = new CapTracker(limits);
-		caps.step = count(snapshot?.step);
-		caps.turn = count(snapshot?.turn);
+		caps.step = count$1(snapshot?.step);
+		caps.turn = count$1(snapshot?.turn);
 		const perId = snapshot?.perId;
 		if (typeof perId === "object" && perId !== null) {
-			for (const [id, used] of Object.entries(perId)) if (count(used) > 0) caps.perId.set(id, count(used));
+			for (const [id, used] of Object.entries(perId)) if (count$1(used) > 0) caps.perId.set(id, count$1(used));
 		}
 		return caps;
 	}
@@ -1466,7 +1466,7 @@ function parseBlock(source, firstLine, header) {
 * @returns the preamble and the blocks, each with its exact source.
 * @throws ParseError when the document is not safe to rewrite.
 */
-function parseDocument(text, idPrefix = "E-") {
+function parseDocument$1(text, idPrefix = "E-") {
 	const header = headerPattern(idPrefix);
 	const headerStart = `## ${idPrefix}`;
 	const lines = text.split("\n");
@@ -1719,7 +1719,7 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 	async function readForRewrite() {
 		const text = await fs.readFile(files.errors) ?? "";
 		try {
-			return parseDocument(text, o.idPrefix);
+			return parseDocument$1(text, o.idPrefix);
 		} catch (error) {
 			if (!(error instanceof ParseError)) throw error;
 			throw new StoreCorruptError(error, await saveAside(text));
@@ -1734,7 +1734,7 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 	}
 	return {
 		async read() {
-			return parseDocument(await fs.readFile(files.errors) ?? "", o.idPrefix);
+			return parseDocument$1(await fs.readFile(files.errors) ?? "", o.idPrefix);
 		},
 		append(input) {
 			return withLock(async () => {
@@ -1743,7 +1743,7 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 				const id = formatId(nextIdNumber([text, archiveText], o.idPrefix), o.idPrefix, o.idWidth);
 				const block = renderEntry(build(id, input), o.labels);
 				try {
-					parseDocument(text, o.idPrefix);
+					parseDocument$1(text, o.idPrefix);
 				} catch (error) {
 					if (!(error instanceof ParseError)) throw error;
 					const savedAs = await saveAside(text);
@@ -1756,7 +1756,7 @@ function createStore(files, options = {}, fs = nodeStoreFs(), clock = systemCloc
 					};
 				}
 				const base = text === "" ? DOCUMENT_HEADER : text;
-				const next = parseDocument(base + separatorAfter(base) + block, o.idPrefix);
+				const next = parseDocument$1(base + separatorAfter(base) + block, o.idPrefix);
 				const excess = next.blocks.length - o.maxEntries;
 				const moved = excess > 0 ? next.blocks.splice(0, excess) : [];
 				if (moved.length > 0) {
@@ -2189,7 +2189,7 @@ function leftOut(plan) {
 /** The fingerprints rejected in review, from the archive; none if it does not parse. */
 async function rejectedFixes(archive) {
 	try {
-		return rejectedKeys(parseDocument(await nodeStoreFs().readFile(archive) ?? "").blocks.map((b) => b.entry));
+		return rejectedKeys(parseDocument$1(await nodeStoreFs().readFile(archive) ?? "").blocks.map((b) => b.entry));
 	} catch (error) {
 		if (!(error instanceof ParseError)) throw error;
 		return /* @__PURE__ */ new Set();
@@ -2234,7 +2234,7 @@ async function runImport(args, io, deps = {}) {
 	}
 	let incoming;
 	try {
-		incoming = parseDocument(text).blocks.map((b) => b.entry);
+		incoming = parseDocument$1(text).blocks.map((b) => b.entry);
 	} catch (error) {
 		if (!(error instanceof ParseError)) throw error;
 		io.stderr(`antibody: could not read ${name}: ${error.message}\n`);
@@ -3385,13 +3385,13 @@ function emptyState() {
 		trust: {}
 	};
 }
-const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isObject$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const isCount = (value) => typeof value === "number" && Number.isInteger(value) && value >= 0;
 function isHitCounter(value) {
-	return isObject(value) && isCount(value.hits) && typeof value.lastSeen === "string";
+	return isObject$1(value) && isCount(value.hits) && typeof value.lastSeen === "string";
 }
 function isTrustRecord(value) {
-	return isObject(value) && isCount(value.injected) && isCount(value.recurredAfterInject) && isCount(value.succeeded) && typeof value.fixSig === "string";
+	return isObject$1(value) && isCount(value.injected) && isCount(value.recurredAfterInject) && isCount(value.succeeded) && typeof value.fixSig === "string";
 }
 /**
 * The records of a map that pass `valid`, copied field by field. A missing
@@ -3399,7 +3399,7 @@ function isTrustRecord(value) {
 */
 function records(value, valid, pick) {
 	if (value === void 0) return {};
-	if (!isObject(value)) return void 0;
+	if (!isObject$1(value)) return void 0;
 	return Object.fromEntries(Object.entries(value).filter((pair) => valid(pair[1])).map(([id, record]) => [id, pick(record)]));
 }
 /**
@@ -3416,7 +3416,7 @@ function parseState(text) {
 	} catch {
 		return;
 	}
-	if (!isObject(data) || data.version !== 1) return void 0;
+	if (!isObject$1(data) || data.version !== 1) return void 0;
 	const entries = records(data.entries, isHitCounter, (r) => ({
 		hits: r.hits,
 		lastSeen: r.lastSeen
@@ -3548,6 +3548,161 @@ function createStateFile(files, options = {}, fs = nodeStoreFs(), clock = system
 			});
 		}
 	};
+}
+const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+/** A count, or 0 for anything that is not a finite, non-negative number. */
+const count = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+/** The time in a record's field, or undefined. */
+const timeOf = (value) => {
+	if (typeof value !== "string") return void 0;
+	const t = Date.parse(value);
+	return Number.isNaN(t) ? void 0 : t;
+};
+/** Claude Code: uncached input, cache writes and output. */
+function claudeTokens(usage) {
+	return count(usage.input_tokens) + count(usage.cache_creation_input_tokens) + count(usage.output_tokens);
+}
+/** Codex CLI: a running total, less what was read from the cache. */
+function codexTotal(usage) {
+	const total = usage.total_tokens === void 0 ? count(usage.input_tokens) + count(usage.output_tokens) : count(usage.total_tokens);
+	return Math.max(0, total - count(usage.cached_input_tokens));
+}
+/** Gemini CLI: everything the turn counted, less what was cached. */
+function geminiTokens(tokens) {
+	const total = tokens.total === void 0 ? count(tokens.input) + count(tokens.output) + count(tokens.thoughts) + count(tokens.tool) : count(tokens.total);
+	return Math.max(0, total - count(tokens.cached));
+}
+const MAY_COUNT = /"usage"|"token_count"|"tokens"/;
+/**
+* The tokens a transcript records between two moments.
+*
+* @param text - the transcript file's contents.
+* @param since - the start of the window, inclusive.
+* @param until - the end of the window, inclusive.
+* @returns the tokens, or undefined when nothing in the window could be read:
+*   an unknown format, or no usage recorded between the two moments.
+*/
+function tokensBetween(text, since, until) {
+	const from = since.getTime();
+	const to = until.getTime();
+	const inWindow = (t) => t !== void 0 && t >= from && t <= to;
+	const messages = /* @__PURE__ */ new Map();
+	let anonymous = 0;
+	let found = false;
+	let codexBefore = 0;
+	let codexLast;
+	const gemini = (record) => {
+		if (record.type !== "gemini" || !isObject(record.tokens)) return;
+		if (!inWindow(timeOf(record.timestamp))) return;
+		found = true;
+		const tokens = geminiTokens(record.tokens);
+		if (typeof record.id === "string") messages.set(`g:${record.id}`, tokens);
+		else anonymous += tokens;
+	};
+	const document = parseDocument(text);
+	if (document !== void 0) {
+		for (const record of document) if (isObject(record)) gemini(record);
+		return found ? sum(messages) + anonymous : void 0;
+	}
+	for (const line of text.split("\n")) {
+		if (!MAY_COUNT.test(line)) continue;
+		let record;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (!isObject(record)) continue;
+		const message = record.message;
+		if (record.type === "assistant" && isObject(message) && isObject(message.usage)) {
+			if (!inWindow(timeOf(record.timestamp))) continue;
+			found = true;
+			const tokens = claudeTokens(message.usage);
+			const id = typeof message.id === "string" ? message.id : typeof record.requestId === "string" ? record.requestId : void 0;
+			if (id === void 0) anonymous += tokens;
+			else messages.set(`c:${id}`, tokens);
+			continue;
+		}
+		const payload = record.payload;
+		if (record.type === "event_msg" && isObject(payload) && payload.type === "token_count") {
+			const info = payload.info;
+			if (!isObject(info) || !isObject(info.total_token_usage)) continue;
+			const t = timeOf(record.timestamp);
+			if (t === void 0 || t > to) continue;
+			const total = codexTotal(info.total_token_usage);
+			if (t < from) codexBefore = total;
+			else codexLast = total;
+			continue;
+		}
+		gemini(record);
+	}
+	if (codexLast !== void 0) {
+		found = true;
+		anonymous += Math.max(0, codexLast - codexBefore);
+	}
+	return found ? sum(messages) + anonymous : void 0;
+}
+const sum = (values) => {
+	let total = 0;
+	for (const value of values.values()) total += value;
+	return total;
+};
+/** The messages of a transcript written as one JSON document, if it is one. */
+function parseDocument(text) {
+	const start = text.trimStart();
+	if (!start.startsWith("{")) return void 0;
+	try {
+		const value = JSON.parse(start);
+		return isObject(value) && Array.isArray(value.messages) ? value.messages : void 0;
+	} catch {
+		return;
+	}
+}
+/**
+* The tokens an agent's transcript records between two moments, read from its
+* file. Fails open: a missing, unreadable or oversized file gives undefined.
+*
+* @param path - the transcript, as the harness's hook named it.
+* @param since - the start of the window.
+* @param until - the end of the window.
+*/
+function transcriptTokens(path, since, until) {
+	try {
+		if (nodeFs.statSync(path).size > 134217728) return void 0;
+		return tokensBetween(nodeFs.readFileSync(path, "utf8"), since, until);
+	} catch {
+		return;
+	}
+}
+/**
+* What diagnosing an entry cost: the tokens the claimant's transcript records
+* from its claim to `until`. The claim event names the transcript (the hook
+* recorded it); the claim made by `agent` is preferred, since it is the agent
+* recording the fix, and otherwise the latest claim with a transcript. It is
+* an upper bound when the claimant did other work in between.
+*
+* @param events - events.jsonl, oldest first.
+* @param id - the entry whose fix is being recorded.
+* @param agent - the agent recording it.
+* @param until - when the fix was recorded.
+* @param read - reads a transcript; transcriptTokens() by default.
+* @returns whole tokens, or undefined when nothing could be measured.
+*/
+function diagnosisTokens(events, id, agent, until, read = transcriptTokens) {
+	let latest;
+	let mine;
+	for (const event of events) {
+		if (event.kind !== "claim" || event.id !== id) continue;
+		if (event.transcript === void 0) continue;
+		latest = event;
+		if (event.agent === agent) mine = event;
+	}
+	const claim = mine ?? latest;
+	if (claim === void 0) return void 0;
+	const since = new Date(claim.t);
+	if (Number.isNaN(since.getTime()) || since > until) return void 0;
+	const tokens = read(claim.transcript, since, until);
+	return tokens === void 0 || tokens <= 0 ? void 0 : Math.round(tokens);
 }
 //#endregion
 //#region src/fleet.ts
@@ -3769,10 +3924,13 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				meta: afterOwnFix
 			});
 			if (entry === void 0) return void 0;
+			const { events } = await readEventsFrom(files.events);
+			const tokens = diagnosisTokens(events, entry.id, agent, clock.now());
 			await log({
 				kind: "fix",
 				id,
-				text: entry.fix
+				text: entry.fix,
+				...tokens === void 0 ? {} : { tokens }
 			});
 			if (await claims.release(entry.fingerprint)) await log({
 				kind: "release",

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -600,6 +600,33 @@ describe("fleet: the claimant's transcript", () => {
       agent: "agent-s-b",
       transcript: "/tmp/agent-b/session.jsonl",
     });
+  });
+
+  it("measures what the diagnosis cost when the fix is recorded", async () => {
+    const file = join(memory, "..", "agent-a.jsonl");
+    await fail("s-a", { transcript: file });
+    // The claimant worked on it: two model calls after its claim.
+    const usage = (id: string, output: number) =>
+      JSON.stringify({
+        type: "assistant",
+        timestamp: new Date().toISOString(),
+        message: { id, usage: { input_tokens: 100, output_tokens: output } },
+      });
+    await writeFile(file, `${usage("m1", 300)}\n${usage("m2", 500)}\n`);
+    await createFleet(memory, "agent-s-a", "s-a").recordFix("E-0001", FIX);
+    expect((await events()).find((e) => e.kind === "fix")).toMatchObject({
+      agent: "agent-s-a",
+      id: "E-0001",
+      tokens: 1_000,
+    });
+  });
+
+  it("records no cost it could not measure", async () => {
+    await fail("s-a", { transcript: join(memory, "..", "missing.jsonl") });
+    await createFleet(memory, "agent-s-a", "s-a").recordFix("E-0001", FIX);
+    expect((await events()).find((e) => e.kind === "fix")).not.toHaveProperty(
+      "tokens",
+    );
   });
 
   it("is left out when the hook named none", async () => {
