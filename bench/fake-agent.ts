@@ -212,6 +212,22 @@ export async function runFakeAgent(
     report.recorded.push(id);
   };
 
+  // The traps it diagnosed itself, and those whose fix it has not recorded.
+  const mine = new Set<TrapId>();
+  const unrecorded = new Set<TrapId>();
+
+  // Asked for a fix it found: record it. A request can come with any hook
+  // call, a failing one included.
+  const answer = async (context: string) => {
+    for (const [, id] of context.matchAll(/(E-\d+) looks resolved/g)) {
+      const asked = trapOfEntry(id as string);
+      if (asked !== undefined && mine.has(asked) && unrecorded.has(asked)) {
+        unrecorded.delete(asked);
+        await recordFix(id as string, asked);
+      }
+    }
+  };
+
   await hook({ hook_event_name: "SessionStart", source: "startup" });
   await hook({ hook_event_name: "UserPromptSubmit", prompt: o.task.prompt });
 
@@ -221,8 +237,6 @@ export async function runFakeAgent(
   for (const file of o.task.solution)
     cpSync(join(solutionDir(o.task), file), join(o.worktree, file));
 
-  const mine = new Set<TrapId>();
-  const unrecorded = new Set<TrapId>();
   let held: { trap: TrapId; since: number } | undefined;
   for (let n = 0; n < (o.maxRuns ?? 40); n++) {
     report.runs++;
@@ -249,14 +263,7 @@ export async function runFakeAgent(
         tool_input: { command: "npm test" },
         tool_response: { stdout: output, stderr: "", exit_code: 0 },
       });
-      // Asked for a fix it found: record it.
-      for (const [, id] of context.matchAll(/(E-\d+) looks resolved/g)) {
-        const asked = trapOfEntry(id as string);
-        if (asked !== undefined && mine.has(asked) && unrecorded.has(asked)) {
-          unrecorded.delete(asked);
-          await recordFix(id as string, asked);
-        }
-      }
+      await answer(context);
       report.passed = true;
       break;
     }
@@ -267,6 +274,7 @@ export async function runFakeAgent(
       tool_input: { command: "npm test" },
       error: `Exit code ${test.code}\n${output}`,
     });
+    await answer(context);
     if (trap === undefined) break;
 
     if (context.includes("| fix: ")) {
