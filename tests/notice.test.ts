@@ -371,6 +371,18 @@ describe("CapTracker", () => {
     expect(caps.tryEmit("E-0008")).toBe(true);
   });
 
+  it("lets a hand-over past the turn's budget without spending it", () => {
+    const caps = new CapTracker();
+    caps.beginStep();
+    expect(caps.tryEmit("E-1\0hold", false, true)).toBe(true);
+    for (const id of ["E-2", "E-3", "E-4"]) {
+      caps.beginStep();
+      expect(caps.tryEmit(id)).toBe(true);
+    }
+    caps.beginStep();
+    expect(caps.tryEmit("E-5")).toBe(false);
+  });
+
   it("lets a promised fix past the turn's budget, not the step's or the entry's", () => {
     const caps = new CapTracker();
     for (const id of ["E-1", "E-2", "E-3"]) {

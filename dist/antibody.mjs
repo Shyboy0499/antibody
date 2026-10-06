@@ -247,17 +247,18 @@ var CapTracker = class CapTracker {
 	*
 	* @param id - the entry the notice is about.
 	* @param fixed - whether the entry's status is `fixed`.
-	* @param promised - the notice carries a fix the session was told it would
-	*   be given (a claim hint's promise): the turn's budget does not hold it
-	*   back, though the step's and the entry's still do.
+	* @param handover - the notice is part of a hand-over between two agents:
+	*   a claim hint, or the fix it promised. That is not news the turn's budget
+	*   rations, so it neither holds the notice back nor is spent by it; the
+	*   step's and the entry's budgets still are.
 	* @returns whether the notice may be emitted; nothing is taken when not.
 	*/
-	tryEmit(id, fixed = false, promised = false) {
+	tryEmit(id, fixed = false, handover = false) {
 		const used = this.perId.get(id) ?? 0;
 		const perId = fixed ? this.limits.fixedPerSession : this.limits.perIdPerSession;
-		if (this.step >= this.limits.perStep || !promised && this.turn >= this.limits.perTurn || used >= perId) return false;
+		if (this.step >= this.limits.perStep || !handover && this.turn >= this.limits.perTurn || used >= perId) return false;
 		this.step++;
-		this.turn++;
+		if (!handover) this.turn++;
 		this.perId.set(id, used + 1);
 		return true;
 	}
@@ -3153,7 +3154,7 @@ var Injector = class {
 	* @param event - the hit or the miss.
 	* @param observed - observe() already saw this hit; do not count it again.
 	* @param promised - the session was told this entry's fix would be passed
-	*   on (a claim hint): a fix is not held back by the turn's budget.
+	*   on (a claim hint): the fix is a hand-over, outside the turn's budget.
 	* @returns the notice to inject, or undefined to stay silent.
 	*/
 	offer(event, observed = false, promised = false) {
@@ -3841,7 +3842,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			id: label,
 			text: `held by ${outcome.holder.agent}`
 		});
-		if (o.inject === "off" || !rt.caps.tryEmit(`${fingerprint}\0hold`)) return;
+		if (o.inject === "off" || !rt.caps.tryEmit(`${fingerprint}\0hold`, false, true)) return;
 		const elapsed = clock.now().getTime() - Date.parse(outcome.holder.since);
 		const text = claimHintText(label, outcome.holder.agent, elapsed);
 		notices.push(text);

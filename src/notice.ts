@@ -427,24 +427,25 @@ export class CapTracker {
    *
    * @param id - the entry the notice is about.
    * @param fixed - whether the entry's status is `fixed`.
-   * @param promised - the notice carries a fix the session was told it would
-   *   be given (a claim hint's promise): the turn's budget does not hold it
-   *   back, though the step's and the entry's still do.
+   * @param handover - the notice is part of a hand-over between two agents:
+   *   a claim hint, or the fix it promised. That is not news the turn's budget
+   *   rations, so it neither holds the notice back nor is spent by it; the
+   *   step's and the entry's budgets still are.
    * @returns whether the notice may be emitted; nothing is taken when not.
    */
-  tryEmit(id: string, fixed = false, promised = false): boolean {
+  tryEmit(id: string, fixed = false, handover = false): boolean {
     const used = this.perId.get(id) ?? 0;
     const perId = fixed
       ? this.limits.fixedPerSession
       : this.limits.perIdPerSession;
     if (
       this.step >= this.limits.perStep ||
-      (!promised && this.turn >= this.limits.perTurn) ||
+      (!handover && this.turn >= this.limits.perTurn) ||
       used >= perId
     )
       return false;
     this.step++;
-    this.turn++;
+    if (!handover) this.turn++;
     this.perId.set(id, used + 1);
     return true;
   }
