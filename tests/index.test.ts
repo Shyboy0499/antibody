@@ -27,6 +27,9 @@ import * as review from "../src/review";
 import * as exchange from "../src/exchange";
 import * as exchangeCli from "../src/exchange-cli";
 import * as autoImport from "../src/auto-import";
+import * as relay from "../src/relay";
+import * as relayServer from "../src/relay-server";
+import * as relayCli from "../src/relay-cli";
 import * as memoryCli from "../src/memory-cli";
 import * as reviewCli from "../src/review-cli";
 import * as tools from "../src/tools";
@@ -53,6 +56,9 @@ describe("public entry point", () => {
     ["exchange", exchange],
     ["exchange-cli", exchangeCli],
     ["auto-import", autoImport],
+    ["relay", relay],
+    ["relay-server", relayServer],
+    ["relay-cli", relayCli],
     ["memory-cli", memoryCli],
     ["review-cli", reviewCli],
     ["resolve-detect", resolveDetect],

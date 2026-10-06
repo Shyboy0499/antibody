@@ -32,6 +32,8 @@ import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
 import { autoImportText, importOnFirstSession } from "./auto-import";
+import { runRelay } from "./relay-cli";
+import type { RelayDeps } from "./relay-cli";
 import type { ToolCall } from "./resolve-detect";
 import type { GitRunner } from "./paths";
 import { runAllow, runReject, runReview } from "./review-cli";
@@ -216,6 +218,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody reject ID... | --all  turn it down, so it is archived
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
+       antibody relay serve        share fixes between machines through a relay
        antibody --version
 `;
 
@@ -301,7 +304,7 @@ export async function runStats(
 export async function main(
   argv: readonly string[],
   io: CliIo,
-  deps: HookDeps & McpDeps & SetupDeps & WatchDeps = {},
+  deps: HookDeps & McpDeps & SetupDeps & WatchDeps & RelayDeps = {},
 ): Promise<number> {
   const [command, ...rest] = argv;
   if (command === "hook") return runHook(rest[0] ?? "", io, deps);
@@ -314,6 +317,7 @@ export async function main(
   if (command === "reject") return runReject(rest, io, deps);
   if (command === "stats") return runStats(rest, io, deps);
   if (command === "watch") return runWatch(rest, io, deps);
+  if (command === "relay") return runRelay(rest, io, deps);
   if (command === "--version" || command === "-v") {
     io.stdout(`${VERSION}\n`);
     return 0;
