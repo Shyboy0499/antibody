@@ -36,6 +36,21 @@ describe("parseCodexInput", () => {
       });
   });
 
+  it("keeps the transcript path when Codex sends one", () => {
+    expect(
+      parse({
+        hook_event_name: "PostToolUse",
+        transcript_path: "~/.codex/sessions/rollout-1.jsonl",
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+        tool_response: "a\nb",
+      })?.transcriptPath,
+    ).toBe("~/.codex/sessions/rollout-1.jsonl");
+    expect(parse({ hook_event_name: "SessionStart" })).not.toHaveProperty(
+      "transcriptPath",
+    );
+  });
+
   it("reads nothing it cannot use", () => {
     for (const text of [
       "{",

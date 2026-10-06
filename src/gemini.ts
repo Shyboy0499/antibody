@@ -22,6 +22,7 @@
 // Gemini reads `hookSpecificOutput.additionalContext` from stdout on AfterTool
 // (appended to the tool result), BeforeAgent (appended to the prompt) and
 // SessionStart (put before the first prompt). Parsing never throws.
+import { withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
 
@@ -113,11 +114,10 @@ export function parseGeminiInput(text: string): HookInput | undefined {
   )
     return undefined;
 
-  const input: HookInput = {
-    event: GEMINI_EVENTS[native as GeminiEvent],
-    sessionId,
-    cwd,
-  };
+  const input = withTranscript(
+    { event: GEMINI_EVENTS[native as GeminiEvent], sessionId, cwd },
+    value,
+  );
   if (native !== "AfterTool") return input;
 
   const toolName = str(value.tool_name);

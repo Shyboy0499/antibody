@@ -19,6 +19,7 @@
 // The response is Claude Code's (hookResponse()): Codex reads
 // `hookSpecificOutput.additionalContext` on SessionStart, UserPromptSubmit and
 // PostToolUse. Parsing never throws.
+import { withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 
 /** The harness name, as agent names and events use it. */
@@ -143,7 +144,10 @@ export function parseCodexInput(text: string): HookInput | undefined {
   )
     return undefined;
 
-  const input: HookInput = { event: event as HookEvent, sessionId, cwd };
+  const input = withTranscript(
+    { event: event as HookEvent, sessionId, cwd },
+    value,
+  );
   if (event !== "PostToolUse") return input;
 
   const agentId = str(value.agent_id);

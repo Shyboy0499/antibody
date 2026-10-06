@@ -581,3 +581,31 @@ describe("fleet: the review gate", () => {
     expect((await fail("s-c"))[0]).toContain(`fix: ${FIX}`);
   });
 });
+
+describe("fleet: the claimant's transcript", () => {
+  const transcript = "/tmp/agent-a/session.jsonl";
+
+  it("is recorded on the claim of a new error, and of a known one", async () => {
+    await fail("s-a", { transcript });
+    expect((await events()).find((e) => e.kind === "claim")).toMatchObject({
+      agent: "agent-s-a",
+      id: "E-0001",
+      transcript,
+    });
+    await createFleet(memory, "agent-s-a", "s-a").endSession();
+    await fail("s-b", { transcript: "/tmp/agent-b/session.jsonl" });
+    expect(
+      (await events()).filter((e) => e.kind === "claim").at(-1),
+    ).toMatchObject({
+      agent: "agent-s-b",
+      transcript: "/tmp/agent-b/session.jsonl",
+    });
+  });
+
+  it("is left out when the hook named none", async () => {
+    await fail("s-a");
+    expect((await events()).find((e) => e.kind === "claim")).not.toHaveProperty(
+      "transcript",
+    );
+  });
+});

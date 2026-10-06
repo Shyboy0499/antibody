@@ -113,6 +113,14 @@ describe("antibody hook claude-code", () => {
     );
   });
 
+  it("records the claimant's transcript, as the hook named it, on the claim", async () => {
+    const { events } = await readEventsFrom(filesIn(memoryDir(agentA)).events);
+    expect(events.find((e) => e.kind === "claim")).toMatchObject({
+      agent: "claude-code@agent-a",
+      transcript: "/t",
+    });
+  });
+
   it("asks for the fix when the same command then succeeds", async () => {
     const run = await hook(
       payload(agentA, "s-a", {

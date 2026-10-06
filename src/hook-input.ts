@@ -29,6 +29,11 @@ export interface HookInput {
   cwd: string;
   /** Set when the hook fired inside a subagent. */
   agentId?: string;
+  /**
+   * The session's transcript, as the harness names it: where the tokens a
+   * diagnosis cost are read from (src/transcript.ts).
+   */
+  transcriptPath?: string;
   toolName?: string;
   /** The Bash command line, when the tool ran one. */
   command?: string;
@@ -38,6 +43,24 @@ export interface HookInput {
   exitCode?: number;
   /** PostToolUseFailure: the error text. */
   error?: string;
+}
+
+/**
+ * Add the transcript path a hook payload names, when it names one. Every
+ * harness antibody serves sends `transcript_path` with every event.
+ *
+ * @param input - the hook call being read; changed in place.
+ * @param payload - the harness's hook payload.
+ * @returns the same hook call.
+ */
+export function withTranscript(
+  input: HookInput,
+  payload: Readonly<Record<string, unknown>>,
+): HookInput {
+  const path = payload.transcript_path;
+  if (typeof path === "string" && path.trim() !== "")
+    input.transcriptPath = path;
+  return input;
 }
 
 // Claude Code's own wording for a failed shell command.
