@@ -233,6 +233,23 @@ describe("summariseArms and renderResults", () => {
     );
   });
 
+  it("says so when injection made a run worse", () => {
+    const worse = [
+      run("off", [agent("a", 10_000, 40_000)], 2),
+      run("on", [agent("a", 11_000, 50_000)], 3),
+    ];
+    expect(renderResults(summariseArms(worse), "1 agent")).toContain(
+      "With injection on: 10% more tokens, 25% more wall time, 1 more repeat diagnoses per run.",
+    );
+    const unknown = [
+      run("off", [agent("a", undefined, 40_000)], 2),
+      run("on", [agent("a", 9_000, 40_000)], 2),
+    ];
+    expect(renderResults(summariseArms(unknown), "1 agent")).toContain(
+      "With injection on: - fewer tokens, 0% less wall time, 0 fewer repeat diagnoses per run.",
+    );
+  });
+
   it("writes one arm alone, and dashes for what it could not measure", () => {
     const text = renderResults(
       summariseArms([run("on", [agent("a", undefined, 4200)], 0)]),
