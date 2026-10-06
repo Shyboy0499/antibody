@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   EVENT_LABEL_MAX_CHARS,
   EVENT_MAX_BYTES,
+  TRANSCRIPT_PATH_MAX_CHARS,
   appendEvent,
   encodeEvent,
   isMemoryEvent,
@@ -52,6 +53,19 @@ describe("encodeEvent", () => {
       agent: "claude-1",
       session: "s-1",
     });
+  });
+
+  it("keeps a claim's transcript path as it is, and drops one too long to be a path", () => {
+    const transcript = "/tmp/agent-a/.claude/projects/shop/session.jsonl";
+    const claim = { ...base, kind: "claim" as const, id: "E-0001" };
+    const line = encodeEvent({ ...claim, transcript }, NOW);
+    // Redaction would have collapsed it to <path>, and it must stay readable.
+    expect(decode(line).transcript).toBe(transcript);
+    expect(isMemoryEvent(decode(line))).toBe(true);
+    const long = `/${"x".repeat(TRANSCRIPT_PATH_MAX_CHARS)}`;
+    expect(
+      decode(encodeEvent({ ...claim, transcript: long }, NOW)),
+    ).not.toHaveProperty("transcript");
   });
 
   it("redacts free text before it is written", () => {
@@ -105,6 +119,7 @@ describe("isMemoryEvent", () => {
     ["a numeric id", { ...good, id: 7 }],
     ["a numeric text", { ...good, text: 7 }],
     ["a numeric notice", { ...good, notice: 7 }],
+    ["a numeric transcript", { ...good, transcript: 7 }],
     ["negative tokens", { ...good, tokens: -1 }],
     ["infinite tokens", { ...good, tokens: Infinity }],
     ["string tokens", { ...good, tokens: "96" }],

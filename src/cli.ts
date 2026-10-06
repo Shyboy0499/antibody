@@ -151,7 +151,12 @@ export async function runHook(
     }
     const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
     // Paused: the fleet loop still records, but injects nothing.
-    const options = injectionPaused(memory) ? { inject: "off" as const } : {};
+    const options = {
+      ...(injectionPaused(memory) ? { inject: "off" as const } : {}),
+      ...(input.transcriptPath === undefined
+        ? {}
+        : { transcript: input.transcriptPath }),
+    };
     const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s, options)))(
       memory,
       agent,

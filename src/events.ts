@@ -67,7 +67,16 @@ export interface MemoryEvent {
   notice?: NoticeKind | "hold";
   /** A short description, redacted. */
   text?: string;
+  /**
+   * For a claim: the claimant's transcript, kept as it is because it is read
+   * back to measure what the diagnosis cost (src/transcript.ts). It names a
+   * file on this machine, and the memory never leaves it.
+   */
+  transcript?: string;
 }
+
+/** A transcript path longer than this is not recorded. */
+export const TRANSCRIPT_PATH_MAX_CHARS = 1024;
 
 /** An event to append; the version and, by default, the time are filled in. */
 export type NewEvent = Omit<MemoryEvent, "v" | "t"> & { t?: string };
@@ -92,6 +101,7 @@ export function isMemoryEvent(value: unknown): value is MemoryEvent {
     optionalString("id") &&
     optionalString("text") &&
     optionalString("notice") &&
+    optionalString("transcript") &&
     (e.tokens === undefined ||
       (typeof e.tokens === "number" &&
         Number.isFinite(e.tokens) &&
@@ -120,6 +130,11 @@ export function encodeEvent(event: NewEvent, now: Date = new Date()): string {
   if (event.id !== undefined) base.id = clip(event.id, EVENT_LABEL_MAX_CHARS);
   if (event.tokens !== undefined) base.tokens = event.tokens;
   if (event.notice !== undefined) base.notice = event.notice;
+  if (
+    event.transcript !== undefined &&
+    event.transcript.length <= TRANSCRIPT_PATH_MAX_CHARS
+  )
+    base.transcript = event.transcript;
   const line = (text: string | undefined) =>
     `${JSON.stringify(text === undefined ? base : { ...base, text })}\n`;
   if (event.text === undefined) return line(undefined);

@@ -443,6 +443,19 @@ const HOOK_EVENTS = [
 	"PostToolUseFailure",
 	"SessionEnd"
 ];
+/**
+* Add the transcript path a hook payload names, when it names one. Every
+* harness antibody serves sends `transcript_path` with every event.
+*
+* @param input - the hook call being read; changed in place.
+* @param payload - the harness's hook payload.
+* @returns the same hook call.
+*/
+function withTranscript(input, payload) {
+	const path = payload.transcript_path;
+	if (typeof path === "string" && path.trim() !== "") input.transcriptPath = path;
+	return input;
+}
 const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
 const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
 /** The exit code and output of a failed shell command, when the call is one. */
@@ -555,11 +568,11 @@ function parseHookInput(text) {
 	const sessionId = str$2(value.session_id);
 	const cwd = str$2(value.cwd);
 	if (!HOOK_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
-	const input = {
+	const input = withTranscript({
 		event,
 		sessionId,
 		cwd
-	};
+	}, value);
 	const agentId = str$2(value.agent_id);
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
 	const toolName = str$2(value.tool_name);
@@ -702,11 +715,11 @@ function parseCodexInput(text) {
 	const sessionId = str$1(value.session_id);
 	const cwd = str$1(value.cwd);
 	if (!CODEX_EVENTS.includes(event) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
-	const input = {
+	const input = withTranscript({
 		event,
 		sessionId,
 		cwd
-	};
+	}, value);
 	if (event !== "PostToolUse") return input;
 	const agentId = str$1(value.agent_id);
 	if (agentId !== void 0 && agentId !== "") input.agentId = agentId;
@@ -2690,7 +2703,7 @@ function isMemoryEvent(value) {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const e = value;
 	const optionalString = (key) => e[key] === void 0 || typeof e[key] === "string";
-	return e.v === 1 && typeof e.t === "string" && EVENT_KINDS.includes(e.kind) && typeof e.agent === "string" && typeof e.session === "string" && optionalString("id") && optionalString("text") && optionalString("notice") && (e.tokens === void 0 || typeof e.tokens === "number" && Number.isFinite(e.tokens) && e.tokens >= 0);
+	return e.v === 1 && typeof e.t === "string" && EVENT_KINDS.includes(e.kind) && typeof e.agent === "string" && typeof e.session === "string" && optionalString("id") && optionalString("text") && optionalString("notice") && optionalString("transcript") && (e.tokens === void 0 || typeof e.tokens === "number" && Number.isFinite(e.tokens) && e.tokens >= 0);
 }
 const bytes = (text) => Buffer.byteLength(text, "utf8");
 /**
@@ -2712,6 +2725,7 @@ function encodeEvent(event, now = /* @__PURE__ */ new Date()) {
 	if (event.id !== void 0) base.id = clip(event.id, 200);
 	if (event.tokens !== void 0) base.tokens = event.tokens;
 	if (event.notice !== void 0) base.notice = event.notice;
+	if (event.transcript !== void 0 && event.transcript.length <= 1024) base.transcript = event.transcript;
 	const line = (text) => `${JSON.stringify(text === void 0 ? base : {
 		...base,
 		text
@@ -3575,6 +3589,11 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 		agent,
 		session
 	}, clock.now());
+	const logClaim = (id) => log({
+		kind: "claim",
+		id,
+		...o.transcript === void 0 ? {} : { transcript: o.transcript }
+	});
 	async function readEntries(machine) {
 		return (await store.read()).blocks.map((b) => forAgents(effectiveEntry(b.entry, machine.entries[b.entry.id])));
 	}
@@ -3656,10 +3675,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 				session
 			});
 			if (!outcome.granted) return hold(s, rt, entry.fingerprint, found.id, outcome, notices);
-			if (fresh(outcome)) await log({
-				kind: "claim",
-				id: found.id
-			});
+			if (fresh(outcome)) await logClaim(found.id);
 		}
 		await tell(rt.injector.offer({
 			kind: "hit",
@@ -3694,10 +3710,7 @@ function createFleet(memory, agent, session, options = {}, deps = {}) {
 			id,
 			text: record.message
 		});
-		await log({
-			kind: "claim",
-			id
-		});
+		await logClaim(id);
 		await tell(rt.injector.offer({
 			kind: "miss",
 			id
@@ -3910,11 +3923,11 @@ function parseGeminiInput(text) {
 	const sessionId = str(value.session_id);
 	const cwd = str(value.cwd);
 	if (typeof native !== "string" || !Object.hasOwn(GEMINI_EVENTS, native) || sessionId === void 0 || sessionId === "" || cwd === void 0) return void 0;
-	const input = {
+	const input = withTranscript({
 		event: GEMINI_EVENTS[native],
 		sessionId,
 		cwd
-	};
+	}, value);
 	if (native !== "AfterTool") return input;
 	const toolName = str(value.tool_name);
 	if (toolName !== void 0) input.toolName = toolName;
@@ -5488,7 +5501,10 @@ async function runHook(harness, io, deps = {}) {
 			return "";
 		}
 		const agent = agentName(harness, worktreeRoot(input.cwd, deps.git), io.env);
-		const options = injectionPaused(memory) ? { inject: "off" } : {};
+		const options = {
+			...injectionPaused(memory) ? { inject: "off" } : {},
+			...input.transcriptPath === void 0 ? {} : { transcript: input.transcriptPath }
+		};
 		const fleet = (deps.fleet ?? ((m, a, s) => createFleet(m, a, s, options)))(memory, agent, input.sessionId);
 		return adapter.respond(input.event, await dispatch(input, fleet));
 	};

@@ -16,7 +16,7 @@
 // Output goes back the documented way: JSON on stdout with
 // `hookSpecificOutput.additionalContext`, which Claude Code shows the model as
 // a system reminder, or nothing at all.
-import { HOOK_EVENTS } from "./hook-input";
+import { HOOK_EVENTS, withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
 
@@ -79,7 +79,10 @@ export function parseHookInput(text: string): HookInput | undefined {
   )
     return undefined;
 
-  const input: HookInput = { event: event as HookEvent, sessionId, cwd };
+  const input = withTranscript(
+    { event: event as HookEvent, sessionId, cwd },
+    value,
+  );
   const agentId = str(value.agent_id);
   if (agentId !== undefined && agentId !== "") input.agentId = agentId;
   const toolName = str(value.tool_name);

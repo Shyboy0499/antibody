@@ -42,18 +42,25 @@ describe("parseGeminiInput: events", () => {
   it("maps Gemini's events onto antibody's", () => {
     expect(
       parse({ hook_event_name: "SessionStart", source: "startup" }),
-    ).toEqual({ event: "SessionStart", sessionId: "4a1c", cwd: "/work/repo" });
+    ).toEqual({
+      event: "SessionStart",
+      sessionId: "4a1c",
+      cwd: "/work/repo",
+      transcriptPath: "/tmp/gemini/chat.json",
+    });
     expect(parse({ hook_event_name: "BeforeAgent", prompt: "fix it" })).toEqual(
       {
         event: "UserPromptSubmit",
         sessionId: "4a1c",
         cwd: "/work/repo",
+        transcriptPath: "/tmp/gemini/chat.json",
       },
     );
     expect(parse({ hook_event_name: "SessionEnd", reason: "exit" })).toEqual({
       event: "SessionEnd",
       sessionId: "4a1c",
       cwd: "/work/repo",
+      transcriptPath: "/tmp/gemini/chat.json",
     });
   });
 
@@ -78,6 +85,7 @@ describe("parseGeminiInput: tool results", () => {
       event: "PostToolUse",
       sessionId: "4a1c",
       cwd: "/work/repo",
+      transcriptPath: "/tmp/gemini/chat.json",
       toolName: "run_shell_command",
       command: "pnpm test",
       output:
@@ -140,6 +148,7 @@ describe("parseGeminiInput: tool results", () => {
       event: "PostToolUseFailure",
       sessionId: "4a1c",
       cwd: "/work/repo",
+      transcriptPath: "/tmp/gemini/chat.json",
       toolName: "read_file",
       error: "File not found: /work/repo/.env",
     });

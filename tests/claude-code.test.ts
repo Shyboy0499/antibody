@@ -39,11 +39,29 @@ describe("parseHookInput", () => {
       event: "PostToolUseFailure",
       sessionId: "s-1",
       cwd: "/work/agent-a",
+      transcriptPath: "/t.jsonl",
       toolName: "Bash",
       command: "pnpm test",
       error:
         "Exit code 1\nError: Environment variable not found: DATABASE_URL.",
     });
+  });
+
+  it("keeps the transcript path, and leaves out a blank or missing one", () => {
+    const start = (fields: Record<string, unknown>) =>
+      parseHookInput(
+        JSON.stringify({
+          session_id: "s-1",
+          cwd: "/w",
+          hook_event_name: "SessionStart",
+          ...fields,
+        }),
+      );
+    expect(start({ transcript_path: "/t.jsonl" })?.transcriptPath).toBe(
+      "/t.jsonl",
+    );
+    for (const transcript_path of [undefined, "", "  ", null, 7])
+      expect(start({ transcript_path })).not.toHaveProperty("transcriptPath");
   });
 
   it("reads tool_output as text, and an older tool_response object", () => {

@@ -52,6 +52,11 @@ export interface FleetOptions {
   lockTimeoutMs: number;
   /** How long a claim lasts unless its holder renews or releases it. */
   claimTtlMs: number;
+  /**
+   * The session's transcript, from the hook payload. A claim records it, so
+   * what the diagnosis cost can be read once the fix is recorded.
+   */
+  transcript?: string;
 }
 
 export const DEFAULT_FLEET_OPTIONS: FleetOptions = {
@@ -168,6 +173,13 @@ export function createFleet(
 
   const log = (event: Omit<NewEvent, "agent" | "session">) =>
     appendEvent(files.events, { ...event, agent, session }, clock.now());
+  // A claim names the transcript the diagnosis will be measured from.
+  const logClaim = (id: string) =>
+    log({
+      kind: "claim",
+      id,
+      ...(o.transcript === undefined ? {} : { transcript: o.transcript }),
+    });
 
   async function readEntries(machine: MachineState): Promise<Entry[]> {
     const document = await store.read();
@@ -286,7 +298,7 @@ export function createFleet(
       });
       if (!outcome.granted)
         return hold(s, rt, entry.fingerprint, found.id, outcome, notices);
-      if (fresh(outcome)) await log({ kind: "claim", id: found.id });
+      if (fresh(outcome)) await logClaim(found.id);
     }
     await tell(
       rt.injector.offer({ kind: "hit", hit: { ...found, entry } }),
@@ -328,7 +340,7 @@ export function createFleet(
       raw: record.raw,
     });
     await log({ kind: "miss", id, text: record.message });
-    await log({ kind: "claim", id });
+    await logClaim(id);
     await tell(rt.injector.offer({ kind: "miss", id }), notices);
     return id;
   }
