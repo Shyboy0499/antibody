@@ -1994,7 +1994,7 @@ function plain(text) {
 }
 const line = (text, max) => clip(oneLine(plain(text)), max);
 /** The key an entry is known by: the fingerprint matching uses. */
-const keyOf$1 = (entry) => entry.meta.sig ?? entry.fingerprint;
+const keyOf$2 = (entry) => entry.meta.sig ?? entry.fingerprint;
 /**
 * An incoming entry as a new local entry: its texts cut and cleaned, its
 * machine fields cut down to the ones that matter, and the whole of it held
@@ -2011,7 +2011,7 @@ function forImport(entry, source) {
 	}
 	return {
 		title: line(entry.title, IMPORT_MAX_CHARS.title),
-		signature: keyOf$1(entry),
+		signature: keyOf$2(entry),
 		category: line(entry.category, IMPORT_MAX_CHARS.category),
 		meta,
 		trigger: line(entry.trigger, IMPORT_MAX_CHARS.trigger),
@@ -2028,7 +2028,7 @@ function forImport(entry, source) {
 * @param archive - the archive's entries.
 */
 function rejectedKeys(archive) {
-	return new Set(archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf$1));
+	return new Set(archive.filter((e) => e.meta[REVIEW_KEY] === REVIEW_REJECTED).map(keyOf$2));
 }
 /**
 * Decide what to do with each incoming entry. An entry already here keeps its
@@ -2054,10 +2054,10 @@ function planImport(local, incoming, room, source, rejected = /* @__PURE__ */ ne
 			full: 0
 		}
 	};
-	const here = new Map(local.map((e) => [keyOf$1(e), e]));
+	const here = new Map(local.map((e) => [keyOf$2(e), e]));
 	const seen = /* @__PURE__ */ new Set();
 	for (const entry of incoming) {
-		const key = keyOf$1(entry);
+		const key = keyOf$2(entry);
 		if (entry.status !== "fixed" || oneLine(entry.fix) === "") plan.skipped["no-fix"]++;
 		else if (!FINGERPRINT$1.test(key)) plan.skipped["bad-fingerprint"]++;
 		else if (seen.has(key)) plan.skipped.duplicate++;
@@ -2211,17 +2211,20 @@ async function rejectedFixes(archive) {
 		return /* @__PURE__ */ new Set();
 	}
 }
+const withoutReview = (meta) => Object.fromEntries(Object.entries(meta).filter(([k]) => k !== REVIEW_KEY));
 /**
 * Read an exported document's fixes into the memory, each held for a person's
-* review (src/review.ts).
+* review (src/review.ts) unless the source is trusted.
 *
 * @param memory - the memory, as openMemory() gives it.
 * @param text - the document.
 * @param name - the document's name, for the import notes and messages.
 * @param dry - plan only, writing nothing.
+* @param trusted - the source is trusted as the fleet's own (a relay its
+*   owner trusts): its fixes and texts are not held for review.
 * @returns what it took in, or why the document could not be read.
 */
-async function importDocument(memory, text, name, dry = false) {
+async function importDocument(memory, text, name, dry = false, trusted = false) {
 	if (Buffer.byteLength(text) > 524288) return { error: `${name} is larger than ${IMPORT_MAX_BYTES / 1024} KiB; not importing it` };
 	let incoming;
 	try {
@@ -2234,11 +2237,14 @@ async function importDocument(memory, text, name, dry = false) {
 	const plan = planImport(memory.entries, incoming, room, name, await rejectedFixes(memory.files.archive));
 	const count = plan.add.length + plan.adopt.length;
 	if (!dry) {
-		for (const entry of plan.add) await memory.store.append(entry);
+		for (const entry of plan.add) await memory.store.append(trusted ? {
+			...entry,
+			meta: withoutReview(entry.meta ?? {})
+		} : entry);
 		for (const { id, fix } of plan.adopt) await memory.store.update(id, {
 			fix,
 			status: "fixed",
-			meta: holdImportedFix
+			meta: trusted ? afterOwnFix : holdImportedFix
 		});
 	}
 	return {
@@ -4410,6 +4416,133 @@ async function importOnFirstSession(memory, root, env, fs = nodeStoreFs()) {
 	}, text, EXCHANGE_FILE);
 	return "error" in outcome || outcome.count === 0 ? void 0 : outcome.count;
 }
+//#endregion
+//#region src/relay-client.ts
+/** The environment variable that names the relay. */
+const RELAY_URL_ENV = "ANTIBODY_RELAY";
+/** The environment variable that says how far the relay is trusted. */
+const RELAY_TRUST_ENV = "ANTIBODY_RELAY_TRUST";
+/** The file in the memory directory that remembers the sync. */
+const RELAY_STATE_FILE = "relay.json";
+/**
+* The relay the environment configures.
+*
+* @returns the configuration, undefined when no relay is set, or what is wrong.
+*/
+function relayConfig(env) {
+	const raw = env["ANTIBODY_RELAY"]?.trim() ?? "";
+	if (raw === "") return void 0;
+	let url;
+	try {
+		url = new URL(raw);
+	} catch {
+		return { error: `${RELAY_URL_ENV} is not a URL: ${raw}` };
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") return { error: `${RELAY_URL_ENV} must be an http or https URL` };
+	const token = env.ANTIBODY_RELAY_TOKEN ?? "";
+	if (token.length < 16) return { error: "ANTIBODY_RELAY_TOKEN must hold the relay's token, 16 characters or more" };
+	const trust = env["ANTIBODY_RELAY_TRUST"]?.trim() || "review";
+	if (trust !== "review" && trust !== "fleet") return { error: `${RELAY_TRUST_ENV} takes review or fleet` };
+	return {
+		url: url.href.replace(/\/+$/, ""),
+		token,
+		trust
+	};
+}
+function readSyncState(text, url) {
+	const fresh = {
+		url,
+		seq: 0,
+		known: {}
+	};
+	if (text === void 0) return fresh;
+	try {
+		const raw = JSON.parse(text);
+		if (raw.url !== url || !Number.isInteger(raw.seq) || typeof raw.known !== "object" || raw.known === null) return fresh;
+		return {
+			url,
+			seq: raw.seq,
+			known: { ...raw.known }
+		};
+	} catch {
+		return fresh;
+	}
+}
+const keyOf$1 = (entry) => entry.meta.sig ?? entry.fingerprint;
+/**
+* Push this machine's new and changed fixes to the relay, then pull what
+* changed there since the last sync.
+*
+* @param memory - the memory directory.
+* @param config - the relay, from relayConfig().
+* @param deps - fetch, the file system and the clock; injected in tests.
+* @returns what it did, or why it could not.
+*/
+async function syncRelay(memory, config, deps = {}) {
+	const fs = deps.fs ?? nodeStoreFs();
+	const clock = deps.clock ?? systemClock();
+	const get = deps.fetch ?? fetch;
+	const timeoutMs = deps.timeoutMs ?? 5e3;
+	const headers = {
+		authorization: `Bearer ${config.token}`,
+		"content-type": "application/json"
+	};
+	const ask = async (path, init = {}) => {
+		const res = await get(`${config.url}${path}`, {
+			...init,
+			headers,
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		const body = await res.json().catch(() => ({}));
+		if (!res.ok) throw new Error(`the relay answered ${res.status}${typeof body.error === "string" ? `: ${body.error}` : ""}`);
+		return body;
+	};
+	const stateFile = join(memory, RELAY_STATE_FILE);
+	const lock = {
+		lockStaleMs: 6e4,
+		lockTimeoutMs: 1e3,
+		lockRetryMs: 50
+	};
+	try {
+		return await withFileLock(join(memory, "relay.lock"), lock, fs, clock, async () => {
+			const state = readSyncState(await fs.readFile(stateFile), config.url);
+			const files = filesIn(memory);
+			const store = createStore(files, {}, fs, clock);
+			const entries = (await store.read()).blocks.map((b) => b.entry);
+			const changed = entries.filter((e) => exportable(e) && state.known[keyOf$1(e)] !== fixSig(e.fix));
+			if (changed.length > 0) {
+				await ask("/v1/fixes", {
+					method: "POST",
+					body: JSON.stringify({ document: exportDocument(changed).text })
+				});
+				for (const e of changed) state.known[keyOf$1(e)] = fixSig(e.fix);
+			}
+			const since = await ask(`/v1/fixes?since=${state.seq}`);
+			const document = typeof since.document === "string" ? since.document : "";
+			let pulled = 0;
+			if (document !== "") {
+				const outcome = await importDocument({
+					store,
+					entries,
+					files
+				}, document, `the relay ${new URL(config.url).host}`, false, config.trust === "fleet");
+				if ("error" in outcome) throw new Error(outcome.error);
+				pulled = outcome.count;
+				const came = new Map(parseDocument$1(document).blocks.map((b) => [keyOf$1(b.entry), fixSig(b.entry.fix)]));
+				for (const e of (await store.read()).blocks.map((b) => b.entry)) if (came.get(keyOf$1(e)) === fixSig(e.fix)) state.known[keyOf$1(e)] = fixSig(e.fix);
+			}
+			if (typeof since.seq === "number") state.seq = since.seq;
+			await writeFileAtomic(fs, stateFile, `${JSON.stringify(state)}\n`);
+			return {
+				pushed: changed.length,
+				pulled,
+				held: config.trust !== "fleet"
+			};
+		});
+	} catch (error) {
+		return { error: error.message };
+	}
+}
 /** The largest document a machine may push. */
 const RELAY_MAX_BYTES = IMPORT_MAX_BYTES;
 /** What a relay's documents say about themselves, below their title. */
@@ -4656,10 +4789,13 @@ const RELAY_DEFAULT_PORT = 4880;
 /** The environment variable that holds the relay's token. */
 const RELAY_TOKEN_ENV = "ANTIBODY_RELAY_TOKEN";
 const RELAY_USAGE = `usage: antibody relay serve [--port N] [--host H] [--data FILE]
+       antibody relay sync
   --port N     the port to listen on (default ${RELAY_DEFAULT_PORT})
   --host H     the address to listen on (default 127.0.0.1)
   --data FILE  where the relay keeps its fixes (default antibody-relay.json)
-The token every machine sends is read from ${RELAY_TOKEN_ENV}.
+The token every machine sends is read from ${RELAY_TOKEN_ENV}. A machine that
+syncs names the relay in ${RELAY_URL_ENV}, and sets ${RELAY_TRUST_ENV}=fleet to
+give agents what it pulls without a person's review.
 `;
 /**
 * `antibody relay <command>`.
@@ -4671,6 +4807,7 @@ The token every machine sends is read from ${RELAY_TOKEN_ENV}.
 async function runRelay(args, io, deps = {}) {
 	const [command, ...rest] = args;
 	if (command === "serve") return serve(rest, io, deps);
+	if (command === "sync") return sync(rest, io, deps);
 	io.stderr(`antibody: ${command === void 0 ? "relay needs a command" : `unknown relay command: ${command}`}\n${RELAY_USAGE}`);
 	return 2;
 }
@@ -4730,6 +4867,37 @@ async function serve(args, io, deps) {
 	if (!signal.aborted) await new Promise((stop) => signal.addEventListener("abort", stop, { once: true }));
 	await server.close();
 	io.stdout(`antibody relay: stopped, holding ${server.fixes()} fixes\n`);
+	return 0;
+}
+async function sync(args, io, deps) {
+	if (args.length > 0) {
+		io.stderr(`antibody: relay sync takes no options\n${RELAY_USAGE}`);
+		return 2;
+	}
+	const config = relayConfig(io.env);
+	if (config === void 0) {
+		io.stderr(`antibody: no relay is set; set ${RELAY_URL_ENV} to its URL and ${RELAY_TOKEN_ENV} to its token\n`);
+		return 1;
+	}
+	if ("error" in config) {
+		io.stderr(`antibody: ${config.error}\n`);
+		return 1;
+	}
+	let memory;
+	try {
+		memory = memoryDir(deps.cwd ?? process.cwd(), deps.git, io.env);
+	} catch (error) {
+		io.stderr(`antibody: ${error.message}\n`);
+		return 1;
+	}
+	const result = await syncRelay(memory, config);
+	if ("error" in result) {
+		io.stderr(`antibody: the relay sync failed: ${result.error}\n`);
+		return 1;
+	}
+	const fixes = (n) => `${n} ${n === 1 ? "fix" : "fixes"}`;
+	const came = result.pulled === 0 ? "" : result.held ? ", held for your review: run `antibody review`" : ", given to agents as they meet the errors";
+	io.stdout(`Pushed ${fixes(result.pushed)} to ${new URL(config.url).host}, and pulled ${fixes(result.pulled)}${came}.\n`);
 	return 0;
 }
 //#endregion
@@ -6190,6 +6358,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody relay serve        share fixes between machines through a relay
+       antibody relay sync         push this machine's fixes and pull the others'
        antibody --version
 `;
 /**

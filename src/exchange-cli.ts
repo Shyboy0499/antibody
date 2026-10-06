@@ -18,6 +18,7 @@ import {
 } from "./exchange";
 import type { ImportPlan, Skipped } from "./exchange";
 import { openMemory, shown } from "./memory-cli";
+import { REVIEW_KEY, afterOwnFix } from "./review";
 import {
   DEFAULT_STORE_OPTIONS,
   ParseError,
@@ -164,6 +165,9 @@ async function rejectedFixes(archive: string): Promise<Set<string>> {
   }
 }
 
+const withoutReview = (meta: Readonly<Record<string, string>>) =>
+  Object.fromEntries(Object.entries(meta).filter(([k]) => k !== REVIEW_KEY));
+
 /** What reading an exported document into the memory came to. */
 export interface ImportOutcome {
   plan: ImportPlan;
@@ -175,12 +179,14 @@ export interface ImportOutcome {
 
 /**
  * Read an exported document's fixes into the memory, each held for a person's
- * review (src/review.ts).
+ * review (src/review.ts) unless the source is trusted.
  *
  * @param memory - the memory, as openMemory() gives it.
  * @param text - the document.
  * @param name - the document's name, for the import notes and messages.
  * @param dry - plan only, writing nothing.
+ * @param trusted - the source is trusted as the fleet's own (a relay its
+ *   owner trusts): its fixes and texts are not held for review.
  * @returns what it took in, or why the document could not be read.
  */
 export async function importDocument(
@@ -188,6 +194,7 @@ export async function importDocument(
   text: string,
   name: string,
   dry = false,
+  trusted = false,
 ): Promise<ImportOutcome | { error: string }> {
   if (Buffer.byteLength(text) > IMPORT_MAX_BYTES)
     return {
@@ -213,12 +220,15 @@ export async function importDocument(
   );
   const count = plan.add.length + plan.adopt.length;
   if (!dry) {
-    for (const entry of plan.add) await memory.store.append(entry);
+    for (const entry of plan.add)
+      await memory.store.append(
+        trusted ? { ...entry, meta: withoutReview(entry.meta ?? {}) } : entry,
+      );
     for (const { id, fix } of plan.adopt)
       await memory.store.update(id, {
         fix,
         status: "fixed",
-        meta: holdImportedFix,
+        meta: trusted ? afterOwnFix : holdImportedFix,
       });
   }
   return { plan, count, left: leftOut(plan) };
