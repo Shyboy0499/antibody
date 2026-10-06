@@ -5,7 +5,7 @@
 //
 // Each takes the repository the working directory is in, and exits 0 on
 // success, 1 when the memory cannot be read, and 2 on usage.
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { worktreeRoot } from "./agent";
 import type { CliIo, McpDeps } from "./cli";
 import {
@@ -16,50 +16,20 @@ import {
   planImport,
 } from "./exchange";
 import type { ImportPlan, Skipped } from "./exchange";
-import { filesIn, memoryDir } from "./paths";
+import { openMemory, shown } from "./memory-cli";
 import {
   DEFAULT_STORE_OPTIONS,
   ParseError,
-  createStore,
   nodeStoreFs,
   parseDocument,
   writeFileAtomic,
 } from "./store";
-import type { Entry, ErrorStore } from "./store";
+import type { Entry } from "./store";
 
 const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
   --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
   --print     print the document instead of writing a file
 `;
-
-/** The memory's store and its entries as the document holds them, or why not. */
-async function openMemory(
-  cwd: string,
-  io: CliIo,
-  deps: McpDeps,
-): Promise<{ store: ErrorStore; entries: Entry[] } | { error: string }> {
-  let memory: string;
-  try {
-    memory = memoryDir(cwd, deps.git, io.env);
-  } catch (error) {
-    return { error: (error as Error).message };
-  }
-  const store = createStore(filesIn(memory));
-  try {
-    const document = await store.read();
-    return { store, entries: document.blocks.map((b) => b.entry) };
-  } catch (error) {
-    return {
-      error: `could not read ANTIBODIES.md: ${(error as Error).message}`,
-    };
-  }
-}
-
-/** A path as a person would type it: relative to `cwd` when it is below it. */
-function shown(cwd: string, path: string): string {
-  const rel = relative(cwd, path);
-  return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? path : rel;
-}
 
 /**
  * `antibody export`: write the fixes this fleet found to ANTIBODIES.md in the
@@ -267,6 +237,7 @@ export async function runImport(
         ? []
         : [
             "They wait for your review, and no agent sees them until you approve them.",
+            "Run `antibody review` to read them, then `antibody allow` to approve.",
           ]),
       ...(left === "" ? [] : [`Left out: ${left}.`]),
       "",

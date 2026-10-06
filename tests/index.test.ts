@@ -25,6 +25,8 @@ import * as trust from "../src/trust";
 import * as review from "../src/review";
 import * as exchange from "../src/exchange";
 import * as exchangeCli from "../src/exchange-cli";
+import * as memoryCli from "../src/memory-cli";
+import * as reviewCli from "../src/review-cli";
 import * as tools from "../src/tools";
 import * as mcp from "../src/mcp";
 import * as setup from "../src/setup";
@@ -47,6 +49,8 @@ describe("public entry point", () => {
     ["review", review],
     ["exchange", exchange],
     ["exchange-cli", exchangeCli],
+    ["memory-cli", memoryCli],
+    ["review-cli", reviewCli],
     ["resolve-detect", resolveDetect],
     ["injector", injector],
     ["state", state],
