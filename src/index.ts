@@ -10,6 +10,8 @@ export * from "./capture";
 export * from "./notice";
 export * from "./trust";
 export * from "./review";
+export * from "./exchange";
+export * from "./exchange-cli";
 export * from "./resolve-detect";
 export * from "./injector";
 export * from "./state";

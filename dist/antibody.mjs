@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 //#region src/lazy.ts
 /** node:child_process, loaded on first use. */
 const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
@@ -728,6 +728,113 @@ function parseCodexInput(text) {
 	return input;
 }
 //#endregion
+//#region src/redact-patterns.ts
+/** Placeholders written in place of redacted text. */
+const REDACTED = {
+	secret: "<secret>",
+	email: "<email>",
+	requestId: "<request-id>",
+	hex: "<hex>",
+	base64: "<base64>"
+};
+/**
+* Credential and personal-data families, in the order they are applied.
+*
+* Order matters in two places. Header and `key=value` forms run before the bare
+* token shapes, so `Authorization: Bearer x` loses the whole value at once. The
+* generic long-hex and long-base64 runs go last, as a net for whatever the named
+* families did not recognise.
+*/
+const REDACT_PATTERNS = [
+	{
+		name: "authorization-header",
+		pattern: /\b((?:proxy-)?authorization)(["']?\s*[:=]\s*["']?)(?:(?:basic|bearer|token|digest)\s+)?[^\s"',;]+/gi,
+		replacement: `$1$2${REDACTED.secret}`
+	},
+	{
+		name: "api-key-assignment",
+		pattern: /\b((?:x-)?api[_-]?key)(["']?\s*[:=]\s*["']?)[^\s"'&,;]+/gi,
+		replacement: `$1$2${REDACTED.secret}`
+	},
+	{
+		name: "secret-assignment",
+		pattern: /\b((?:access_|refresh_|id_|auth_)?token|password|passwd|client_secret|secret)(["']?\s*=\s*["']?|["']\s*:\s*["']?)[^\s"'&,;]+/gi,
+		replacement: `$1$2${REDACTED.secret}`
+	},
+	{
+		name: "bearer-token",
+		pattern: /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
+		replacement: `$1 ${REDACTED.secret}`,
+		guard: "Bearer [A-Za-z0-9._~+/-]{20,}"
+	},
+	{
+		name: "openai-style-key",
+		pattern: /\bsk-[A-Za-z0-9_-]{16,}/g,
+		replacement: REDACTED.secret,
+		guard: "sk-[A-Za-z0-9]{16,}"
+	},
+	{
+		name: "xai-key",
+		pattern: /\bxai-[A-Za-z0-9_-]{16,}/g,
+		replacement: REDACTED.secret
+	},
+	{
+		name: "google-api-key",
+		pattern: /\bAIza[0-9A-Za-z_-]{30,}/g,
+		replacement: REDACTED.secret
+	},
+	{
+		name: "github-token",
+		pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
+		replacement: REDACTED.secret,
+		guard: "ghp_[A-Za-z0-9]{20,}"
+	},
+	{
+		name: "github-fine-grained-token",
+		pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+		replacement: REDACTED.secret,
+		guard: "github_pat_[A-Za-z0-9_]{20,}"
+	},
+	{
+		name: "aws-access-key",
+		pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}/g,
+		replacement: REDACTED.secret,
+		guard: "AKIA[0-9A-Z]{16}"
+	},
+	{
+		name: "email",
+		pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
+		replacement: REDACTED.email,
+		guard: "[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\\.)*(edu|edu\\.[a-z]{2}|ac\\.[a-z]{2}|gmail\\.com|outlook\\.com|hotmail\\.com|qq\\.com|163\\.com|126\\.com)"
+	},
+	{
+		name: "request-id",
+		pattern: /\b((?:x-)?request[_-]?id)(["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]+/gi,
+		replacement: `$1$2${REDACTED.requestId}`
+	},
+	{
+		name: "request-id-token",
+		pattern: /\breq_[A-Za-z0-9]{16,}/g,
+		replacement: REDACTED.requestId
+	},
+	{
+		name: "long-hex",
+		pattern: /(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])/g,
+		replacement: REDACTED.hex
+	},
+	{
+		name: "long-base64",
+		pattern: /(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*[a-z])(?=[A-Za-z0-9+/_-]*\d)[A-Za-z0-9+/_-]{40,}={0,2}/g,
+		replacement: REDACTED.base64
+	}
+];
+/**
+* Per-user home directories, the personal part of an absolute path. In
+* `share: 'private'` mode paths are kept, but this prefix still becomes `~`, so
+* a user name never reaches the disk in either mode.
+*/
+const HOME_PREFIX = /(?:\b[A-Za-z]:[\\/]Users|(?<![\w.~-])\/Users|(?<![\w.~-])\/home)[\\/][^\\/\s'"`<>|:*?]+/g;
+//#endregion
 //#region src/sha256.ts
 /** The round constants: the first 32 bits of the fractional parts of the cube roots of the first 64 primes. */
 const K = new Uint32Array([
@@ -987,376 +1094,6 @@ function normalize(raw) {
 function signature(category, message) {
 	return sha256Hex(`${category}\u0000${normalize(message)}`).slice(0, 12);
 }
-//#endregion
-//#region src/capture.ts
-/** The capture sources, as named by the `capture` setting. */
-const CAPTURE_SOURCES = [
-	"tool",
-	"command",
-	"llm",
-	"agent"
-];
-const TRANSIENT = /* @__PURE__ */ new Set([
-	"RATE_LIMIT",
-	"SERVER",
-	"TIMEOUT",
-	"TRANSPORT",
-	"EMPTY_RESPONSE"
-]);
-const DEFAULT_CAPTURE_OPTIONS = {
-	capture: CAPTURE_SOURCES,
-	captureExitCodes: true,
-	transientThreshold: 5
-};
-/** Run a getter-like function; a throw yields `undefined`. */
-function attempt(read) {
-	try {
-		return read();
-	} catch {
-		return;
-	}
-}
-/** A string or finite number as text; anything else is ignored. */
-function scalar(value) {
-	if (typeof value === "string") return value === "" ? void 0 : value;
-	if (typeof value === "number" && Number.isFinite(value)) return String(value);
-}
-/**
-* Text for any value: JSON for plain data, `String()` otherwise, and a fixed
-* placeholder when both throw (circular objects, hostile `toString`).
-*/
-function text(value) {
-	if (typeof value === "function") return "[function]";
-	if (typeof value === "object" && value !== null) {
-		const json = attempt(() => JSON.stringify(value));
-		if (typeof json === "string") return json;
-	}
-	return attempt(() => String(value)) ?? "[unprintable value]";
-}
-/**
-* Read a thrown value safely (§6, `agent/error`): an Error gives its message,
-* name and code; a string is the message; an object with a string `message`
-* reads like an Error; anything else is stringified. Never throws - not on
-* circular objects, throwing getters or a Proxy whose every trap throws.
-*
-* @param error - whatever was thrown.
-* @returns the message, plus a name and code when there are any.
-*/
-function safeErrorText(error) {
-	if (typeof error === "string") return { message: error };
-	if (typeof error !== "object" || error === null) return { message: text(error) };
-	const message = attempt(() => error.message);
-	const name = scalar(attempt(() => error.name));
-	const code = scalar(attempt(() => error.code));
-	const extras = {
-		...name === void 0 ? {} : { name },
-		...code === void 0 ? {} : { code }
-	};
-	if (typeof message === "string") return {
-		message,
-		...extras
-	};
-	if (message !== void 0) return {
-		message: text(message),
-		...extras
-	};
-	return {
-		message: text(error),
-		...extras
-	};
-}
-/**
-* A line that names its error: a Node/pnpm code (`ERR_PNPM_…`), an errno
-* (`EPERM`), an exception class (`ModuleNotFoundError`) or a TypeScript error
-* (`error TS2307`). ERR_ codes may carry digits (`ERR_PNPM_FETCH_404`).
-*/
-const CODE = /\b(?:ERR_[A-Z0-9_]+|E[A-Z]{2,}|[A-Z]\w*Error|error TS\d+)\b/g;
-const NOT_A_CODE = /* @__PURE__ */ new Set([
-	"ERR",
-	"ERROR",
-	"ERRORS",
-	"EXIT"
-]);
-const TRACEBACK = "Traceback (most recent call last):";
-/** The first real code in a line, as stored: `error TS2307` → `TS2307`. */
-function codeIn(line) {
-	for (const [found] of line.matchAll(CODE)) {
-		if (NOT_A_CODE.has(found)) continue;
-		return found.startsWith("error ") ? found.slice(6) : found;
-	}
-}
-/** Cut a line to `max` characters, the last one an ellipsis. */
-function cap(line, max = 200) {
-	const chars = Array.from(line);
-	if (chars.length <= max) return line;
-	return `${chars.slice(0, max - 1).join("").trimEnd()}…`;
-}
-/**
-* Pick the one line of a (possibly multi-line) error text that identifies it
-* (docs/discussions.md §2a):
-*
-* 1. a Python traceback gives its last non-empty line, the exception itself;
-* 2. otherwise the first line naming a code (see {@link CODE});
-* 3. otherwise the last non-empty line.
-*
-* The traceback rule runs first because a traceback quotes source lines, and a
-* quoted `raise ValueError(...)` would otherwise win rule 2. ANSI escapes are
-* stripped, lines are trimmed and the result is capped at
-* {@link HEADLINE_MAX_CHARS}.
-*
-* @param raw - the full text.
-* @returns the headline, empty for blank text, and its code if it names one.
-*/
-function extractHeadline(raw) {
-	const lines = raw.replace(ANSI, "").split(/\r?\n|\r/).map((line) => line.trim()).filter((line) => line !== "");
-	const last = lines.at(-1) ?? "";
-	const pick = (line) => {
-		const code = codeIn(line);
-		return {
-			line: cap(line),
-			...code === void 0 ? {} : { code }
-		};
-	};
-	if (raw.includes(TRACEBACK)) return pick(last);
-	return pick(lines.find((line) => codeIn(line) !== void 0) ?? last);
-}
-const EXIT_MARKER = /\[exit code: (\d+)\]/g;
-/**
-* The exit code a tool result reports, from its last `[exit code: N]` marker.
-*
-* @param text - the tool result text.
-* @returns N, or `undefined` when there is no marker.
-*/
-function exitCode(text) {
-	const last = Array.from(text.matchAll(EXIT_MARKER)).at(-1);
-	return last === void 0 ? void 0 : Number(last[1]);
-}
-/**
-* Per-session occurrence counts of transient errors, by signature. T11 holds
-* one per session; the Map is injectable so a test or a caller can see it.
-*/
-var TransientCounter = class {
-	counts;
-	constructor(counts = /* @__PURE__ */ new Map()) {
-		this.counts = counts;
-	}
-	/** Count one more occurrence; returns the new count. */
-	bump(sig) {
-		const next = (this.counts.get(sig) ?? 0) + 1;
-		this.counts.set(sig, next);
-		return next;
-	}
-	/** Occurrences so far, 0 for a signature never seen. */
-	count(sig) {
-		return this.counts.get(sig) ?? 0;
-	}
-};
-/**
-* The `transientThreshold` actually applied: a whole number of at least 1.
-* index.ts reports a setting this changes; this stays the one rule for it.
-*/
-function effectiveTransientThreshold(value) {
-	if (!Number.isFinite(value)) return DEFAULT_CAPTURE_OPTIONS.transientThreshold;
-	return Math.max(1, Math.ceil(value));
-}
-const NO_MESSAGE = "(no message)";
-/** Build a record from a source's category, tag and full text. */
-function build(category, tag, displayCategory, raw, code, prefix = "", headline = extractHeadline(raw)) {
-	const finalCode = code ?? headline.code;
-	const line = headline.line === "" ? NO_MESSAGE : headline.line;
-	const message = prefix !== "" && !line.startsWith(prefix) ? `${prefix}: ${line}` : line;
-	return {
-		category,
-		...finalCode === void 0 ? {} : { code: finalCode },
-		message,
-		raw,
-		title: `[${tag}] ${message}`,
-		displayCategory,
-		signature: signature(category, message)
-	};
-}
-/**
-* The command as it leads a headline: its first non-blank line, without ANSI
-* escapes, cut to {@link COMMAND_MAX_CHARS}; `undefined` when there is none.
-*/
-function commandLine(command) {
-	const first = (command ?? "").replace(ANSI, "").split(/\r?\n|\r/).map((line) => line.trim()).find((line) => line !== "");
-	return first === void 0 ? void 0 : cap(first, 120);
-}
-/** The record for one input, or `undefined` when it is not an error at all. */
-function recordFor(input, options) {
-	switch (input.kind) {
-		case "llm": {
-			const code = input.code.trim().toUpperCase() || "UNKNOWN";
-			return build("llm", "llm", `llm / ${code}`, input.message, code, code);
-		}
-		case "agent": {
-			const { message, name, code } = safeErrorText(input.error);
-			return build("agent", "agent", "agent", name !== void 0 && name !== "Error" && !message.startsWith(name) ? `${name}: ${message}` : message, code);
-		}
-		case "tool": {
-			if (!input.isError) return void 0;
-			const code = input.code?.trim() || void 0;
-			return build("tool", `tool:${input.toolName}`, `tool / ${input.toolName}`, input.message, code);
-		}
-		case "command": {
-			const n = exitCode(input.text);
-			if (n === void 0 || n === 0 || !options.captureExitCodes) return void 0;
-			const body = input.text.replace(EXIT_MARKER, "");
-			const text = body.trim() === "" ? `exit code ${n}` : body;
-			const headline = extractHeadline(text);
-			const command = commandLine(input.command);
-			const line = command !== void 0 && headline.code === void 0 ? { line: cap(`${command} → ${headline.line}`) } : headline;
-			return {
-				...build("command-exit", `command-exit:${input.toolName}`, `command-exit / ${input.toolName}`, text, void 0, "", line),
-				raw: input.text,
-				exitCode: n
-			};
-		}
-	}
-}
-/**
-* Classify one captured error (§6).
-*
-* @param input - one of the four source shapes.
-* @param counter - this session's transient counter; bumped for transient
-*   LLM failures only.
-* @param options - settings; anything missing takes its default.
-* @returns the record and its decision, or `undefined` when nothing is
-*   captured: the source is off in `capture`, a tool result is not an error,
-*   a command exited 0 or reported no exit code, or `captureExitCodes` is off.
-*/
-function classify(input, counter, options = {}) {
-	const o = {
-		...DEFAULT_CAPTURE_OPTIONS,
-		...options
-	};
-	if (!o.capture.includes(input.kind)) return void 0;
-	const record = recordFor(input, o);
-	if (record === void 0) return void 0;
-	const transient = input.kind === "llm" && TRANSIENT.has(record.code);
-	if (!transient) return {
-		decision: "record",
-		record,
-		transient
-	};
-	const count = counter.bump(record.signature);
-	const promoted = count === effectiveTransientThreshold(o.transientThreshold);
-	return {
-		decision: promoted ? "record" : "count-only",
-		record,
-		transient,
-		count,
-		promoted
-	};
-}
-//#endregion
-//#region src/redact-patterns.ts
-/** Placeholders written in place of redacted text. */
-const REDACTED = {
-	secret: "<secret>",
-	email: "<email>",
-	requestId: "<request-id>",
-	hex: "<hex>",
-	base64: "<base64>"
-};
-/**
-* Credential and personal-data families, in the order they are applied.
-*
-* Order matters in two places. Header and `key=value` forms run before the bare
-* token shapes, so `Authorization: Bearer x` loses the whole value at once. The
-* generic long-hex and long-base64 runs go last, as a net for whatever the named
-* families did not recognise.
-*/
-const REDACT_PATTERNS = [
-	{
-		name: "authorization-header",
-		pattern: /\b((?:proxy-)?authorization)(["']?\s*[:=]\s*["']?)(?:(?:basic|bearer|token|digest)\s+)?[^\s"',;]+/gi,
-		replacement: `$1$2${REDACTED.secret}`
-	},
-	{
-		name: "api-key-assignment",
-		pattern: /\b((?:x-)?api[_-]?key)(["']?\s*[:=]\s*["']?)[^\s"'&,;]+/gi,
-		replacement: `$1$2${REDACTED.secret}`
-	},
-	{
-		name: "secret-assignment",
-		pattern: /\b((?:access_|refresh_|id_|auth_)?token|password|passwd|client_secret|secret)(["']?\s*=\s*["']?|["']\s*:\s*["']?)[^\s"'&,;]+/gi,
-		replacement: `$1$2${REDACTED.secret}`
-	},
-	{
-		name: "bearer-token",
-		pattern: /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{8,}/gi,
-		replacement: `$1 ${REDACTED.secret}`,
-		guard: "Bearer [A-Za-z0-9._~+/-]{20,}"
-	},
-	{
-		name: "openai-style-key",
-		pattern: /\bsk-[A-Za-z0-9_-]{16,}/g,
-		replacement: REDACTED.secret,
-		guard: "sk-[A-Za-z0-9]{16,}"
-	},
-	{
-		name: "xai-key",
-		pattern: /\bxai-[A-Za-z0-9_-]{16,}/g,
-		replacement: REDACTED.secret
-	},
-	{
-		name: "google-api-key",
-		pattern: /\bAIza[0-9A-Za-z_-]{30,}/g,
-		replacement: REDACTED.secret
-	},
-	{
-		name: "github-token",
-		pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}/g,
-		replacement: REDACTED.secret,
-		guard: "ghp_[A-Za-z0-9]{20,}"
-	},
-	{
-		name: "github-fine-grained-token",
-		pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
-		replacement: REDACTED.secret,
-		guard: "github_pat_[A-Za-z0-9_]{20,}"
-	},
-	{
-		name: "aws-access-key",
-		pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}/g,
-		replacement: REDACTED.secret,
-		guard: "AKIA[0-9A-Z]{16}"
-	},
-	{
-		name: "email",
-		pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g,
-		replacement: REDACTED.email,
-		guard: "[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\\.)*(edu|edu\\.[a-z]{2}|ac\\.[a-z]{2}|gmail\\.com|outlook\\.com|hotmail\\.com|qq\\.com|163\\.com|126\\.com)"
-	},
-	{
-		name: "request-id",
-		pattern: /\b((?:x-)?request[_-]?id)(["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]+/gi,
-		replacement: `$1$2${REDACTED.requestId}`
-	},
-	{
-		name: "request-id-token",
-		pattern: /\breq_[A-Za-z0-9]{16,}/g,
-		replacement: REDACTED.requestId
-	},
-	{
-		name: "long-hex",
-		pattern: /(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])/g,
-		replacement: REDACTED.hex
-	},
-	{
-		name: "long-base64",
-		pattern: /(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*[a-z])(?=[A-Za-z0-9+/_-]*\d)[A-Za-z0-9+/_-]{40,}={0,2}/g,
-		replacement: REDACTED.base64
-	}
-];
-/**
-* Per-user home directories, the personal part of an absolute path. In
-* `share: 'private'` mode paths are kept, but this prefix still becomes `~`, so
-* a user name never reaches the disk in either mode.
-*/
-const HOME_PREFIX = /(?:\b[A-Za-z]:[\\/]Users|(?<![\w.~-])\/Users|(?<![\w.~-])\/home)[\\/][^\\/\s'"`<>|:*?]+/g;
 /**
 * Remove credentials and personal data from a text.
 *
@@ -1406,6 +1143,28 @@ function redactSample(raw, options = {}) {
 	const redacted = redact(raw, { share });
 	if (share === "private") return redacted;
 	return capSample(redacted, options.maxSampleChars ?? 500);
+}
+//#endregion
+//#region src/review.ts
+/** The machine field that marks an entry as waiting for a person. */
+const REVIEW_KEY = "review";
+/** Its value while the entry waits. */
+const REVIEW_PENDING = "pending";
+/** Whether an entry's fix is waiting for a person to approve it. */
+function pendingReview(entry) {
+	return entry.meta[REVIEW_KEY] === REVIEW_PENDING;
+}
+/**
+* An entry as agents may see it: unchanged, or, while its fix waits for a
+* person, without the fix and open again.
+*/
+function forAgents(entry) {
+	if (!pendingReview(entry)) return entry;
+	return {
+		...entry,
+		fix: "",
+		status: entry.status === "fixed" ? "open" : entry.status
+	};
 }
 //#endregion
 //#region src/store.ts
@@ -2069,6 +1828,412 @@ function systemClock() {
 		now: () => /* @__PURE__ */ new Date(),
 		sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
 		random: Math.random
+	};
+}
+//#endregion
+//#region src/exchange.ts
+/** The exported file's name, in the worktree root. */
+const EXCHANGE_FILE = "ANTIBODIES.md";
+/** What the exported file says about itself, below its title. */
+const EXCHANGE_PREAMBLE = [
+	"Fixes this repository's coding agents found, exported by `antibody export`.",
+	"`antibody import` reads them into a clone's memory, where they wait until a",
+	"person approves them with `antibody allow`.",
+	""
+].join("\n");
+const SIG = "sig";
+/**
+* Whether an entry leaves the machine: it has a fix, the fix is marked
+* working, and it was not imported and left waiting for review.
+*/
+function exportable(entry) {
+	return entry.status === "fixed" && oneLine(entry.fix) !== "" && !pendingReview(entry);
+}
+/** An entry as it is exported: redacted again, without what is local. */
+function forExport(entry) {
+	const clean = (text) => redact(text, { share: "public" });
+	const meta = {};
+	for (const [key, value] of Object.entries(entry.meta)) if (key !== "review") meta[key] = key === SIG ? value : clean(value);
+	return {
+		...entry,
+		title: clean(entry.title),
+		category: clean(entry.category),
+		meta,
+		trigger: clean(entry.trigger),
+		raw: redactSample(entry.raw, { share: "public" }),
+		fix: clean(entry.fix),
+		notes: ""
+	};
+}
+/**
+* The document `antibody export` writes: the exportable entries, in the order
+* they have in the memory, so exporting again changes only what changed.
+*
+* @param entries - the memory's entries.
+*/
+function exportDocument(entries) {
+	const chosen = entries.filter(exportable).map(forExport);
+	if (chosen.length === 0) return {
+		text: "",
+		exported: 0
+	};
+	const blocks = chosen.map((entry) => renderEntry(entry)).join("\n");
+	return {
+		text: `${DOCUMENT_HEADER}\n${EXCHANGE_PREAMBLE}\n${blocks}`,
+		exported: chosen.length
+	};
+}
+//#endregion
+//#region src/exchange-cli.ts
+const EXPORT_USAGE = `usage: antibody export [--out FILE | --print]
+  --out FILE  write FILE instead of ${EXCHANGE_FILE} in the repository root
+  --print     print the document instead of writing a file
+`;
+/** The memory's entries as the document holds them, or the reason it cannot be read. */
+async function readEntries(cwd, io, deps) {
+	let memory;
+	try {
+		memory = memoryDir(cwd, deps.git, io.env);
+	} catch (error) {
+		return { error: error.message };
+	}
+	try {
+		return { entries: (await createStore(filesIn(memory)).read()).blocks.map((b) => b.entry) };
+	} catch (error) {
+		return { error: `could not read ANTIBODIES.md: ${error.message}` };
+	}
+}
+/** A path as a person would type it: relative to `cwd` when it is below it. */
+function shown(cwd, path) {
+	const rel = relative(cwd, path);
+	return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? path : rel;
+}
+/**
+* `antibody export`: write the fixes this fleet found to ANTIBODIES.md in the
+* repository root, redacted again, for a person to look over and commit. It
+* writes nothing when there is nothing to export, and will not overwrite a
+* file that is not an antibody export.
+*
+* @param args - the arguments after `export`.
+* @param io - stdout for the report, stderr for errors, the environment.
+* @param deps - the working directory and git; injected in tests.
+*/
+async function runExport(args, io, deps = {}) {
+	let out;
+	let print = false;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--print") print = true;
+		else if (arg === "--out" && args[i + 1] !== void 0) out = args[++i];
+		else {
+			io.stderr(`antibody: unknown option: ${arg}\n${EXPORT_USAGE}`);
+			return 2;
+		}
+	}
+	if (print && out !== void 0) {
+		io.stderr(`antibody: --print and --out do not go together\n${EXPORT_USAGE}`);
+		return 2;
+	}
+	const cwd = deps.cwd ?? process.cwd();
+	const read = await readEntries(cwd, io, deps);
+	if ("error" in read) {
+		io.stderr(`antibody: ${read.error}\n`);
+		return 1;
+	}
+	const { text, exported } = exportDocument(read.entries);
+	const left = read.entries.length - exported;
+	const say = print ? io.stderr : io.stdout;
+	if (exported === 0) {
+		say("Nothing to export: no entry has a fix that was found in this repository yet.\n");
+		return 0;
+	}
+	if (print) {
+		io.stdout(text);
+		return 0;
+	}
+	const target = resolve(cwd, out ?? resolve(worktreeRoot(cwd, deps.git), "ANTIBODIES.md"));
+	const fs = nodeStoreFs();
+	const existing = await fs.readFile(target);
+	if (existing !== void 0 && existing !== "" && !existing.startsWith("# ANTIBODIES")) {
+		io.stderr(`antibody: ${shown(cwd, target)} exists and is not an antibody export; choose another file with --out\n`);
+		return 1;
+	}
+	const name = shown(cwd, target);
+	if (existing === text) {
+		io.stdout(`${name} is up to date (${exported} ${exported === 1 ? "entry" : "entries"}).\n`);
+		return 0;
+	}
+	await fs.mkdir(dirname(target));
+	await writeFileAtomic(fs, target, text);
+	io.stdout([
+		`Exported ${exported} of ${read.entries.length} entries to ${name}.`,
+		...left > 0 ? [`${left} left out: no fix yet, or a fix still waiting for review.`] : [],
+		"Look it over, then commit it.",
+		""
+	].join("\n"));
+	return 0;
+}
+//#endregion
+//#region src/capture.ts
+/** The capture sources, as named by the `capture` setting. */
+const CAPTURE_SOURCES = [
+	"tool",
+	"command",
+	"llm",
+	"agent"
+];
+const TRANSIENT = /* @__PURE__ */ new Set([
+	"RATE_LIMIT",
+	"SERVER",
+	"TIMEOUT",
+	"TRANSPORT",
+	"EMPTY_RESPONSE"
+]);
+const DEFAULT_CAPTURE_OPTIONS = {
+	capture: CAPTURE_SOURCES,
+	captureExitCodes: true,
+	transientThreshold: 5
+};
+/** Run a getter-like function; a throw yields `undefined`. */
+function attempt(read) {
+	try {
+		return read();
+	} catch {
+		return;
+	}
+}
+/** A string or finite number as text; anything else is ignored. */
+function scalar(value) {
+	if (typeof value === "string") return value === "" ? void 0 : value;
+	if (typeof value === "number" && Number.isFinite(value)) return String(value);
+}
+/**
+* Text for any value: JSON for plain data, `String()` otherwise, and a fixed
+* placeholder when both throw (circular objects, hostile `toString`).
+*/
+function text(value) {
+	if (typeof value === "function") return "[function]";
+	if (typeof value === "object" && value !== null) {
+		const json = attempt(() => JSON.stringify(value));
+		if (typeof json === "string") return json;
+	}
+	return attempt(() => String(value)) ?? "[unprintable value]";
+}
+/**
+* Read a thrown value safely (§6, `agent/error`): an Error gives its message,
+* name and code; a string is the message; an object with a string `message`
+* reads like an Error; anything else is stringified. Never throws - not on
+* circular objects, throwing getters or a Proxy whose every trap throws.
+*
+* @param error - whatever was thrown.
+* @returns the message, plus a name and code when there are any.
+*/
+function safeErrorText(error) {
+	if (typeof error === "string") return { message: error };
+	if (typeof error !== "object" || error === null) return { message: text(error) };
+	const message = attempt(() => error.message);
+	const name = scalar(attempt(() => error.name));
+	const code = scalar(attempt(() => error.code));
+	const extras = {
+		...name === void 0 ? {} : { name },
+		...code === void 0 ? {} : { code }
+	};
+	if (typeof message === "string") return {
+		message,
+		...extras
+	};
+	if (message !== void 0) return {
+		message: text(message),
+		...extras
+	};
+	return {
+		message: text(error),
+		...extras
+	};
+}
+/**
+* A line that names its error: a Node/pnpm code (`ERR_PNPM_…`), an errno
+* (`EPERM`), an exception class (`ModuleNotFoundError`) or a TypeScript error
+* (`error TS2307`). ERR_ codes may carry digits (`ERR_PNPM_FETCH_404`).
+*/
+const CODE = /\b(?:ERR_[A-Z0-9_]+|E[A-Z]{2,}|[A-Z]\w*Error|error TS\d+)\b/g;
+const NOT_A_CODE = /* @__PURE__ */ new Set([
+	"ERR",
+	"ERROR",
+	"ERRORS",
+	"EXIT"
+]);
+const TRACEBACK = "Traceback (most recent call last):";
+/** The first real code in a line, as stored: `error TS2307` → `TS2307`. */
+function codeIn(line) {
+	for (const [found] of line.matchAll(CODE)) {
+		if (NOT_A_CODE.has(found)) continue;
+		return found.startsWith("error ") ? found.slice(6) : found;
+	}
+}
+/** Cut a line to `max` characters, the last one an ellipsis. */
+function cap(line, max = 200) {
+	const chars = Array.from(line);
+	if (chars.length <= max) return line;
+	return `${chars.slice(0, max - 1).join("").trimEnd()}…`;
+}
+/**
+* Pick the one line of a (possibly multi-line) error text that identifies it
+* (docs/discussions.md §2a):
+*
+* 1. a Python traceback gives its last non-empty line, the exception itself;
+* 2. otherwise the first line naming a code (see {@link CODE});
+* 3. otherwise the last non-empty line.
+*
+* The traceback rule runs first because a traceback quotes source lines, and a
+* quoted `raise ValueError(...)` would otherwise win rule 2. ANSI escapes are
+* stripped, lines are trimmed and the result is capped at
+* {@link HEADLINE_MAX_CHARS}.
+*
+* @param raw - the full text.
+* @returns the headline, empty for blank text, and its code if it names one.
+*/
+function extractHeadline(raw) {
+	const lines = raw.replace(ANSI, "").split(/\r?\n|\r/).map((line) => line.trim()).filter((line) => line !== "");
+	const last = lines.at(-1) ?? "";
+	const pick = (line) => {
+		const code = codeIn(line);
+		return {
+			line: cap(line),
+			...code === void 0 ? {} : { code }
+		};
+	};
+	if (raw.includes(TRACEBACK)) return pick(last);
+	return pick(lines.find((line) => codeIn(line) !== void 0) ?? last);
+}
+const EXIT_MARKER = /\[exit code: (\d+)\]/g;
+/**
+* The exit code a tool result reports, from its last `[exit code: N]` marker.
+*
+* @param text - the tool result text.
+* @returns N, or `undefined` when there is no marker.
+*/
+function exitCode(text) {
+	const last = Array.from(text.matchAll(EXIT_MARKER)).at(-1);
+	return last === void 0 ? void 0 : Number(last[1]);
+}
+/**
+* Per-session occurrence counts of transient errors, by signature. T11 holds
+* one per session; the Map is injectable so a test or a caller can see it.
+*/
+var TransientCounter = class {
+	counts;
+	constructor(counts = /* @__PURE__ */ new Map()) {
+		this.counts = counts;
+	}
+	/** Count one more occurrence; returns the new count. */
+	bump(sig) {
+		const next = (this.counts.get(sig) ?? 0) + 1;
+		this.counts.set(sig, next);
+		return next;
+	}
+	/** Occurrences so far, 0 for a signature never seen. */
+	count(sig) {
+		return this.counts.get(sig) ?? 0;
+	}
+};
+/**
+* The `transientThreshold` actually applied: a whole number of at least 1.
+* index.ts reports a setting this changes; this stays the one rule for it.
+*/
+function effectiveTransientThreshold(value) {
+	if (!Number.isFinite(value)) return DEFAULT_CAPTURE_OPTIONS.transientThreshold;
+	return Math.max(1, Math.ceil(value));
+}
+const NO_MESSAGE = "(no message)";
+/** Build a record from a source's category, tag and full text. */
+function build(category, tag, displayCategory, raw, code, prefix = "", headline = extractHeadline(raw)) {
+	const finalCode = code ?? headline.code;
+	const line = headline.line === "" ? NO_MESSAGE : headline.line;
+	const message = prefix !== "" && !line.startsWith(prefix) ? `${prefix}: ${line}` : line;
+	return {
+		category,
+		...finalCode === void 0 ? {} : { code: finalCode },
+		message,
+		raw,
+		title: `[${tag}] ${message}`,
+		displayCategory,
+		signature: signature(category, message)
+	};
+}
+/**
+* The command as it leads a headline: its first non-blank line, without ANSI
+* escapes, cut to {@link COMMAND_MAX_CHARS}; `undefined` when there is none.
+*/
+function commandLine(command) {
+	const first = (command ?? "").replace(ANSI, "").split(/\r?\n|\r/).map((line) => line.trim()).find((line) => line !== "");
+	return first === void 0 ? void 0 : cap(first, 120);
+}
+/** The record for one input, or `undefined` when it is not an error at all. */
+function recordFor(input, options) {
+	switch (input.kind) {
+		case "llm": {
+			const code = input.code.trim().toUpperCase() || "UNKNOWN";
+			return build("llm", "llm", `llm / ${code}`, input.message, code, code);
+		}
+		case "agent": {
+			const { message, name, code } = safeErrorText(input.error);
+			return build("agent", "agent", "agent", name !== void 0 && name !== "Error" && !message.startsWith(name) ? `${name}: ${message}` : message, code);
+		}
+		case "tool": {
+			if (!input.isError) return void 0;
+			const code = input.code?.trim() || void 0;
+			return build("tool", `tool:${input.toolName}`, `tool / ${input.toolName}`, input.message, code);
+		}
+		case "command": {
+			const n = exitCode(input.text);
+			if (n === void 0 || n === 0 || !options.captureExitCodes) return void 0;
+			const body = input.text.replace(EXIT_MARKER, "");
+			const text = body.trim() === "" ? `exit code ${n}` : body;
+			const headline = extractHeadline(text);
+			const command = commandLine(input.command);
+			const line = command !== void 0 && headline.code === void 0 ? { line: cap(`${command} → ${headline.line}`) } : headline;
+			return {
+				...build("command-exit", `command-exit:${input.toolName}`, `command-exit / ${input.toolName}`, text, void 0, "", line),
+				raw: input.text,
+				exitCode: n
+			};
+		}
+	}
+}
+/**
+* Classify one captured error (§6).
+*
+* @param input - one of the four source shapes.
+* @param counter - this session's transient counter; bumped for transient
+*   LLM failures only.
+* @param options - settings; anything missing takes its default.
+* @returns the record and its decision, or `undefined` when nothing is
+*   captured: the source is off in `capture`, a tool result is not an error,
+*   a command exited 0 or reported no exit code, or `captureExitCodes` is off.
+*/
+function classify(input, counter, options = {}) {
+	const o = {
+		...DEFAULT_CAPTURE_OPTIONS,
+		...options
+	};
+	if (!o.capture.includes(input.kind)) return void 0;
+	const record = recordFor(input, o);
+	if (record === void 0) return void 0;
+	const transient = input.kind === "llm" && TRANSIENT.has(record.code);
+	if (!transient) return {
+		decision: "record",
+		record,
+		transient
+	};
+	const count = counter.bump(record.signature);
+	const promoted = count === effectiveTransientThreshold(o.transientThreshold);
+	return {
+		decision: promoted ? "record" : "count-only",
+		record,
+		transient,
+		count,
+		promoted
 	};
 }
 /** How long a claim lasts unless its holder renews or releases it. */
@@ -2828,28 +2993,6 @@ function match(error, index, options = {}) {
 	const sameCode = best(sameCategory.filter((i) => short && code !== void 0 && code !== "" && i.code === code && i.length < 40).map(score), error.proj);
 	if (sameCode !== void 0) return hit(sameCode, "code");
 	return { matched: false };
-}
-//#endregion
-//#region src/review.ts
-/** The machine field that marks an entry as waiting for a person. */
-const REVIEW_KEY = "review";
-/** Its value while the entry waits. */
-const REVIEW_PENDING = "pending";
-/** Whether an entry's fix is waiting for a person to approve it. */
-function pendingReview(entry) {
-	return entry.meta[REVIEW_KEY] === REVIEW_PENDING;
-}
-/**
-* An entry as agents may see it: unchanged, or, while its fix waits for a
-* person, without the fix and open again.
-*/
-function forAgents(entry) {
-	if (!pendingReview(entry)) return entry;
-	return {
-		...entry,
-		fix: "",
-		status: entry.status === "fixed" ? "open" : entry.status
-	};
 }
 /** The directory, inside the memory directory, that holds the session files. */
 const SESSIONS_DIR_NAME = "sessions";
@@ -4943,6 +5086,7 @@ const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook ca
        antibody mcp [harness]      serve the agent tools over MCP on stdio
        antibody setup gemini       add the hooks and MCP server to Gemini CLI
        antibody setup codex        add the hooks to Codex CLI
+       antibody export             write the fleet's fixes to ANTIBODIES.md
        antibody stats              print the memory's ledger for this repository
        antibody watch              the live fleet view; q quits
        antibody --version
@@ -5022,6 +5166,7 @@ async function main(argv, io, deps = {}) {
 	if (command === "hook") return runHook(rest[0] ?? "", io, deps);
 	if (command === "mcp") return runMcp(rest[0] ?? "", io, deps);
 	if (command === "setup") return runSetup(rest, io, deps);
+	if (command === "export") return runExport(rest, io, deps);
 	if (command === "stats") return runStats(rest, io, deps);
 	if (command === "watch") return runWatch(rest, io, deps);
 	if (command === "--version" || command === "-v") {
