@@ -192,9 +192,9 @@ node ~/.local/share/antibody/dist/antibody.mjs watch
 
 It shows what each agent is doing (diagnosing an error it claimed, holding for a
 peer's fix, immune because a fix was just pushed to it, or working), the tokens saved
-and the re-diagnoses avoided, every antibody with its fix and who found it, and the
-events as they happen. It redraws twice a second, in place, on the terminal's
-alternate screen.
+and the re-diagnoses avoided, every antibody with its fix and who found it, how many
+imported entries wait for your review, and the events as they happen. It redraws
+twice a second, in place, on the terminal's alternate screen.
 
 | Key | Does |
 | --- | --- |

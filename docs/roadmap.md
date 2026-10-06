@@ -114,8 +114,9 @@ Each milestone ends with something that can be checked, not just written.
   exchange between two real repositories, including an agent that meets an imported
   error and is told no fix is recorded, then gets the fix once it is approved. The
   built bundle was walked through the same flow.
+- `antibody watch` says how many entries wait for review and marks them in the
+  antibodies pane, and `antibody stats` lists their IDs.
 - **Open:** import on `SessionStart` for a clone that has no memory yet (today it is
-  one command), showing what waits for review in `antibody watch`, and the opt-in
-  relay for cloud agents (design Q5).
+  one command), and the opt-in relay for cloud agents (design Q5).
 - **Open:** integration notes for herdr, vibe-kanban, superset, claude-squad,
   agent-orchestrator and paperclip.
