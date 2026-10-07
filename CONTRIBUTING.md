@@ -38,6 +38,17 @@ and assemble credential-shaped test inputs at run time, as the redaction tests d
 - **Hooks fail open.** Code that will run inside an agent's hook must never block or
   break the agent: on an internal error it says nothing.
 
+## Branches
+
+Name a branch for the change, not for yourself: a `feat/`, `fix/`, `docs/`, `chore/`,
+`ci/`, `perf/` or `test/` prefix, then a short kebab-case subject —
+`feat/relay-server`, `fix/claim-race`.
+
+Pull requests squash-merge into `main`, so a branch's individual commits are not kept
+in history: write the commit subject and body to read well as the squashed result.
+GitHub deletes the head branch when the pull request merges, so a branch is not a
+place to keep work you still need.
+
 ## Pull requests
 
 - One change per pull request, small enough to review in one sitting.
