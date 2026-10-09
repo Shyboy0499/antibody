@@ -17,11 +17,15 @@
 // A shell command that exits non-zero is not an error to Gemini. Its result is
 // `Output: …`, then `Error: …`, `Exit Code: N` and process lines, inside an
 // `<untrusted_context>` wrapper, so run_shell_command results are read for
-// the exit code and stripped down to the command's own output.
+// the exit code and stripped down to the command's own output. A pipeline's
+// status is its last command's, so when no `Exit Code` line is there at all,
+// an output that ends on an error line is inferred as a failure
+// (looksFailed(), src/failure-hints.ts), as Claude Code does for #131.
 //
 // Gemini reads `hookSpecificOutput.additionalContext` from stdout on AfterTool
 // (appended to the tool result), BeforeAgent (appended to the prompt) and
 // SessionStart (put before the first prompt). Parsing never throws.
+import { looksFailed } from "./failure-hints";
 import { withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
@@ -138,6 +142,11 @@ export function parseGeminiInput(text: string): HookInput | undefined {
     const shell = shellResult(content);
     input.output = shell.output;
     if (shell.exitCode !== undefined) input.exitCode = shell.exitCode;
+    else if (
+      input.command !== undefined &&
+      looksFailed(input.command, shell.output)
+    )
+      input.inferredFailure = true;
     return input;
   }
   input.output = content;

@@ -131,6 +131,35 @@ describe("parseGeminiInput: tool results", () => {
     expect(afterShell("Output: (empty)")?.output).toBe("");
   });
 
+  it("infers a failure for a shell result that carries no exit code", () => {
+    const input = afterShell(
+      [
+        "<untrusted_context>",
+        "Output: npm ERR! code ELIFECYCLE",
+        "Process Group PGID: 7",
+        "</untrusted_context>",
+      ].join("\n"),
+    );
+    expect(input?.exitCode).toBeUndefined();
+    expect(input?.inferredFailure).toBe(true);
+    expect(toCapture(input as HookInput)).toMatchObject({
+      kind: "command",
+      command: "pnpm test",
+      text: "npm ERR! code ELIFECYCLE\n[exit code: 1]",
+    });
+  });
+
+  it("never infers a failure an Exit Code line already settles", () => {
+    const reported = afterShell(shellFailure);
+    expect(reported?.inferredFailure).toBeUndefined();
+    const succeeded = afterShell(
+      "<untrusted_context>\nOutput: npm ERR! code ELIFECYCLE\nExit Code: 0\n</untrusted_context>",
+    );
+    expect(succeeded?.exitCode).toBe(0);
+    expect(succeeded?.inferredFailure).toBeUndefined();
+    expect(toCapture(succeeded as HookInput)).toBeUndefined();
+  });
+
   it("reads a tool's reported error as a failure", () => {
     const input = parse({
       hook_event_name: "AfterTool",

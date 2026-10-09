@@ -9,6 +9,7 @@ import {
 import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
 import { callOutcome } from "../src/resolve-detect";
+import { TAP_FAILED } from "./fixtures/test-output";
 
 const common = {
   session_id: "s-1",
@@ -289,6 +290,220 @@ describe("toToolCall", () => {
       isError: true,
       text: "",
     });
+  });
+});
+
+describe("issue #131: a call whose pipeline reported success", () => {
+  const bash = (fields: Record<string, unknown>) =>
+    parseHookInput(
+      payload({
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        ...fields,
+      }),
+    ) as HookInput;
+
+  it("reads Exit code N out of a PostToolUse result text", () => {
+    const input = bash({
+      tool_input: { command: "make" },
+      tool_response: {
+        stdout: "Exit code 2\nmake: *** [all] Error 2",
+        stderr: "",
+      },
+    });
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "make",
+      text: "make: *** [all] Error 2\n[exit code: 2]",
+    });
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:make",
+    });
+  });
+
+  it("fingerprints the result text and the error wording the same", () => {
+    const signature = (input: HookInput) =>
+      classify(toCapture(input)!, new TransientCounter())?.record.signature;
+    const fromResult = bash({
+      tool_input: { command: "npm test" },
+      tool_response: { stdout: "Exit code 1\nnpm ERR! code ELIFECYCLE" },
+    });
+    const fromError = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Exit code 1\nnpm ERR! code ELIFECYCLE",
+      }),
+    ) as HookInput;
+    expect(signature(fromResult)).toBe(signature(fromError));
+  });
+
+  it("reads every wording Claude Code puts the code in", () => {
+    // The classifier inside Claude Code's own Bash tool words a non-zero exit
+    // this way; its hooks reference shows the second one. Both lead the text,
+    // as `Exit code N` does.
+    const classifier = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Command failed with exit code 2",
+      }),
+    ) as HookInput;
+    expect(toCapture(classifier)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test",
+      text: "Command failed with exit code 2\n[exit code: 2]",
+    });
+    expect(
+      classify(toCapture(classifier)!, new TransientCounter())?.record.message,
+    ).toBe("npm test → Command failed with exit code 2");
+
+    const documented = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error:
+          "Command exited with non-zero status code 1\nnpm ERR! code ELIFECYCLE",
+      }),
+    ) as HookInput;
+    expect(toCapture(documented)).toMatchObject({
+      command: "npm test",
+      text: "npm ERR! code ELIFECYCLE\n[exit code: 1]",
+    });
+  });
+
+  it("records a reported 1 only when it is not a meaning", () => {
+    // Claude Code's own table: `grep` reports "no matches" as 1, and only 2 or
+    // more is an error.
+    const noMatches = bash({
+      tool_input: { command: "grep -rn TODO src" },
+      tool_response: { stdout: "", stderr: "", exit_code: 1 },
+    });
+    expect(noMatches.exitCode).toBe(1);
+    expect(toCapture(noMatches)).toBeUndefined();
+    const broken = bash({
+      tool_input: { command: "grep -rn TODO src" },
+      tool_response: {
+        stdout: "",
+        stderr: "grep: src: No such file or directory",
+        exit_code: 2,
+      },
+    });
+    expect(toCapture(broken)).toMatchObject({
+      command: "grep -rn TODO src",
+      text: "grep: src: No such file or directory\n[exit code: 2]",
+    });
+    // The last segment decides, and it is the test run here.
+    const piped = bash({
+      tool_input: { command: "grep -rn TODO src | npm test" },
+      tool_response: { stdout: "Tests 1 failed", stderr: "", exit_code: 1 },
+    });
+    expect(toCapture(piped)).toMatchObject({
+      command: "grep -rn TODO src | npm test",
+      text: "Tests 1 failed\n[exit code: 1]",
+    });
+  });
+
+  it("leaves an interrupted call uncaptured", () => {
+    const input = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Exit code 130\nnpm ERR! code ELIFECYCLE",
+        is_interrupt: true,
+      }),
+    ) as HookInput;
+    expect(input.isInterrupt).toBe(true);
+    // Nothing to learn: the user stopped it.
+    expect(toCapture(input)).toBeUndefined();
+    // It is still not a success, so it cannot resolve another entry's watch.
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test",
+    });
+  });
+
+  it("infers a failure when the pipeline's status is its last command's", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: { stdout: "npm ERR! code ELIFECYCLE", stderr: "" },
+    });
+    expect(input.inferredFailure).toBe(true);
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test 2>&1 | tail -15",
+      text: "npm ERR! code ELIFECYCLE\n[exit code: 1]",
+    });
+    // The failed call stops taking the success path, so it can no longer
+    // resolve another entry's watch under the same command line.
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test 2>&1 | tail -15",
+    });
+  });
+
+  it("infers a failure from a real piped run that ends on its summary", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: {
+        stdout: TAP_FAILED,
+        stderr: "",
+        interrupted: false,
+        isImage: false,
+        noOutputExpected: false,
+      },
+    });
+    expect(input.inferredFailure).toBe(true);
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test 2>&1 | tail -15",
+      text: `${TAP_FAILED}\n[exit code: 1]`,
+    });
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test 2>&1 | tail -15",
+    });
+  });
+
+  it("infers nothing for a command that only displays text", () => {
+    const input = bash({
+      tool_input: { command: "cat package.json | grep -i error" },
+      tool_response: { stdout: `"error": "Cannot find module x"` },
+    });
+    expect(input.inferredFailure).toBeUndefined();
+    expect(toCapture(input)).toBeUndefined();
+  });
+
+  it("never second-guesses an exit code the result reports", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: { stdout: "npm ERR! code ELIFECYCLE", exit_code: 0 },
+    });
+    expect(input.exitCode).toBe(0);
+    expect(input.inferredFailure).toBeUndefined();
+    expect(toCapture(input)).toBeUndefined();
+  });
+
+  it("infers nothing for a non-shell tool, or a shell call with no command", () => {
+    const read = bash({
+      tool_name: "Read",
+      tool_input: { file_path: "a.ts" },
+      tool_output: "Error: Cannot find module x",
+    });
+    expect(read.inferredFailure).toBeUndefined();
+    expect(toCapture(read)).toBeUndefined();
+    const bare = bash({ tool_output: "Error: Cannot find module x" });
+    expect(bare.inferredFailure).toBeUndefined();
+    expect(toCapture(bare)).toBeUndefined();
   });
 });
 

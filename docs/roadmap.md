@@ -111,6 +111,10 @@ Each milestone ends with something that can be checked, not just written.
   agents run through the committed bundle end to end, and the Claude Code driver
   against a stand-in for `claude` that runs the hooks it was given. It lives in this
   repository; a separate public benchmark repo is still open.
+- **The scripted runs are unpiped (recorded).** Their agents run `npm test` on its own, so
+  the four traps reach a hook as failures and the piped shape real agents use does not
+  appear in the numbers (#131). Rerunning them piped is what measures the fix; the
+  scripted agent has no switch for it yet.
 - **Protocol fixes the benchmark found (done).** Scripted agents in the harness
   showed antibody's protocol holding its own fixes back:
   - a hook that claimed an error could read the memory just before a peer's fix

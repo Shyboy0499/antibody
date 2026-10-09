@@ -206,10 +206,39 @@ never break or block an agent.
 
 | Harness | Capture | Inject | Notes |
 | --- | --- | --- | --- |
-| Claude Code | `PostToolUseFailure` (receives `error`), and `PostToolUse` for Bash calls that exit non-zero | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
-| Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line; the MCP server is added with `codex mcp add`. |
-| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
+| Claude Code | `PostToolUse` and `PostToolUseFailure`: a non-zero `exitCode` on the result when one is reported, Claude Code's `Exit code N` at the start of the result or the error, else the shared output rule | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
+| Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line by the shared rule; the MCP server is added with `codex mcp add`. |
+| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error, and the shared output rule when it carries none | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
+
+Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
+shell result that names no exit code at all is a failure when it carries a test runner's
+verdict, or when its last non-empty line reads like an error (`npm ERR!`, `error:`/`fatal:`,
+`EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …), and the command is not
+one that only displays text. The runner's verdict is read as a block, not as the last line:
+a failing `node --test` ends its TAP output with `# fail 7` and then `# duration_ms …`, and
+its spec reporter with `ℹ fail 7` and a list of `✖` files, so `# fail 1`, `not ok`,
+`ℹ fail 1` and `✖` are read wherever they appear in the output - `# fail 0` and `ℹ fail 0`
+are how a passing run ends. Every segment of a chained command has to display for that
+exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
+can fail, `cat build.log | grep -i error` cannot. It is
+the last resort, checked only after a reported code and after the exit code Claude Code
+leads a failure's text with - `Exit code N`, the `Command failed with exit code N` its own
+Bash classifier words, or the `Command exited with non-zero status code N` of its hooks
+reference; an inferred failure is recorded with `[exit code: 1]`. It exists because a
+pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to
+every harness and its output is the only evidence (#131). **Known residual false
+positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-looking line, a
+`... | tail -5` can cut the verdict away, and a harness could report 0 for a pipeline that
+really failed. All are accepted in exchange for never rewriting the agent's command.
+
+Claude Code itself decides a Bash call's outcome from the last segment of the pipeline, and
+reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
+and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
+there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
+a call the harness marks `is_interrupt` is not recorded at all. What it cannot mirror is
+the pipeline's status, because a call whose last segment succeeded reports nothing: that
+gap is what the output rule above exists to close.
 
 ### 5.1 MCP tools
 

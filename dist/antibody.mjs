@@ -450,6 +450,113 @@ function agentName(harness, worktree, env = process.env) {
 	return clip(chosen !== "" ? chosen : `${harness}@${basename(worktree) || worktree}`, 64);
 }
 //#endregion
+//#region src/failure-hints.ts
+const FAILURE_LINES = [
+	/^(?:error|fatal)(?:\[[\w-]+\])?:/i,
+	/^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/,
+	/^Environment variable not found:/,
+	/\bcommand not found\b/,
+	/\bEADDRINUSE\b/,
+	/\bCannot find module\b/,
+	/: No such file or directory\b/,
+	/: Permission denied\b/,
+	/^npm ERR!/,
+	/\bERR_PNPM_\w+/,
+	/\bELIFECYCLE\b/,
+	/^(?:FAIL|FAILED)\b/,
+	/\b\d+ (?:failed|failing)\b/,
+	/^make(?:\[\d+\])?: \*\*\*/
+];
+const RUNNER_FAILURE = /^(?:# fail [1-9]\d*|not ok\b|ℹ fail [1-9]\d*|✖ )/m;
+const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
+	"cat",
+	"less",
+	"more",
+	"head",
+	"tail",
+	"grep",
+	"egrep",
+	"rg",
+	"ag",
+	"sed",
+	"awk",
+	"jq",
+	"find",
+	"ls",
+	"tree",
+	"echo",
+	"printf",
+	"wc",
+	"diff"
+]);
+const DISPLAY_GIT = /* @__PURE__ */ new Set([
+	"log",
+	"show",
+	"diff",
+	"grep",
+	"blame"
+]);
+const BENIGN_EXITS = /* @__PURE__ */ new Set([
+	"grep",
+	"rg",
+	"egrep",
+	"fgrep",
+	"find",
+	"diff",
+	"test",
+	"["
+]);
+const BENIGN_GIT = /* @__PURE__ */ new Set(["diff", "grep"]);
+const CHAIN = /\s*(?:&&|\|\||;|\||&(?!\d))\s*/;
+/** A command line as its non-empty segments, in order. */
+function segmentsOf(command) {
+	return (command ?? "").split(CHAIN).map((segment) => segment.trim()).filter((segment) => segment !== "");
+}
+/** Whether one segment of a command line only shows files or text. */
+function displayOnly(segment) {
+	const words = segment.trim().split(/\s+/);
+	const first = words[0] ?? "";
+	if (DISPLAY_COMMANDS.has(first)) return true;
+	return first === "git" && DISPLAY_GIT.has(words[1] ?? "");
+}
+/**
+* Whether an exit of 1 is a meaning rather than a failure for a command.
+*
+* Claude Code reads the last segment of the pipeline for this - `npm test |
+* grep -c ok` is a `grep`, and its 1 means "no matches", not a failed test -
+* so a code it reports is only read as a failure when the last segment does
+* not give it a meaning. Nothing is inferred from this: a pipeline that
+* reports no code at all is still judged by its output.
+*
+* @param command - the command line, when known.
+*/
+function benignExit(command) {
+	const words = (segmentsOf(command).at(-1) ?? "").split(/\s+/);
+	const first = words[0] ?? "";
+	if (first === "git") return BENIGN_GIT.has(words[1] ?? "");
+	return BENIGN_EXITS.has(first);
+}
+/**
+* Whether a shell command's output reads like a failure, for a harness that
+* does not report the exit code: it carries a test runner's verdict, or its
+* last non-empty line names an error, and the command is not one that only
+* displays text.
+*
+* Every segment of a chained command has to display text for that exemption,
+* since what the chain does is only as harmless as its parts: `tail -5
+* build.log && node --test` can fail, `cat build.log | grep -i error` cannot.
+*
+* @param command - the command line, when known.
+* @param output - everything the command printed.
+*/
+function looksFailed(command, output) {
+	const segments = segmentsOf(command);
+	if (segments.length > 0 && segments.every(displayOnly)) return false;
+	if (RUNNER_FAILURE.test(output)) return true;
+	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
+	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
+}
+//#endregion
 //#region src/hook-input.ts
 /** The hook events antibody handles. */
 const HOOK_EVENTS = [
@@ -472,30 +579,49 @@ function withTranscript(input, payload) {
 	if (typeof path === "string" && path.trim() !== "") input.transcriptPath = path;
 	return input;
 }
-const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
+const EXIT_LINE = /^(?:Exit code |Command failed with exit code |Command exited with non-zero status code )(\d+)[^\S\n]*\n?/;
 const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
-/** The exit code and output of a failed shell command, when the call is one. */
+/**
+* The exit code and output of a failed shell command, when the call is one.
+*
+* A code the harness reports is believed as it stands - a reported zero is a
+* success, never second-guessed. Without one, Claude Code's `Exit code N` is
+* read from wherever the harness put the text, and only then is an inferred
+* failure accepted.
+*/
 function commandFailure(input) {
-	if (input.event === "PostToolUseFailure") {
-		const match = EXIT_LINE.exec(input.error ?? "");
-		if (match === null) return void 0;
+	const failed = input.event === "PostToolUseFailure";
+	if (!failed && input.event !== "PostToolUse") return void 0;
+	if (input.exitCode !== void 0) {
+		if (input.exitCode === 0) return void 0;
+		if (input.exitCode === 1 && benignExit(input.command)) return void 0;
 		return {
-			code: Number(match[1]),
-			body: (input.error ?? "").slice(match[0].length)
+			code: input.exitCode,
+			body: input.output ?? ""
 		};
 	}
-	if (input.event === "PostToolUse" && input.exitCode !== void 0 && input.exitCode !== 0) return {
-		code: input.exitCode,
+	const text = failed ? input.error ?? "" : input.output ?? "";
+	const match = EXIT_LINE.exec(text);
+	if (match !== null) {
+		const rest = text.slice(match[0].length);
+		return {
+			code: Number(match[1]),
+			body: rest.trim() === "" ? text : rest
+		};
+	}
+	if (input.event === "PostToolUse" && input.inferredFailure === true) return {
+		code: 1,
 		body: input.output ?? ""
 	};
 }
 /**
-* The capture input for a failed call, or undefined when the call succeeded or
-* the event is not a tool result.
+* The capture input for a failed call, or undefined when the call succeeded,
+* was interrupted, or the event is not a tool result.
 *
 * @param input - a parsed hook call.
 */
 function toCapture(input) {
+	if (input.isInterrupt === true) return void 0;
 	const toolName = input.toolName ?? "unknown";
 	const failed = commandFailure(input);
 	if (failed !== void 0) {
@@ -604,6 +730,8 @@ function parseHookInput(text) {
 	if (exitCode !== void 0) input.exitCode = exitCode;
 	const error = str$2(value.error);
 	if (error !== void 0) input.error = error;
+	if (value.is_interrupt === true) input.isInterrupt = true;
+	if (event === "PostToolUse" && toolName === "Bash" && input.command !== void 0 && input.exitCode === void 0 && looksFailed(input.command, input.output ?? "")) input.inferredFailure = true;
 	return input;
 }
 /** Claude Code caps each additionalContext at this many characters. */
@@ -654,63 +782,6 @@ function responseText(value) {
 		if (Array.isArray(value.content)) return responseText(value.content);
 	}
 	return value === void 0 || value === null ? "" : JSON.stringify(value);
-}
-const FAILURE_LINES = [
-	/^(?:error|fatal)(?:\[[\w-]+\])?:/i,
-	/^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/,
-	/\bcommand not found\b/,
-	/: No such file or directory\b/,
-	/: Permission denied\b/,
-	/^npm ERR!/,
-	/\bERR_PNPM_\w+/,
-	/\bELIFECYCLE\b/,
-	/^(?:FAIL|FAILED)\b/,
-	/\b\d+ (?:failed|failing)\b/,
-	/^make(?:\[\d+\])?: \*\*\*/
-];
-const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
-	"cat",
-	"less",
-	"more",
-	"head",
-	"tail",
-	"grep",
-	"egrep",
-	"rg",
-	"ag",
-	"sed",
-	"awk",
-	"jq",
-	"find",
-	"ls",
-	"tree",
-	"echo",
-	"printf",
-	"wc",
-	"diff"
-]);
-const DISPLAY_GIT = /* @__PURE__ */ new Set([
-	"log",
-	"show",
-	"diff",
-	"grep",
-	"blame"
-]);
-/**
-* Whether a shell command's output reads like a failure, for a harness that
-* does not report the exit code: its last non-empty line names an error, and
-* the command is not one that only displays text.
-*
-* @param command - the command line, when known.
-* @param output - everything the command printed.
-*/
-function looksFailed(command, output) {
-	const words = (command ?? "").trim().split(/\s+/);
-	const first = words[0] ?? "";
-	if (DISPLAY_COMMANDS.has(first)) return false;
-	if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
-	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
-	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
 }
 /**
 * Parse a Codex CLI hook's stdin.
@@ -4211,6 +4282,7 @@ function parseGeminiInput(text) {
 		const shell = shellResult(content);
 		input.output = shell.output;
 		if (shell.exitCode !== void 0) input.exitCode = shell.exitCode;
+		else if (input.command !== void 0 && looksFailed(input.command, shell.output)) input.inferredFailure = true;
 		return input;
 	}
 	input.output = content;

@@ -4,10 +4,15 @@
 // gemini.ts) and writes its own response; toCapture() and toToolCall() turn a
 // HookInput into the capture input and tool call the fleet loop takes.
 //
-// A failed shell command arrives either as a PostToolUseFailure whose error
-// starts with Claude Code's `Exit code N`, or as a PostToolUse with an
-// `exitCode`. Both become the `[exit code: N]` marker the ported capture code
-// reads, so headline extraction and keying by command line work unchanged.
+// A failed shell command arrives in one of three shapes, read in this order: a
+// PostToolUse carrying a reported non-zero `exitCode`; a result or error text
+// that starts with Claude Code's `Exit code N` - which is how a real Bash
+// result reports a failure, on a PostToolUse as well as on a
+// PostToolUseFailure; or a PostToolUse an adapter inferred a failure for
+// (src/failure-hints.ts) when the harness reported nothing at all. All three
+// become the `[exit code: N]` marker the ported capture code reads, so headline
+// extraction and keying by command line work unchanged.
+import { INFERRED_EXIT_CODE, benignExit } from "./failure-hints";
 import type { CaptureInput } from "./capture";
 import type { ToolCall } from "./resolve-detect";
 
@@ -41,8 +46,20 @@ export interface HookInput {
   output?: string;
   /** PostToolUse: an exit code the result reports, when it has one. */
   exitCode?: number;
+  /**
+   * PostToolUse: the harness reported no exit code, but the adapter read the
+   * output as a failure. An inferred failure never overrides a reported code,
+   * and is only ever read after one.
+   */
+  inferredFailure?: boolean;
   /** PostToolUseFailure: the error text. */
   error?: string;
+  /**
+   * PostToolUseFailure: the call was interrupted - the user stopped it, or the
+   * session did - rather than failing on its own, so there is nothing to learn
+   * from it.
+   */
+  isInterrupt?: boolean;
 }
 
 /**
@@ -63,41 +80,62 @@ export function withTranscript(
   return input;
 }
 
-// Claude Code's own wording for a failed shell command.
-const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
+// The wordings a failed shell command's exit code arrives in, each leading the
+// text. Claude Code throws `Exit code N` for a Bash call that fails; the
+// classifier inside its own Bash tool (read off the 2.1.282 bundle) words the
+// same failure `Command failed with exit code N`, and its hooks reference
+// shows `Command exited with non-zero status code N` as the `error` example.
+const EXIT_LINE =
+  /^(?:Exit code |Command failed with exit code |Command exited with non-zero status code )(\d+)[^\S\n]*\n?/;
 
 // Text in the shape the ported capture code reads: the output, then the marker.
 const withMarker = (body: string, code: number) =>
   `${body.trimEnd()}\n[exit code: ${code}]`;
 
-/** The exit code and output of a failed shell command, when the call is one. */
+/**
+ * The exit code and output of a failed shell command, when the call is one.
+ *
+ * A code the harness reports is believed as it stands - a reported zero is a
+ * success, never second-guessed. Without one, Claude Code's `Exit code N` is
+ * read from wherever the harness put the text, and only then is an inferred
+ * failure accepted.
+ */
 function commandFailure(
   input: HookInput,
 ): { code: number; body: string } | undefined {
-  if (input.event === "PostToolUseFailure") {
-    const match = EXIT_LINE.exec(input.error ?? "");
-    if (match === null) return undefined;
+  const failed = input.event === "PostToolUseFailure";
+  if (!failed && input.event !== "PostToolUse") return undefined;
+  if (input.exitCode !== undefined) {
+    if (input.exitCode === 0) return undefined;
+    // The harness says what the code means for a `grep` and the like: 1 is
+    // "no matches", not a failure.
+    if (input.exitCode === 1 && benignExit(input.command)) return undefined;
+    return { code: input.exitCode, body: input.output ?? "" };
+  }
+  const text = failed ? (input.error ?? "") : (input.output ?? "");
+  const match = EXIT_LINE.exec(text);
+  if (match !== null) {
+    const rest = text.slice(match[0].length);
+    // A one-line wording carries no output of its own: keep it as the
+    // evidence rather than leaving the record without a headline.
     return {
       code: Number(match[1]),
-      body: (input.error ?? "").slice(match[0].length),
+      body: rest.trim() === "" ? text : rest,
     };
   }
-  if (
-    input.event === "PostToolUse" &&
-    input.exitCode !== undefined &&
-    input.exitCode !== 0
-  )
-    return { code: input.exitCode, body: input.output ?? "" };
+  if (input.event === "PostToolUse" && input.inferredFailure === true)
+    return { code: INFERRED_EXIT_CODE, body: input.output ?? "" };
   return undefined;
 }
 
 /**
- * The capture input for a failed call, or undefined when the call succeeded or
- * the event is not a tool result.
+ * The capture input for a failed call, or undefined when the call succeeded,
+ * was interrupted, or the event is not a tool result.
  *
  * @param input - a parsed hook call.
  */
 export function toCapture(input: HookInput): CaptureInput | undefined {
+  if (input.isInterrupt === true) return undefined;
   const toolName = input.toolName ?? "unknown";
   const failed = commandFailure(input);
   if (failed !== undefined) {
