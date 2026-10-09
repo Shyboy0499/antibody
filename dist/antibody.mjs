@@ -663,6 +663,53 @@ function toToolCall(input) {
 	}
 	return call;
 }
+/** The prefix the rewrite puts in front of a piped command. */
+const PIPEFAIL_PREFIX = "set -o pipefail; ";
+/**
+* The command with the pipefail prefix, or undefined when it needs none: not
+* a pipeline, already set, or the rewrite is switched off.
+*
+* @param command - the Bash command the agent wrote.
+* @param env - the environment; ANTIBODY_PIPEFAIL=0 switches the rewrite off.
+*/
+function pipefailCommand(command, env = process.env) {
+	if (env["ANTIBODY_PIPEFAIL"] === "0") return void 0;
+	if (!/(^|[^|])\|([^|]|$)/.test(command)) return void 0;
+	if (/\bpipefail\b/.test(command)) return void 0;
+	return `${PIPEFAIL_PREFIX}${command}`;
+}
+/**
+* The stdout for a PreToolUse hook call: the rewritten Bash input, or nothing
+* when the call is left as it is. Never throws; a payload it cannot read gets
+* nothing, so the command runs unchanged.
+*
+* @param text - the JSON Claude Code wrote on stdin.
+* @param env - the environment, passed to pipefailCommand().
+*/
+function pipefailResponse(text, env = process.env) {
+	let value;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return "";
+	}
+	if (typeof value !== "object" || value === null) return "";
+	const event = value;
+	if (event.hook_event_name !== "PreToolUse" || event.tool_name !== "Bash") return "";
+	const input = event.tool_input;
+	if (typeof input !== "object" || input === null) return "";
+	const command = input.command;
+	if (typeof command !== "string") return "";
+	const rewritten = pipefailCommand(command, env);
+	if (rewritten === void 0) return "";
+	return JSON.stringify({ hookSpecificOutput: {
+		hookEventName: "PreToolUse",
+		updatedInput: {
+			...input,
+			command: rewritten
+		}
+	} });
+}
 //#endregion
 //#region src/claude-code.ts
 /** The harness name, as agent names and events use it. */
@@ -721,7 +768,7 @@ function parseHookInput(text) {
 	if (toolName !== void 0) input.toolName = toolName;
 	if (isRecord$5(value.tool_input)) {
 		const command = str$2(value.tool_input.command);
-		if (command !== void 0 && command.trim() !== "") input.command = command;
+		if (command !== void 0 && command.trim() !== "") input.command = command.startsWith("set -o pipefail; ") ? command.slice(17) : command;
 	}
 	const result = value.tool_output ?? value.tool_response;
 	const output = outputText(result);
@@ -6424,6 +6471,10 @@ const TIMEOUT = Symbol("timeout");
 */
 async function runHook(harness, io, deps = {}) {
 	const debug = io.env.ANTIBODY_DEBUG === "1";
+	if (harness === "claude-code-pretool") {
+		io.stdout(pipefailResponse(await io.readStdin(), io.env));
+		return 0;
+	}
 	let timer;
 	const work = async () => {
 		const adapter = Object.hasOwn(HOOK_ADAPTERS, harness) ? HOOK_ADAPTERS[harness] : void 0;
@@ -6465,6 +6516,7 @@ async function runHook(harness, io, deps = {}) {
 	return 0;
 }
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody hook claude-code-pretool   rewrite a piped Bash command (#131)
        antibody hook gemini        handle one Gemini CLI hook call
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio

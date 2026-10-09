@@ -230,15 +230,23 @@ pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a s
 every harness and its output is the only evidence (#131). **Known residual false
 positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-looking line, a
 `... | tail -5` can cut the verdict away, and a harness could report 0 for a pipeline that
-really failed. All are accepted in exchange for never rewriting the agent's command.
+really failed. The rewrite below removes the silent case, at the cost of a behaviour change.
 
 Claude Code itself decides a Bash call's outcome from the last segment of the pipeline, and
 reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
 and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
 there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
 a call the harness marks `is_interrupt` is not recorded at all. What it cannot mirror is
-the pipeline's status, because a call whose last segment succeeded reports nothing: that
-gap is what the output rule above exists to close.
+the pipeline's status, because a call whose last segment succeeded reports nothing: the
+output rule above covers the failures that print something. The rest is closed by a
+PreToolUse hook (`antibody hook claude-code-pretool`, src/pipefail.ts) that prefixes a
+piped Bash command with `set -o pipefail;`, so the shell reports the failing stage's
+status, and Claude Code's own `Exit code N` path then records it. The prefix changes what
+the agent runs: a pipeline now fails when any stage fails, so `grep pattern file | head`
+with no match reports a failure, and `cmd | head` can report 141 when `head` closes early.
+Set `ANTIBODY_PIPEFAIL=0` to turn it off. Only Claude Code, through the plugin's hooks,
+has the rewrite; Gemini CLI and Codex CLI do not yet. Captured commands drop the prefix,
+so one command keeps one signature.
 
 ### 5.1 MCP tools
 

@@ -154,6 +154,7 @@ describe("the Claude Code driver", () => {
       // The plugin's hooks, pointing at the bundle under test.
       const { hooks } = JSON.parse(after("--settings") as string);
       expect(Object.keys(hooks)).toEqual([
+        "PreToolUse",
         "SessionStart",
         "UserPromptSubmit",
         "PostToolUse",

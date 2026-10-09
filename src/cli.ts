@@ -31,6 +31,7 @@ import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
+import { PRE_TOOL_HARNESS, pipefailResponse } from "./pipefail";
 import { autoImportText, importOnFirstSession } from "./auto-import";
 import { runRelay } from "./relay-cli";
 import { startRelaySync } from "./relay-client";
@@ -142,6 +143,11 @@ export async function runHook(
   deps: HookDeps = {},
 ): Promise<number> {
   const debug = io.env.ANTIBODY_DEBUG === "1";
+  // The PreToolUse rewrite needs no memory or fleet (src/pipefail.ts).
+  if (harness === PRE_TOOL_HARNESS) {
+    io.stdout(pipefailResponse(await io.readStdin(), io.env));
+    return 0;
+  }
   let timer: NodeJS.Timeout | undefined;
   const work = async (): Promise<string> => {
     const adapter = Object.hasOwn(HOOK_ADAPTERS, harness)
@@ -210,6 +216,7 @@ export async function runHook(
 }
 
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
+       antibody hook claude-code-pretool   rewrite a piped Bash command (#131)
        antibody hook gemini        handle one Gemini CLI hook call
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
