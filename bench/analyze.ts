@@ -132,13 +132,20 @@ const PROVIDER_STOP =
   /blocking_limit|rapid_refill_breaker|prompt_too_long|model_error|api_error|turn_setup_failed/;
 
 /**
+ * The left-out reason a provider usage limit gets. It is also what stops a
+ * schedule: a limit that has started will not clear by itself, so the runner
+ * stops rather than burn the rest of the runs (bench/run.ts).
+ */
+export const USAGE_LIMIT_REASON = "sessions hit a usage limit";
+
+/**
  * How a run with failed sessions reads in the table.
  *
  * @param errors - each failed agent's error, as the runner recorded it.
  */
 export function leftOutReason(errors: readonly string[]): string {
   if (errors.some((error) => PROVIDER_STOP.test(error)))
-    return "sessions hit a usage limit";
+    return USAGE_LIMIT_REASON;
   return "agents were stopped before they finished";
 }
 

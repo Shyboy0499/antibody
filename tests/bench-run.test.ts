@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fakeDriver } from "../bench/drivers";
 import type { Driver } from "../bench/drivers";
-import { main, parseArgs, runBenchmark } from "../bench/run";
+import { main, parseArgs, runBenchmark, stoppedMessage } from "../bench/run";
 import type { BenchOptions } from "../bench/run";
 import { BENCH_DIR } from "../bench/tasks";
 
@@ -85,10 +85,24 @@ describe("parseArgs", () => {
     );
   });
 
+  it("takes a results directory to carry on from, and a flag to keep going", () => {
+    const o = options(parseArgs(["--resume", "earlier", "--keep-going"]));
+    expect(o).toMatchObject({
+      out: "earlier",
+      resume: "earlier",
+      keepGoing: true,
+    });
+    // Without them, a usage limit stops the schedule.
+    const plain = options(parseArgs([]));
+    expect(plain.resume).toBeUndefined();
+    expect(plain.keepGoing).toBe(false);
+  });
+
   it.each([
     [["--agents"], "unknown or incomplete option: --agents"],
     [["agents"], "unknown or incomplete option: agents"],
     [["--colour", "red"], "unknown option: --colour"],
+    [["--resume", "earlier", "--out", "elsewhere"], "--resume already says"],
     [["--agents", "0"], "--agents, --runs, --timeout-min and --port"],
     [["--runs", "1.5"], "--agents, --runs, --timeout-min and --port"],
     [["--timeout-min", "soon"], "--agents, --runs, --timeout-min and --port"],
@@ -173,6 +187,158 @@ describe("runBenchmark", () => {
       "  run left out: agents were stopped before they finished (2 of 3 agents failed)",
     );
   });
+
+  it("stops at the first run a usage limit stopped, and says how to finish", async () => {
+    const stub: Driver = {
+      describe: (n) => `${n} stubs`,
+      run: async () => {
+        throw new Error("claude stopped before it worked: blocking_limit");
+      },
+    };
+    const lines: string[] = [];
+    const { runs, stopped, markdown } = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 3,
+      arms: ["on", "off"],
+      out,
+      timeoutMs: 5_000,
+      port: PORT,
+      log: (l) => lines.push(l),
+    });
+    // One run happened, and the other five were not paid for.
+    expect(runs).toHaveLength(1);
+    // The run the limit stopped is not a run done: it is run again on resume.
+    expect(stopped).toEqual({
+      reason: "sessions hit a usage limit",
+      done: 0,
+      total: 6,
+    });
+    expect(lines).toContain(
+      "  stopping: sessions hit a usage limit (0 of 6 runs done)",
+    );
+    // The arm that never ran is not in the table at all.
+    expect(markdown).toContain("| on | 0 | - |");
+    expect(markdown).not.toContain("| off |");
+    expect(markdown).toContain("1 run left out: sessions hit a usage limit.");
+    expect(stoppedMessage(stopped!, out)).toBe(
+      [
+        "Stopped early: sessions hit a usage limit; 0 of 6 runs done.",
+        `Rerun the same command with --resume ${out} once it clears: the runs already done are kept.`,
+      ].join("\n"),
+    );
+  }, 60_000);
+
+  it("keeps going when it is told to", async () => {
+    let calls = 0;
+    const stub: Driver = {
+      describe: (n) => `${n} stubs`,
+      run: async () => {
+        calls++;
+        throw new Error("claude stopped before it worked: blocking_limit");
+      },
+    };
+    const { runs, stopped } = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["on", "off"],
+      out,
+      timeoutMs: 5_000,
+      port: PORT,
+      keepGoing: true,
+    });
+    expect(calls).toBe(4);
+    expect(runs).toHaveLength(4);
+    expect(stopped).toBeUndefined();
+  }, 60_000);
+
+  it("carries on from a directory without running what is already done", async () => {
+    let calls = 0;
+    const stub: Driver = {
+      describe: (n) => `${n} stubs`,
+      run: async () => {
+        calls++;
+        return {};
+      },
+    };
+    const first = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 1,
+      arms: ["off"],
+      out,
+      timeoutMs: 5_000,
+      port: PORT,
+    });
+    expect(first.runs).toHaveLength(1);
+    expect(calls).toBe(1);
+
+    const lines: string[] = [];
+    const again = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["off"],
+      out,
+      resume: out,
+      timeoutMs: 5_000,
+      port: PORT,
+      log: (l) => lines.push(l),
+    });
+    // The run already done is kept, and only the second one is paid for.
+    expect(calls).toBe(2);
+    expect(again.runs).toHaveLength(2);
+    expect(lines).toContain("run 1 of 2, injection off: already done");
+    // The table and the record cover both, not just the new one.
+    expect(again.markdown).toContain("| off | 2 |");
+    expect(
+      JSON.parse(readFileSync(join(out, "results.json"), "utf8")),
+    ).toHaveLength(2);
+  }, 60_000);
+
+  it("runs again a run a limit made invalid, on resume", async () => {
+    let limited = true;
+    let calls = 0;
+    const stub: Driver = {
+      describe: (n) => `${n} stubs`,
+      run: async () => {
+        calls++;
+        if (limited)
+          throw new Error("claude stopped before it worked: blocking_limit");
+        return {};
+      },
+    };
+    const first = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["on", "off"],
+      out,
+      timeoutMs: 5_000,
+      port: PORT,
+    });
+    expect(first.stopped?.done).toBe(0);
+    expect(calls).toBe(1);
+
+    // The limit has cleared: the same directory finishes the schedule, and the
+    // run the limit made invalid is run, not kept.
+    limited = false;
+    const again = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["on", "off"],
+      out,
+      resume: out,
+      timeoutMs: 5_000,
+      port: PORT,
+    });
+    expect(again.stopped).toBeUndefined();
+    expect(calls).toBe(5);
+    expect(again.runs.filter((r) => r.invalid)).toHaveLength(0);
+    expect(again.markdown).not.toContain("left out");
+  }, 60_000);
 
   it("runs scripted agents with injection on and off, and writes the results", async () => {
     const lines: string[] = [];

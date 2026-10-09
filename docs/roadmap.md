@@ -138,7 +138,9 @@ Each milestone ends with something that can be checked, not just written.
   and its own `terminal_reason` on every turn, and `completed` is the one that ran to the
   end. Anything else - an API error, a usage limit, the turn or budget cap the benchmark
   sets - is recorded as an agent error, and a run with one is excluded from the medians and
-  listed under the table rather than scored as a fleet that did nothing (#133).
+  listed under the table rather than scored as a fleet that did nothing (#133). A usage
+  limit also stops the schedule: the runner keeps what it has, prints what is left, and
+  `--resume <dir>` finishes the rest without paying for the runs already done.
 - Run an eight-agent Claude Code fleet with injection on and off, several times
   each. This needs a real run's budget.
 - Put the measured numbers at the top of the README.

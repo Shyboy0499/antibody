@@ -16,6 +16,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -27,6 +28,7 @@ import { filesIn, PAUSE_FILE_NAME } from "../src/paths";
 import { parseDocument } from "../src/store";
 import {
   ARMS,
+  USAGE_LIMIT_REASON,
   leftOutRuns,
   renderResults,
   summariseArms,
@@ -57,7 +59,64 @@ export interface BenchOptions {
   keep?: boolean;
   /** The project's default port, which each run holds. */
   port?: number;
+  /**
+   * A directory of earlier runs to carry on from: the runs finished there are
+   * kept as they are, and only the rest are run (and paid for).
+   */
+  resume?: string;
+  /** Keep going after a session was stopped by a usage limit. Stopping is the
+   * default, because a limit that has started will not clear by itself. */
+  keepGoing?: boolean;
   log?: (line: string) => void;
+}
+
+/** What stopped a schedule early, for the caller to say how to carry on. */
+export interface Stopped {
+  /** How the left-out run reads, such as "sessions hit a usage limit". */
+  reason: string;
+  /** Runs done, the earlier ones included, and how many were asked for. */
+  done: number;
+  total: number;
+}
+
+/**
+ * The runs a directory already holds, by arm and run number, so a schedule can
+ * carry on from it: a `summary.json` that does not parse, or a run a usage limit
+ * made invalid, is not a finished run and is run again.
+ *
+ * @param dir - the results directory of an earlier run.
+ */
+export function earlierRuns(dir: string): Map<string, RunRecord> {
+  const found = new Map<string, RunRecord>();
+  if (!existsSync(dir)) return found;
+  for (const entry of readdirSync(dir)) {
+    const match = /^run-(\d+)-(on|off)$/.exec(entry);
+    if (match === null) continue;
+    const file = join(dir, entry, "summary.json");
+    if (!existsSync(file)) continue;
+    try {
+      const record = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
+      // A run a limit made invalid did not finish: it is run again.
+      if (record.invalid !== true) found.set(`${match[2]}:${match[1]}`, record);
+    } catch {
+      // Run it again.
+    }
+  }
+  return found;
+}
+
+/**
+ * What to say when a schedule stopped early: what happened, and the command
+ * that finishes the rest without paying for the runs already done.
+ *
+ * @param stopped - what stopped the schedule.
+ * @param out - the directory the results are in.
+ */
+export function stoppedMessage(stopped: Stopped, out: string): string {
+  return [
+    `Stopped early: ${stopped.reason}; ${stopped.done} of ${stopped.total} runs done.`,
+    `Rerun the same command with --resume ${out} once it clears: the runs already done are kept.`,
+  ].join("\n");
 }
 
 /** One agent's result as the run's record keeps it. */
@@ -194,19 +253,34 @@ export async function runOnce(
 }
 
 /**
- * The whole benchmark: every run of every arm, then the table.
+ * The whole benchmark: every run of every arm, then the table. A results
+ * directory can be carried on from (`resume`), and a schedule stops at the
+ * first run a usage limit stopped it in, unless it is told to keep going.
  *
- * @returns each run's summary, and the results as Markdown.
+ * @returns each run's summary, the results as Markdown, and what stopped the
+ *   schedule early when something did.
  */
 export async function runBenchmark(
   o: BenchOptions,
-): Promise<{ runs: RunRecord[]; markdown: string }> {
+): Promise<{ runs: RunRecord[]; markdown: string; stopped?: Stopped }> {
   mkdirSync(o.out, { recursive: true });
+  const earlier =
+    o.resume === undefined
+      ? new Map<string, RunRecord>()
+      : earlierRuns(o.resume);
+  const total = o.runs * o.arms.length;
   const runs: RunRecord[] = [];
-  for (let n = 1; n <= o.runs; n++) {
+  let stopped: Stopped | undefined;
+  for (let n = 1; n <= o.runs && stopped === undefined; n++) {
     // Alternate which arm goes first.
     const order = n % 2 === 1 ? o.arms : [...o.arms].reverse();
     for (const arm of order) {
+      const already = earlier.get(`${arm}:${n}`);
+      if (already !== undefined) {
+        runs.push(already);
+        o.log?.(`run ${n} of ${o.runs}, injection ${arm}: already done`);
+        continue;
+      }
       o.log?.(
         `run ${n} of ${o.runs}, injection ${arm}: ${o.driver.describe(o.agents)}`,
       );
@@ -225,6 +299,23 @@ export async function runBenchmark(
         o.log?.(
           `  run left out: ${run.invalidReason} (${run.agents.filter((a) => a.error !== undefined).length} of ${run.agents.length} agents failed)`,
         );
+      // A usage limit that has started will not clear by itself, so the rest of
+      // the schedule would be paid for and thrown away.
+      if (
+        run.invalid &&
+        run.invalidReason === USAGE_LIMIT_REASON &&
+        o.keepGoing !== true
+      ) {
+        stopped = {
+          reason: run.invalidReason,
+          done: runs.filter((r) => r.invalid !== true).length,
+          total,
+        };
+        o.log?.(
+          `  stopping: ${stopped.reason} (${stopped.done} of ${total} runs done)`,
+        );
+        break;
+      }
     }
   }
   const markdown = renderResults(
@@ -237,7 +328,7 @@ export async function runBenchmark(
     join(o.out, "results.json"),
     `${JSON.stringify(runs, null, 2)}\n`,
   );
-  return { runs, markdown };
+  return { runs, markdown, ...(stopped === undefined ? {} : { stopped }) };
 }
 
 const USAGE = `usage: pnpm run bench -- [options]
@@ -246,6 +337,10 @@ const USAGE = `usage: pnpm run bench -- [options]
   --runs N              runs per arm (default 3)
   --arms on,off         which arms to run (default both)
   --out DIR             where results go (default bench/results/<time>)
+  --resume DIR          carry on from a results directory: the runs finished
+                        there are kept, and only the rest are run
+  --keep-going          keep going after a usage limit stopped a session;
+                        by default the schedule stops there
   --timeout-min N       give up on an agent after N minutes (default 30)
   --keep                keep each run's workspace
   --port N              the project's port, which each run keeps busy (default ${BENCH_PORT})
@@ -268,7 +363,7 @@ export function parseArgs(
   const switches = new Set<string>();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
-    if (arg === "--keep") switches.add(arg);
+    if (arg === "--keep" || arg === "--keep-going") switches.add(arg);
     else if (arg.startsWith("--") && argv[i + 1] !== undefined)
       flags.set(arg, argv[++i] as string);
     else return { error: `unknown or incomplete option: ${arg}` };
@@ -279,6 +374,7 @@ export function parseArgs(
     "--runs",
     "--arms",
     "--out",
+    "--resume",
     "--timeout-min",
     "--speed",
     "--record",
@@ -290,6 +386,12 @@ export function parseArgs(
   ];
   for (const flag of flags.keys())
     if (!known.includes(flag)) return { error: `unknown option: ${flag}` };
+
+  const resume = flags.get("--resume");
+  if (resume !== undefined && flags.has("--out"))
+    return {
+      error: "--resume already says where the results go, so drop --out",
+    };
 
   const count = (flag: string, fallback: number) => {
     const value = flags.get(flag);
@@ -350,11 +452,14 @@ export function parseArgs(
     runs,
     arms: arms as Arm[],
     out:
+      resume ??
       flags.get("--out") ??
       join(BENCH_DIR, "results", now.toISOString().replace(/[:.]/g, "-")),
     timeoutMs: timeout * 60_000,
     keep: switches.has("--keep"),
     port,
+    ...(resume === undefined ? {} : { resume }),
+    keepGoing: switches.has("--keep-going"),
   };
 }
 
@@ -382,7 +487,9 @@ export async function main(
       `bench: ${sessions} real agent sessions, each capped at $${options.driver.capUsd}: up to $${(sessions * options.driver.capUsd).toFixed(2)} in all`,
     );
   }
-  const { markdown } = await runBenchmark({ ...options, log });
+  const { markdown, stopped } = await runBenchmark({ ...options, log });
   log(`\n${markdown}\nResults in ${options.out}`);
+  // A schedule that stopped early says what is left and how to finish it.
+  if (stopped !== undefined) log(`\n${stoppedMessage(stopped, options.out)}`);
   return 0;
 }

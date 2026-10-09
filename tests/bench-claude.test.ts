@@ -231,7 +231,7 @@ describe("the Claude Code driver", () => {
     expect(runs[0]?.invalid).toBe(false);
   }, 60_000);
 
-  it("records a session the provider stopped as a failed agent, and leaves the run out", async () => {
+  it("records a session the provider stopped, and stops the schedule there", async () => {
     const { runs, markdown } = await bench("limit");
     const run = runs[0];
     expect(run?.agents[0]?.error).toBe(
@@ -239,14 +239,16 @@ describe("the Claude Code driver", () => {
     );
     expect(run?.invalid).toBe(true);
     expect(run?.invalidReason).toBe("sessions hit a usage limit");
-    // Nothing was measured, so nothing is scored: both arms lose their run, and
-    // the table says why instead of reading as a fleet that did nothing.
+    // A limit that has started will not clear by itself, so the second arm never
+    // runs; what did run is not scored, and the table says why.
+    expect(runs).toHaveLength(1);
     expect(markdown).toContain("| on | 0 | - |");
-    expect(markdown).toContain("2 runs left out: sessions hit a usage limit.");
+    expect(markdown).not.toContain("| off |");
+    expect(markdown).toContain("1 run left out: sessions hit a usage limit.");
     const written = JSON.parse(
       readFileSync(join(root, "out", "results.json"), "utf8"),
     ) as RunRecord[];
-    expect(written.map((r) => r.invalid)).toEqual([true, true]);
+    expect(written.map((r) => r.invalid)).toEqual([true]);
     expect(written[0]?.invalidReason).toBe("sessions hit a usage limit");
   }, 60_000);
 
