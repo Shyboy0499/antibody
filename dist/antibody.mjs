@@ -467,7 +467,14 @@ const FAILURE_LINES = [
 	/\b\d+ (?:failed|failing)\b/,
 	/^make(?:\[\d+\])?: \*\*\*/
 ];
-const RUNNER_FAILURE = /^(?:# fail [1-9]\d*|not ok\b|ℹ fail [1-9]\d*|✖ )/m;
+const RUNNER_FAILURE = new RegExp([
+	/^# fail [1-9]\d*/,
+	/^not ok\b/,
+	/^ℹ fail [1-9]\d*/,
+	/^✖ /,
+	/^\s*(?:Test Files?|Test Suites?|Tests?):?\s+[^\n]*\b[1-9]\d* (?:failed|failing)\b/,
+	/^\s*[1-9]\d* failing\s*$/
+].map((pattern) => `(?:${pattern.source})`).join("|"), "m");
 const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
 	"cat",
 	"less",

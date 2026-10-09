@@ -9,7 +9,7 @@ import {
 import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
 import { callOutcome } from "../src/resolve-detect";
-import { TAP_FAILED } from "./fixtures/test-output";
+import { TAP_FAILED, VITEST_FAILED } from "./fixtures/test-output";
 
 const common = {
   session_id: "s-1",
@@ -471,6 +471,26 @@ describe("issue #131: a call whose pipeline reported success", () => {
     expect(callOutcome(toToolCall(input)!)).toEqual({
       ok: false,
       key: "command:npm test 2>&1 | tail -15",
+    });
+  });
+
+  it("infers a failure from the vitest run this repository pipes through tail", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: {
+        stdout: VITEST_FAILED,
+        stderr: "",
+        interrupted: false,
+        isImage: false,
+        noOutputExpected: false,
+      },
+    });
+    expect(input.inferredFailure).toBe(true);
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test 2>&1 | tail -15",
+      text: `${VITEST_FAILED}\n[exit code: 1]`,
     });
   });
 

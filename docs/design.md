@@ -216,10 +216,12 @@ shell result that names no exit code at all is a failure when it carries a test 
 verdict, or when its last non-empty line reads like an error (`npm ERR!`, `error:`/`fatal:`,
 `EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …), and the command is not
 one that only displays text. The runner's verdict is read as a block, not as the last line:
-a failing `node --test` ends its TAP output with `# fail 7` and then `# duration_ms …`, and
-its spec reporter with `ℹ fail 7` and a list of `✖` files, so `# fail 1`, `not ok`,
-`ℹ fail 1` and `✖` are read wherever they appear in the output - `# fail 0` and `ℹ fail 0`
-are how a passing run ends. Every segment of a chained command has to display for that
+a failing `node --test` ends its TAP output with `# fail 7` and then `# duration_ms …`, its
+spec reporter with `ℹ fail 7` and a list of `✖` files, and vitest, jest or mocha print
+`Tests  30 failed | 1028 passed` or `3 failing` above a `Duration` line - so a `# fail 1`,
+`not ok`, `ℹ fail 1`, `✖` or a `Tests` summary with a non-zero failed count is read wherever
+it appears in the output, while a passing run ends on `# fail 0`, `ℹ fail 0`, or a summary
+with nothing failed. Every segment of a chained command has to display for that
 exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
 can fail, `cat build.log | grep -i error` cannot. It is
 the last resort, checked only after a reported code and after the exit code Claude Code
