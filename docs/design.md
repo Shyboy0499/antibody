@@ -212,10 +212,14 @@ never break or block an agent.
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
 
 Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
-shell result that names no exit code at all is a failure when its last non-empty line reads
-like an error (`npm ERR!`, `error:`/`fatal:`, `# fail 1` and `not ok` from `node --test`,
-`EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …) and the command is not
-one that only displays text. Every segment of a chained command has to display for that
+shell result that names no exit code at all is a failure when it carries a test runner's
+verdict, or when its last non-empty line reads like an error (`npm ERR!`, `error:`/`fatal:`,
+`EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …), and the command is not
+one that only displays text. The runner's verdict is read as a block, not as the last line:
+a failing `node --test` ends its TAP output with `# fail 7` and then `# duration_ms …`, and
+its spec reporter with `ℹ fail 7` and a list of `✖` files, so `# fail 1`, `not ok`,
+`ℹ fail 1` and `✖` are read wherever they appear in the output - `# fail 0` and `ℹ fail 0`
+are how a passing run ends. Every segment of a chained command has to display for that
 exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
 can fail, `cat build.log | grep -i error` cannot. It is
 the last resort, checked only after a reported code and after Claude Code's own
@@ -223,8 +227,8 @@ the last resort, checked only after a reported code and after Claude Code's own
 pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to
 every harness and its output is the only evidence (#131). **Known residual false
 positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-looking line, a
-`... | tail -5` can cut to one, and a harness could report 0 for a pipeline that really
-failed. All are accepted in exchange for never rewriting the agent's command.
+`... | tail -5` can cut the verdict away, and a harness could report 0 for a pipeline that
+really failed. All are accepted in exchange for never rewriting the agent's command.
 
 ### 5.1 MCP tools
 

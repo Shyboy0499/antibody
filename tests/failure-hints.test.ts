@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { INFERRED_EXIT_CODE, looksFailed } from "../src/failure-hints";
+import {
+  SPEC_FAILED,
+  SPEC_PASSED,
+  TAP_FAILED,
+  TAP_PASSED,
+} from "./fixtures/test-output";
 
 describe("failure-hints", () => {
   it("records an inferred failure with exit code 1", () => {
@@ -18,8 +24,6 @@ describe("failure-hints", () => {
     ["node app.js", "Cannot find module 'express'"],
     ["pnpm test", "Environment variable not found: DATABASE_URL."],
     ['node -e "process.exit(3)"', "error: script failed"],
-    // node --test, which the benchmark's fixture runs: the TAP summary is the
-    // last line of a failing run, and `# fail 0` is how a passing one ends.
     ["node --test", "# fail 1"],
     ["node --test 2>&1 | tail -15", "not ok 3 - adds two numbers"],
     // Only one segment of a chain has to do real work for the chain to fail.
@@ -47,5 +51,27 @@ describe("failure-hints", () => {
     ],
   ])("%s ending in %j reads as a success", (command, output) => {
     expect(looksFailed(command, output)).toBe(false);
+  });
+
+  describe("a piped test run", () => {
+    it("reads a TAP summary that the last line only follows", () => {
+      expect(looksFailed("npm test 2>&1 | tail -15", TAP_FAILED)).toBe(true);
+      expect(looksFailed("npm test 2>&1 | tail -15", TAP_PASSED)).toBe(false);
+    });
+
+    it("reads the spec reporter's summary and its list of files", () => {
+      expect(looksFailed("npm test 2>&1 | tail -15", SPEC_FAILED)).toBe(true);
+      expect(looksFailed("npm test 2>&1 | tail -15", SPEC_PASSED)).toBe(false);
+    });
+
+    it("reads a chain whose first segment only appends to a file", () => {
+      const heredoc = [
+        "cat >> notes.md <<'EOF'",
+        "trap log",
+        "EOF",
+        "&& npm test 2>&1 | tail -15",
+      ].join("\n");
+      expect(looksFailed(heredoc, TAP_FAILED)).toBe(true);
+    });
   });
 });

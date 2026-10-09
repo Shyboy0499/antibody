@@ -8,11 +8,12 @@
 // one harness and a success in another - the divergence the fingerprints exist
 // to prevent.
 //
-// Only the last non-empty line is read: a successful command rarely ends on
-// one, and a failed one usually does. Commands that only print files or text
-// are never failures, whatever their output says. The rule stays a last
-// resort: a code a harness reports, or Claude Code's own `Exit code N`, is
-// always read first (src/hook-input.ts).
+// A failed command's output is read twice, because a failure does not always
+// end on its own line: the last non-empty line, and the test-runner markers
+// below, which come as a block. Commands that only print files or text are
+// never failures, whatever their output says. The rule stays a last resort: a
+// code a harness reports, or Claude Code's own `Exit code N`, is always read
+// first (src/hook-input.ts).
 
 /** The exit code an inferred shell failure is recorded with. */
 export const INFERRED_EXIT_CODE = 1;
@@ -32,10 +33,16 @@ const FAILURE_LINES = [
   /\bELIFECYCLE\b/,
   /^(?:FAIL|FAILED)\b/,
   /\b\d+ (?:failed|failing)\b/,
-  /^# fail [1-9]/, // node --test's TAP summary; `# fail 0` is a pass
-  /^not ok\b/, // node --test's TAP failure line
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
+
+// A test runner's verdict is a block of lines, not one line: a failing
+// `node --test` run ends its TAP output with `# fail 7` and then
+// `# duration_ms …`, and its spec reporter with `ℹ fail 7` and a list of `✖`
+// files. Reading only the last line misses both, so the runner's own markers
+// are read wherever they appear in the output. `# fail 0` and `ℹ fail 0` are
+// how a passing run ends, and match nothing here.
+const RUNNER_FAILURE = /^(?:# fail [1-9]\d*|not ok\b|ℹ fail [1-9]\d*|✖ )/m;
 
 // Commands that only show files or text: whatever their output says, it is
 // what they were asked to print, not a failure.
@@ -76,8 +83,9 @@ function displayOnly(segment: string): boolean {
 
 /**
  * Whether a shell command's output reads like a failure, for a harness that
- * does not report the exit code: its last non-empty line names an error, and
- * the command is not one that only displays text.
+ * does not report the exit code: it carries a test runner's verdict, or its
+ * last non-empty line names an error, and the command is not one that only
+ * displays text.
  *
  * Every segment of a chained command has to display text for that exemption,
  * since what the chain does is only as harmless as its parts: `tail -5
@@ -95,6 +103,7 @@ export function looksFailed(
     .map((segment) => segment.trim())
     .filter((segment) => segment !== "");
   if (segments.length > 0 && segments.every(displayOnly)) return false;
+  if (RUNNER_FAILURE.test(output)) return true;
   const last = output
     .split(/\r?\n/)
     .map((line) => line.trim())

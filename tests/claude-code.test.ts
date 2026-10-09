@@ -9,6 +9,7 @@ import {
 import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
 import { callOutcome } from "../src/resolve-detect";
+import { TAP_FAILED } from "./fixtures/test-output";
 
 const common = {
   session_id: "s-1",
@@ -354,6 +355,30 @@ describe("issue #131: a call whose pipeline reported success", () => {
     });
     // The failed call stops taking the success path, so it can no longer
     // resolve another entry's watch under the same command line.
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test 2>&1 | tail -15",
+    });
+  });
+
+  it("infers a failure from a real piped run that ends on its summary", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: {
+        stdout: TAP_FAILED,
+        stderr: "",
+        interrupted: false,
+        isImage: false,
+        noOutputExpected: false,
+      },
+    });
+    expect(input.inferredFailure).toBe(true);
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test 2>&1 | tail -15",
+      text: `${TAP_FAILED}\n[exit code: 1]`,
+    });
     expect(callOutcome(toToolCall(input)!)).toEqual({
       ok: false,
       key: "command:npm test 2>&1 | tail -15",
