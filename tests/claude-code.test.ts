@@ -292,6 +292,107 @@ describe("toToolCall", () => {
   });
 });
 
+describe("issue #131: a call whose pipeline reported success", () => {
+  const bash = (fields: Record<string, unknown>) =>
+    parseHookInput(
+      payload({
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        ...fields,
+      }),
+    ) as HookInput;
+
+  it("reads Exit code N out of a PostToolUse result text", () => {
+    const input = bash({
+      tool_input: { command: "make" },
+      tool_response: {
+        stdout: "Exit code 2\nmake: *** [all] Error 2",
+        stderr: "",
+      },
+    });
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "make",
+      text: "make: *** [all] Error 2\n[exit code: 2]",
+    });
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:make",
+    });
+  });
+
+  it("fingerprints the result text and the error wording the same", () => {
+    const signature = (input: HookInput) =>
+      classify(toCapture(input)!, new TransientCounter())?.record.signature;
+    const fromResult = bash({
+      tool_input: { command: "npm test" },
+      tool_response: { stdout: "Exit code 1\nnpm ERR! code ELIFECYCLE" },
+    });
+    const fromError = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Exit code 1\nnpm ERR! code ELIFECYCLE",
+      }),
+    ) as HookInput;
+    expect(signature(fromResult)).toBe(signature(fromError));
+  });
+
+  it("infers a failure when the pipeline's status is its last command's", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: { stdout: "npm ERR! code ELIFECYCLE", stderr: "" },
+    });
+    expect(input.inferredFailure).toBe(true);
+    expect(toCapture(input)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test 2>&1 | tail -15",
+      text: "npm ERR! code ELIFECYCLE\n[exit code: 1]",
+    });
+    // The failed call stops taking the success path, so it can no longer
+    // resolve another entry's watch under the same command line.
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test 2>&1 | tail -15",
+    });
+  });
+
+  it("infers nothing for a command that only displays text", () => {
+    const input = bash({
+      tool_input: { command: "cat package.json | grep -i error" },
+      tool_response: { stdout: `"error": "Cannot find module x"` },
+    });
+    expect(input.inferredFailure).toBeUndefined();
+    expect(toCapture(input)).toBeUndefined();
+  });
+
+  it("never second-guesses an exit code the result reports", () => {
+    const input = bash({
+      tool_input: { command: "npm test 2>&1 | tail -15" },
+      tool_response: { stdout: "npm ERR! code ELIFECYCLE", exit_code: 0 },
+    });
+    expect(input.exitCode).toBe(0);
+    expect(input.inferredFailure).toBeUndefined();
+    expect(toCapture(input)).toBeUndefined();
+  });
+
+  it("infers nothing for a non-shell tool, or a shell call with no command", () => {
+    const read = bash({
+      tool_name: "Read",
+      tool_input: { file_path: "a.ts" },
+      tool_output: "Error: Cannot find module x",
+    });
+    expect(read.inferredFailure).toBeUndefined();
+    expect(toCapture(read)).toBeUndefined();
+    const bare = bash({ tool_output: "Error: Cannot find module x" });
+    expect(bare.inferredFailure).toBeUndefined();
+    expect(toCapture(bare)).toBeUndefined();
+  });
+});
+
 describe("hookResponse", () => {
   it("wraps notices as additionalContext, one per line", () => {
     const out = hookResponse("PostToolUseFailure", [

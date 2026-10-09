@@ -13,14 +13,20 @@
 // that fails outright runs no hook. And its shell tool, reported as `Bash`
 // with `tool_input: { command }`, hands the hook the command's output as a
 // string, without the exit code. So for Bash antibody infers a failure from
-// the output (looksFailed()), and records it with exit code 1, since the real
-// one is not known. An MCP tool result with `isError: true` is a failure too.
+// the output with the rule shared by the adapters (src/failure-hints.ts), and
+// records it with exit code 1, since the real one is not known. An MCP tool
+// result with `isError: true` is a failure too.
 //
 // The response is Claude Code's (hookResponse()): Codex reads
 // `hookSpecificOutput.additionalContext` on SessionStart, UserPromptSubmit and
 // PostToolUse. Parsing never throws.
+import { INFERRED_EXIT_CODE, looksFailed } from "./failure-hints";
 import { withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
+
+// Re-exported: callers reached the shared rule through this adapter's module
+// before it moved to src/failure-hints.ts.
+export { INFERRED_EXIT_CODE, looksFailed };
 
 /** The harness name, as agent names and events use it. */
 export const CODEX = "codex";
@@ -32,9 +38,6 @@ export const CODEX_EVENTS: readonly HookEvent[] = [
   "PostToolUse",
   "SessionEnd",
 ];
-
-/** The exit code an inferred shell failure is recorded with. */
-export const INFERRED_EXIT_CODE = 1;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -51,71 +54,6 @@ function responseText(value: unknown): string {
     if (Array.isArray(value.content)) return responseText(value.content);
   }
   return value === undefined || value === null ? "" : JSON.stringify(value);
-}
-
-// Lines that end a failed command's output. Only the last line is read: a
-// successful command rarely ends on one, and a failed one usually does.
-const FAILURE_LINES = [
-  /^(?:error|fatal)(?:\[[\w-]+\])?:/i, // error: …, fatal: …, error[E0308]: …
-  /^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/, // TypeError: …, Error: …
-  /\bcommand not found\b/,
-  /: No such file or directory\b/,
-  /: Permission denied\b/,
-  /^npm ERR!/,
-  /\bERR_PNPM_\w+/,
-  /\bELIFECYCLE\b/,
-  /^(?:FAIL|FAILED)\b/,
-  /\b\d+ (?:failed|failing)\b/,
-  /^make(?:\[\d+\])?: \*\*\*/,
-];
-
-// Commands that only show files or text: whatever their output says, it is
-// what they were asked to print, not a failure.
-const DISPLAY_COMMANDS = new Set([
-  "cat",
-  "less",
-  "more",
-  "head",
-  "tail",
-  "grep",
-  "egrep",
-  "rg",
-  "ag",
-  "sed",
-  "awk",
-  "jq",
-  "find",
-  "ls",
-  "tree",
-  "echo",
-  "printf",
-  "wc",
-  "diff",
-]);
-const DISPLAY_GIT = new Set(["log", "show", "diff", "grep", "blame"]);
-
-/**
- * Whether a shell command's output reads like a failure, for a harness that
- * does not report the exit code: its last non-empty line names an error, and
- * the command is not one that only displays text.
- *
- * @param command - the command line, when known.
- * @param output - everything the command printed.
- */
-export function looksFailed(
-  command: string | undefined,
-  output: string,
-): boolean {
-  const words = (command ?? "").trim().split(/\s+/);
-  const first = words[0] ?? "";
-  if (DISPLAY_COMMANDS.has(first)) return false;
-  if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
-  const last = output
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "")
-    .at(-1);
-  return last !== undefined && FAILURE_LINES.some((re) => re.test(last));
 }
 
 /**

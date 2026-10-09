@@ -450,6 +450,68 @@ function agentName(harness, worktree, env = process.env) {
 	return clip(chosen !== "" ? chosen : `${harness}@${basename(worktree) || worktree}`, 64);
 }
 //#endregion
+//#region src/failure-hints.ts
+const FAILURE_LINES = [
+	/^(?:error|fatal)(?:\[[\w-]+\])?:/i,
+	/^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/,
+	/^Environment variable not found:/,
+	/\bcommand not found\b/,
+	/\bEADDRINUSE\b/,
+	/\bCannot find module\b/,
+	/: No such file or directory\b/,
+	/: Permission denied\b/,
+	/^npm ERR!/,
+	/\bERR_PNPM_\w+/,
+	/\bELIFECYCLE\b/,
+	/^(?:FAIL|FAILED)\b/,
+	/\b\d+ (?:failed|failing)\b/,
+	/^make(?:\[\d+\])?: \*\*\*/
+];
+const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
+	"cat",
+	"less",
+	"more",
+	"head",
+	"tail",
+	"grep",
+	"egrep",
+	"rg",
+	"ag",
+	"sed",
+	"awk",
+	"jq",
+	"find",
+	"ls",
+	"tree",
+	"echo",
+	"printf",
+	"wc",
+	"diff"
+]);
+const DISPLAY_GIT = /* @__PURE__ */ new Set([
+	"log",
+	"show",
+	"diff",
+	"grep",
+	"blame"
+]);
+/**
+* Whether a shell command's output reads like a failure, for a harness that
+* does not report the exit code: its last non-empty line names an error, and
+* the command is not one that only displays text.
+*
+* @param command - the command line, when known.
+* @param output - everything the command printed.
+*/
+function looksFailed(command, output) {
+	const words = (command ?? "").trim().split(/\s+/);
+	const first = words[0] ?? "";
+	if (DISPLAY_COMMANDS.has(first)) return false;
+	if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
+	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
+	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
+}
+//#endregion
 //#region src/hook-input.ts
 /** The hook events antibody handles. */
 const HOOK_EVENTS = [
@@ -474,18 +536,32 @@ function withTranscript(input, payload) {
 }
 const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
 const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
-/** The exit code and output of a failed shell command, when the call is one. */
+/**
+* The exit code and output of a failed shell command, when the call is one.
+*
+* A code the harness reports is believed as it stands - a reported zero is a
+* success, never second-guessed. Without one, Claude Code's `Exit code N` is
+* read from wherever the harness put the text, and only then is an inferred
+* failure accepted.
+*/
 function commandFailure(input) {
-	if (input.event === "PostToolUseFailure") {
-		const match = EXIT_LINE.exec(input.error ?? "");
-		if (match === null) return void 0;
+	const failed = input.event === "PostToolUseFailure";
+	if (!failed && input.event !== "PostToolUse") return void 0;
+	if (input.exitCode !== void 0) {
+		if (input.exitCode === 0) return void 0;
 		return {
-			code: Number(match[1]),
-			body: (input.error ?? "").slice(match[0].length)
+			code: input.exitCode,
+			body: input.output ?? ""
 		};
 	}
-	if (input.event === "PostToolUse" && input.exitCode !== void 0 && input.exitCode !== 0) return {
-		code: input.exitCode,
+	const text = failed ? input.error ?? "" : input.output ?? "";
+	const match = EXIT_LINE.exec(text);
+	if (match !== null) return {
+		code: Number(match[1]),
+		body: text.slice(match[0].length)
+	};
+	if (input.event === "PostToolUse" && input.inferredFailure === true) return {
+		code: 1,
 		body: input.output ?? ""
 	};
 }
@@ -604,6 +680,7 @@ function parseHookInput(text) {
 	if (exitCode !== void 0) input.exitCode = exitCode;
 	const error = str$2(value.error);
 	if (error !== void 0) input.error = error;
+	if (event === "PostToolUse" && toolName === "Bash" && input.command !== void 0 && input.exitCode === void 0 && looksFailed(input.command, input.output ?? "")) input.inferredFailure = true;
 	return input;
 }
 /** Claude Code caps each additionalContext at this many characters. */
@@ -654,63 +731,6 @@ function responseText(value) {
 		if (Array.isArray(value.content)) return responseText(value.content);
 	}
 	return value === void 0 || value === null ? "" : JSON.stringify(value);
-}
-const FAILURE_LINES = [
-	/^(?:error|fatal)(?:\[[\w-]+\])?:/i,
-	/^(?:[A-Z]\w*)?(?:Error|Exception)(?::|$)/,
-	/\bcommand not found\b/,
-	/: No such file or directory\b/,
-	/: Permission denied\b/,
-	/^npm ERR!/,
-	/\bERR_PNPM_\w+/,
-	/\bELIFECYCLE\b/,
-	/^(?:FAIL|FAILED)\b/,
-	/\b\d+ (?:failed|failing)\b/,
-	/^make(?:\[\d+\])?: \*\*\*/
-];
-const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([
-	"cat",
-	"less",
-	"more",
-	"head",
-	"tail",
-	"grep",
-	"egrep",
-	"rg",
-	"ag",
-	"sed",
-	"awk",
-	"jq",
-	"find",
-	"ls",
-	"tree",
-	"echo",
-	"printf",
-	"wc",
-	"diff"
-]);
-const DISPLAY_GIT = /* @__PURE__ */ new Set([
-	"log",
-	"show",
-	"diff",
-	"grep",
-	"blame"
-]);
-/**
-* Whether a shell command's output reads like a failure, for a harness that
-* does not report the exit code: its last non-empty line names an error, and
-* the command is not one that only displays text.
-*
-* @param command - the command line, when known.
-* @param output - everything the command printed.
-*/
-function looksFailed(command, output) {
-	const words = (command ?? "").trim().split(/\s+/);
-	const first = words[0] ?? "";
-	if (DISPLAY_COMMANDS.has(first)) return false;
-	if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
-	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
-	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
 }
 /**
 * Parse a Codex CLI hook's stdin.
@@ -4211,6 +4231,7 @@ function parseGeminiInput(text) {
 		const shell = shellResult(content);
 		input.output = shell.output;
 		if (shell.exitCode !== void 0) input.exitCode = shell.exitCode;
+		else if (input.command !== void 0 && looksFailed(input.command, shell.output)) input.inferredFailure = true;
 		return input;
 	}
 	input.output = content;

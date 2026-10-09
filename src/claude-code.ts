@@ -9,13 +9,19 @@
 //   (older versions call it `tool_response`, sometimes an object);
 // - PostToolUseFailure: `tool_name`, `tool_input` and `error`.
 //
-// A failed Bash command reports `Exit code N` at the start of its error text;
-// toCapture() in hook-input.ts turns that into the capture code's marker.
-// Parsing never throws: anything unexpected reads as undefined.
+// A failed Bash command reports `Exit code N` at the start of its result text,
+// on a PostToolUse as well as on a PostToolUseFailure; toCapture() in
+// hook-input.ts turns that into the capture code's marker. A pipeline reports
+// its last command's status, so `npm test 2>&1 | tail -15` arrives as a
+// successful PostToolUse with no code anywhere (#131); a Bash result that
+// names no code but ends on an error line is therefore inferred as a failure
+// (looksFailed(), src/failure-hints.ts). Parsing never throws: anything
+// unexpected reads as undefined.
 //
 // Output goes back the documented way: JSON on stdout with
 // `hookSpecificOutput.additionalContext`, which Claude Code shows the model as
 // a system reminder, or nothing at all.
+import { looksFailed } from "./failure-hints";
 import { HOOK_EVENTS, withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
@@ -98,6 +104,14 @@ export function parseHookInput(text: string): HookInput | undefined {
   if (exitCode !== undefined) input.exitCode = exitCode;
   const error = str(value.error);
   if (error !== undefined) input.error = error;
+  if (
+    event === "PostToolUse" &&
+    toolName === "Bash" &&
+    input.command !== undefined &&
+    input.exitCode === undefined &&
+    looksFailed(input.command, input.output ?? "")
+  )
+    input.inferredFailure = true;
   return input;
 }
 

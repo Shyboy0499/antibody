@@ -206,10 +206,22 @@ never break or block an agent.
 
 | Harness | Capture | Inject | Notes |
 | --- | --- | --- | --- |
-| Claude Code | `PostToolUseFailure` (receives `error`), and `PostToolUse` for Bash calls that exit non-zero | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
-| Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line; the MCP server is added with `codex mcp add`. |
-| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
+| Claude Code | `PostToolUse` and `PostToolUseFailure`: a non-zero `exitCode` on the result when one is reported, Claude Code's `Exit code N` at the start of the result or the error, else the shared output rule | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
+| Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line by the shared rule; the MCP server is added with `codex mcp add`. |
+| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error, and the shared output rule when it carries none | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
+
+Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
+shell result that names no exit code at all is a failure when the command is not one that
+only displays text and its last non-empty line reads like an error (`npm ERR!`,
+`error:`/`fatal:`, `EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …). It is
+the last resort, checked only after a reported code and after Claude Code's own
+`Exit code N`; an inferred failure is recorded with `[exit code: 1]`. It exists because a
+pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to
+every harness and its output is the only evidence (#131). **Known residual false
+positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-looking line, a
+`... | tail -5` can cut to one, and a harness could report 0 for a pipeline that really
+failed. All are accepted in exchange for never rewriting the agent's command.
 
 ### 5.1 MCP tools
 
