@@ -212,10 +212,12 @@ never break or block an agent.
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
 
 Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
-shell result that names no exit code at all is a failure when the command is not one that
-only displays text and its last non-empty line reads like an error (`npm ERR!`,
-`error:`/`fatal:`, `# fail 1` and `not ok` from `node --test`, `EADDRINUSE`,
-`Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …). It is
+shell result that names no exit code at all is a failure when its last non-empty line reads
+like an error (`npm ERR!`, `error:`/`fatal:`, `# fail 1` and `not ok` from `node --test`,
+`EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …) and the command is not
+one that only displays text. Every segment of a chained command has to display for that
+exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
+can fail, `cat build.log | grep -i error` cannot. It is
 the last resort, checked only after a reported code and after Claude Code's own
 `Exit code N`; an inferred failure is recorded with `[exit code: 1]`. It exists because a
 pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to

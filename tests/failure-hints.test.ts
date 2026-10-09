@@ -22,6 +22,9 @@ describe("failure-hints", () => {
     // last line of a failing run, and `# fail 0` is how a passing one ends.
     ["node --test", "# fail 1"],
     ["node --test 2>&1 | tail -15", "not ok 3 - adds two numbers"],
+    // Only one segment of a chain has to do real work for the chain to fail.
+    ["tail -15 build.log && node --test", "# fail 1"],
+    ["cat errors.log; node app.js", "Cannot find module 'express'"],
   ])("%s ending in %j reads as a failure", (command, output) => {
     expect(looksFailed(command, output)).toBe(true);
   });
@@ -34,6 +37,14 @@ describe("failure-hints", () => {
     ["npm test 2>&1 | tail -15", ""],
     ["node --test", "# fail 0"],
     [undefined, "12 passed"],
+    // Every segment displays, so the output is what was asked for.
+    ["cat package.json | grep -i error && echo done", "Cannot find module x"],
+    ["git log -1 --stat | head -20", "fatal: bad revision"],
+    // A redirection's `&` is not a separator.
+    [
+      "cat package.json 2>&1 | grep -i error",
+      `"error": "Cannot find module x"`,
+    ],
   ])("%s ending in %j reads as a success", (command, output) => {
     expect(looksFailed(command, output)).toBe(false);
   });

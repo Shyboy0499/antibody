@@ -497,19 +497,29 @@ const DISPLAY_GIT = /* @__PURE__ */ new Set([
 	"grep",
 	"blame"
 ]);
+const CHAIN = /\s*(?:&&|\|\||;|\||&(?!\d))\s*/;
+/** Whether one segment of a command line only shows files or text. */
+function displayOnly(segment) {
+	const words = segment.trim().split(/\s+/);
+	const first = words[0] ?? "";
+	if (DISPLAY_COMMANDS.has(first)) return true;
+	return first === "git" && DISPLAY_GIT.has(words[1] ?? "");
+}
 /**
 * Whether a shell command's output reads like a failure, for a harness that
 * does not report the exit code: its last non-empty line names an error, and
 * the command is not one that only displays text.
 *
+* Every segment of a chained command has to display text for that exemption,
+* since what the chain does is only as harmless as its parts: `tail -5
+* build.log && node --test` can fail, `cat build.log | grep -i error` cannot.
+*
 * @param command - the command line, when known.
 * @param output - everything the command printed.
 */
 function looksFailed(command, output) {
-	const words = (command ?? "").trim().split(/\s+/);
-	const first = words[0] ?? "";
-	if (DISPLAY_COMMANDS.has(first)) return false;
-	if (first === "git" && DISPLAY_GIT.has(words[1] ?? "")) return false;
+	const segments = (command ?? "").split(CHAIN).map((segment) => segment.trim()).filter((segment) => segment !== "");
+	if (segments.length > 0 && segments.every(displayOnly)) return false;
 	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
 	return last !== void 0 && FAILURE_LINES.some((re) => re.test(last));
 }
