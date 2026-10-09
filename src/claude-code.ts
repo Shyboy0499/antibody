@@ -27,6 +27,7 @@
 import { looksFailed } from "./failure-hints";
 import { HOOK_EVENTS, withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
+import { PIPEFAIL_PREFIX } from "./pipefail";
 import { clip } from "./notice";
 
 /** The harness name, as agent names and events use it. */
@@ -98,7 +99,12 @@ export function parseHookInput(text: string): HookInput | undefined {
   if (toolName !== undefined) input.toolName = toolName;
   if (isRecord(value.tool_input)) {
     const command = str(value.tool_input.command);
-    if (command !== undefined && command.trim() !== "") input.command = command;
+    // The command the agent wrote, without the prefix the PreToolUse rewrite
+    // adds (src/pipefail.ts), so the same command keeps one signature.
+    if (command !== undefined && command.trim() !== "")
+      input.command = command.startsWith(PIPEFAIL_PREFIX)
+        ? command.slice(PIPEFAIL_PREFIX.length)
+        : command;
   }
   const result = value.tool_output ?? value.tool_response;
   const output = outputText(result);

@@ -26,7 +26,22 @@ describe("the Claude Code plugin", () => {
 
   it("runs the committed bundle for every hook event antibody handles", () => {
     const { hooks } = json("hooks/hooks.json");
-    expect(Object.keys(hooks).sort()).toEqual([...HOOK_EVENTS].sort());
+    expect(Object.keys(hooks).sort()).toEqual(
+      [...HOOK_EVENTS, "PreToolUse"].sort(),
+    );
+    expect(hooks.PreToolUse).toEqual([
+      {
+        matcher: "Bash",
+        hooks: [
+          {
+            type: "command",
+            command: "node",
+            args: [BUNDLE, "hook", "claude-code-pretool"],
+            timeout: 5,
+          },
+        ],
+      },
+    ]);
     for (const event of HOOK_EVENTS)
       expect(hooks[event]).toEqual([
         {
