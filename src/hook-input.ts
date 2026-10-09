@@ -74,8 +74,13 @@ export function withTranscript(
   return input;
 }
 
-// Claude Code's own wording for a failed shell command.
-const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
+// The wordings a failed shell command's exit code arrives in, each leading the
+// text. Claude Code throws `Exit code N` for a Bash call that fails; the
+// classifier inside its own Bash tool (read off the 2.1.282 bundle) words the
+// same failure `Command failed with exit code N`, and its hooks reference
+// shows `Command exited with non-zero status code N` as the `error` example.
+const EXIT_LINE =
+  /^(?:Exit code |Command failed with exit code |Command exited with non-zero status code )(\d+)[^\S\n]*\n?/;
 
 // Text in the shape the ported capture code reads: the output, then the marker.
 const withMarker = (body: string, code: number) =>
@@ -100,8 +105,15 @@ function commandFailure(
   }
   const text = failed ? (input.error ?? "") : (input.output ?? "");
   const match = EXIT_LINE.exec(text);
-  if (match !== null)
-    return { code: Number(match[1]), body: text.slice(match[0].length) };
+  if (match !== null) {
+    const rest = text.slice(match[0].length);
+    // A one-line wording carries no output of its own: keep it as the
+    // evidence rather than leaving the record without a headline.
+    return {
+      code: Number(match[1]),
+      body: rest.trim() === "" ? text : rest,
+    };
+  }
   if (input.event === "PostToolUse" && input.inferredFailure === true)
     return { code: INFERRED_EXIT_CODE, body: input.output ?? "" };
   return undefined;

@@ -547,7 +547,7 @@ function withTranscript(input, payload) {
 	if (typeof path === "string" && path.trim() !== "") input.transcriptPath = path;
 	return input;
 }
-const EXIT_LINE = /^Exit code (\d+)[^\S\n]*\n?/;
+const EXIT_LINE = /^(?:Exit code |Command failed with exit code |Command exited with non-zero status code )(\d+)[^\S\n]*\n?/;
 const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
 /**
 * The exit code and output of a failed shell command, when the call is one.
@@ -569,10 +569,13 @@ function commandFailure(input) {
 	}
 	const text = failed ? input.error ?? "" : input.output ?? "";
 	const match = EXIT_LINE.exec(text);
-	if (match !== null) return {
-		code: Number(match[1]),
-		body: text.slice(match[0].length)
-	};
+	if (match !== null) {
+		const rest = text.slice(match[0].length);
+		return {
+			code: Number(match[1]),
+			body: rest.trim() === "" ? text : rest
+		};
+	}
 	if (input.event === "PostToolUse" && input.inferredFailure === true) return {
 		code: 1,
 		body: input.output ?? ""

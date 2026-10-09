@@ -341,6 +341,43 @@ describe("issue #131: a call whose pipeline reported success", () => {
     expect(signature(fromResult)).toBe(signature(fromError));
   });
 
+  it("reads every wording Claude Code puts the code in", () => {
+    // The classifier inside Claude Code's own Bash tool words a non-zero exit
+    // this way; its hooks reference shows the second one. Both lead the text,
+    // as `Exit code N` does.
+    const classifier = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Command failed with exit code 2",
+      }),
+    ) as HookInput;
+    expect(toCapture(classifier)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "npm test",
+      text: "Command failed with exit code 2\n[exit code: 2]",
+    });
+    expect(
+      classify(toCapture(classifier)!, new TransientCounter())?.record.message,
+    ).toBe("npm test → Command failed with exit code 2");
+
+    const documented = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error:
+          "Command exited with non-zero status code 1\nnpm ERR! code ELIFECYCLE",
+      }),
+    ) as HookInput;
+    expect(toCapture(documented)).toMatchObject({
+      command: "npm test",
+      text: "npm ERR! code ELIFECYCLE\n[exit code: 1]",
+    });
+  });
+
   it("infers a failure when the pipeline's status is its last command's", () => {
     const input = bash({
       tool_input: { command: "npm test 2>&1 | tail -15" },

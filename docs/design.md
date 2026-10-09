@@ -222,8 +222,10 @@ its spec reporter with `ℹ fail 7` and a list of `✖` files, so `# fail 1`, `n
 are how a passing run ends. Every segment of a chained command has to display for that
 exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
 can fail, `cat build.log | grep -i error` cannot. It is
-the last resort, checked only after a reported code and after Claude Code's own
-`Exit code N`; an inferred failure is recorded with `[exit code: 1]`. It exists because a
+the last resort, checked only after a reported code and after the exit code Claude Code
+leads a failure's text with - `Exit code N`, the `Command failed with exit code N` its own
+Bash classifier words, or the `Command exited with non-zero status code N` of its hooks
+reference; an inferred failure is recorded with `[exit code: 1]`. It exists because a
 pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to
 every harness and its output is the only evidence (#131). **Known residual false
 positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-looking line, a
