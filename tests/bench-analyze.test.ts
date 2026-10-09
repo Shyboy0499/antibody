@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  leftOutReason,
+  leftOutRuns,
   median,
   renderResults,
   summariseArms,
@@ -177,6 +179,7 @@ const run = (
   repeatDiagnoses,
   fixNotices: 0,
   noticeTokens: 0,
+  invalid: false,
 });
 
 describe("summariseArms and renderResults", () => {
@@ -192,6 +195,7 @@ describe("summariseArms and renderResults", () => {
       {
         arm: "on",
         runs: 2,
+        leftOut: 0,
         tokens: 12_000,
         wallMs: 50_000,
         diagnoses: 6,
@@ -203,6 +207,7 @@ describe("summariseArms and renderResults", () => {
       {
         arm: "off",
         runs: 2,
+        leftOut: 0,
         tokens: 21_000,
         wallMs: 85_000,
         diagnoses: 11,
@@ -258,5 +263,73 @@ describe("summariseArms and renderResults", () => {
     expect(text).toContain("| on | 1 | - | 4.2 s | 4 | 0 | 1 / 1 |");
     expect(text).not.toContain("With injection on");
     expect(renderResults([], "nothing")).toContain("| --- |");
+  });
+});
+
+describe("a run with a failed session", () => {
+  const failed = (reason: string): RunSummary => ({
+    ...run("on", [agent("a", 1000, 5000)], 0),
+    invalid: true,
+    invalidReason: reason,
+  });
+
+  it("reads the reason off the client's own words", () => {
+    expect(
+      leftOutReason(["Error: claude stopped before it worked: blocking_limit"]),
+    ).toBe("sessions hit a usage limit");
+    expect(
+      leftOutReason(["Error: claude stopped before it worked: max_turns"]),
+    ).toBe("agents were stopped before they finished");
+    expect(leftOutReason(["timed out after 500 ms"])).toBe(
+      "agents were stopped before they finished",
+    );
+  });
+
+  it("marks the run invalid when a session failed, and says why", () => {
+    const agents: AgentResult[] = [
+      {
+        ...agent("a", 100, 900),
+        error: "Error: claude stopped before it worked: api_error",
+      },
+    ];
+    expect(summariseRun("on", agents, [], ENTRIES)).toMatchObject({
+      invalid: true,
+      invalidReason: "sessions hit a usage limit",
+    });
+    expect(
+      summariseRun("on", [agent("a", 100, 900)], [], ENTRIES),
+    ).toMatchObject({ invalid: false });
+  });
+
+  it("leaves it out of the medians, and accounts for it under the table", () => {
+    const runs = [
+      run("on", [agent("a", 1000, 5000)], 0),
+      failed("sessions hit a usage limit"),
+    ];
+    expect(summariseArms(runs)[0]).toMatchObject({
+      runs: 1,
+      leftOut: 1,
+      tokens: 1000,
+    });
+    expect(leftOutRuns(runs)).toEqual([
+      { reason: "sessions hit a usage limit", runs: 1 },
+    ]);
+    expect(
+      renderResults(summariseArms(runs), "1 agent", leftOutRuns(runs)),
+    ).toContain("1 run left out: sessions hit a usage limit.");
+  });
+
+  it("counts what the harness stopped apart from a limit", () => {
+    const runs = [
+      failed("sessions hit a usage limit"),
+      {
+        ...failed("agents were stopped before they finished"),
+        arm: "off" as const,
+      },
+    ];
+    expect(leftOutRuns(runs)).toEqual([
+      { reason: "sessions hit a usage limit", runs: 1 },
+      { reason: "agents were stopped before they finished", runs: 1 },
+    ]);
   });
 });

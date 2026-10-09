@@ -44,6 +44,11 @@ interface ClaudeResult {
   num_turns?: number;
   total_cost_usd?: number;
   usage?: Record<string, unknown>;
+  /** Why the turn ended, from the client's own list; `completed` ran to the end. */
+  terminal_reason?: string;
+  /** The turn's closing text, when it wrote one. */
+  result?: string;
+  stop_reason?: string | null;
 }
 
 // Environment a parent Claude Code session would pass on, and which would
@@ -183,6 +188,33 @@ export function resultTokens(
   return parts.length === 0 ? undefined : parts.reduce((a, b) => a + b, 0);
 }
 
+/** How long a reason may be before it stops being a reason and becomes output. */
+const REASON_MAX_CHARS = 200;
+
+/**
+ * Why a session did not finish its turn, or undefined when it did.
+ *
+ * The client reports `is_error` and its own `terminal_reason` on every turn,
+ * and `completed` is the one that ran to the end. Anything else - a provider
+ * error, a usage limit, the turn cap, the harness stopping the agent - means
+ * the session never got to do its work, so its tokens and its empty task list
+ * say nothing about what the fleet can do (#133).
+ *
+ * @param result - what `claude -p --output-format json` printed.
+ * @returns the reason, from the client's own words.
+ */
+export function sessionStop(result: ClaudeResult): string | undefined {
+  const terminal = result.terminal_reason;
+  const finished = terminal === undefined || terminal === "completed";
+  if (finished && result.is_error !== true) return undefined;
+  const said = typeof result.result === "string" ? result.result.trim() : "";
+  const reason =
+    (finished ? undefined : terminal) ??
+    result.subtype ??
+    (said === "" ? undefined : said.split(/\r?\n/)[0]);
+  return reason?.slice(0, REASON_MAX_CHARS) ?? "an error with no reason given";
+}
+
 /** Claude Code, headless, with antibody's plugin. */
 export function claudeDriver(o: ClaudeDriverOptions): Driver {
   const configDir =
@@ -216,6 +248,13 @@ export function claudeDriver(o: ClaudeDriverOptions): Driver {
           `claude exited with ${code ?? "a signal"}: ${err.trim().split("\n").slice(-3).join(" | ") || "no output"}`,
         );
 
+      // A session that dies on an API error or a usage limit still prints a
+      // valid result object, so it belongs on the agent as an error rather
+      // than in the table as a run that finished having done nothing (#133).
+      const stopped = sessionStop(result);
+      if (stopped !== undefined)
+        throw new Error(`claude stopped before it worked: ${stopped}`);
+
       // The transcript is what antibody measures a diagnosis from; the
       // result's own count is the fallback.
       const transcripts = sessionTranscripts(configDir, context.session);
@@ -247,6 +286,12 @@ export function claudeDriver(o: ClaudeDriverOptions): Driver {
           ...(result.is_error === undefined
             ? {}
             : { isError: result.is_error }),
+          ...(result.terminal_reason === undefined
+            ? {}
+            : { terminalReason: result.terminal_reason }),
+          ...(result.stop_reason === undefined || result.stop_reason === null
+            ? {}
+            : { stopReason: result.stop_reason }),
           ...(result.num_turns === undefined
             ? {}
             : { turns: result.num_turns }),

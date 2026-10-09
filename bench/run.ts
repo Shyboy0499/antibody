@@ -25,7 +25,13 @@ import { join, resolve } from "node:path";
 import { parseEvents } from "../src/events";
 import { filesIn, PAUSE_FILE_NAME } from "../src/paths";
 import { parseDocument } from "../src/store";
-import { ARMS, renderResults, summariseArms, summariseRun } from "./analyze";
+import {
+  ARMS,
+  leftOutRuns,
+  renderResults,
+  summariseArms,
+  summariseRun,
+} from "./analyze";
 import type { AgentResult, Arm, RunSummary } from "./analyze";
 import { claudeDriver } from "./claude";
 import { fakeDriver } from "./drivers";
@@ -58,7 +64,6 @@ export interface BenchOptions {
 export interface AgentRecord extends AgentResult {
   session: string;
   details?: Record<string, unknown>;
-  error?: string;
 }
 
 /** One run's summary, with each agent's full record. */
@@ -216,11 +221,16 @@ export async function runBenchmark(
       o.log?.(
         `  ${run.diagnoses} trap diagnoses (${run.repeatDiagnoses} repeats), ${run.agents.filter((a) => a.done).length} of ${run.agents.length} tasks done${spent > 0 ? `, $${spent.toFixed(2)} spent` : ""}`,
       );
+      if (run.invalid)
+        o.log?.(
+          `  run left out: ${run.invalidReason} (${run.agents.filter((a) => a.error !== undefined).length} of ${run.agents.length} agents failed)`,
+        );
     }
   }
   const markdown = renderResults(
     summariseArms(runs),
     o.driver.describe(o.agents),
+    leftOutRuns(runs),
   );
   writeFileSync(join(o.out, "results.md"), markdown);
   writeFileSync(

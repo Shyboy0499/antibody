@@ -55,7 +55,10 @@ Runs alternate which arm goes first.
   the waste antibody exists to remove (design §2).
 - **Tasks done:** tasks whose hidden check passes.
 
-The results table shows each arm's median run.
+The results table shows each arm's median run. A run a session failed in - a Claude Code
+turn that stopped on an API error or a usage limit, say - is **left out** rather than scored:
+almost no tokens and nothing done is a statement about the failure, not about the fleet. The
+table counts what it left out and why underneath itself.
 
 ## Run it
 
@@ -120,8 +123,8 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
 
 Results go to `bench/results/<time>/`, which git ignores until results are published:
 
-- `results.md`: the table, and a line saying what injection changed;
-- `results.json`: every run's summary;
+- `results.md`: the table, a line saying what injection changed, and what was left out;
+- `results.json`: every run's summary, each with `invalid` and, when it is, why;
 - `run-<n>-<arm>/summary.json`: the run, agent by agent, with any error;
 - `run-<n>-<arm>/<session>.jsonl`: each agent's transcript. For Claude Code there is
   also `<session>.out.json`, which records its cost and turns.
