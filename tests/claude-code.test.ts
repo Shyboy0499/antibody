@@ -378,6 +378,58 @@ describe("issue #131: a call whose pipeline reported success", () => {
     });
   });
 
+  it("records a reported 1 only when it is not a meaning", () => {
+    // Claude Code's own table: `grep` reports "no matches" as 1, and only 2 or
+    // more is an error.
+    const noMatches = bash({
+      tool_input: { command: "grep -rn TODO src" },
+      tool_response: { stdout: "", stderr: "", exit_code: 1 },
+    });
+    expect(noMatches.exitCode).toBe(1);
+    expect(toCapture(noMatches)).toBeUndefined();
+    const broken = bash({
+      tool_input: { command: "grep -rn TODO src" },
+      tool_response: {
+        stdout: "",
+        stderr: "grep: src: No such file or directory",
+        exit_code: 2,
+      },
+    });
+    expect(toCapture(broken)).toMatchObject({
+      command: "grep -rn TODO src",
+      text: "grep: src: No such file or directory\n[exit code: 2]",
+    });
+    // The last segment decides, and it is the test run here.
+    const piped = bash({
+      tool_input: { command: "grep -rn TODO src | npm test" },
+      tool_response: { stdout: "Tests 1 failed", stderr: "", exit_code: 1 },
+    });
+    expect(toCapture(piped)).toMatchObject({
+      command: "grep -rn TODO src | npm test",
+      text: "Tests 1 failed\n[exit code: 1]",
+    });
+  });
+
+  it("leaves an interrupted call uncaptured", () => {
+    const input = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Exit code 130\nnpm ERR! code ELIFECYCLE",
+        is_interrupt: true,
+      }),
+    ) as HookInput;
+    expect(input.isInterrupt).toBe(true);
+    // Nothing to learn: the user stopped it.
+    expect(toCapture(input)).toBeUndefined();
+    // It is still not a success, so it cannot resolve another entry's watch.
+    expect(callOutcome(toToolCall(input)!)).toEqual({
+      ok: false,
+      key: "command:npm test",
+    });
+  });
+
   it("infers a failure when the pipeline's status is its last command's", () => {
     const input = bash({
       tool_input: { command: "npm test 2>&1 | tail -15" },

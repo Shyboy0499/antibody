@@ -232,6 +232,14 @@ positives:** `npm test 2>&1 | grep "not ok"` succeeds yet prints an error-lookin
 `... | tail -5` can cut the verdict away, and a harness could report 0 for a pipeline that
 really failed. All are accepted in exchange for never rewriting the agent's command.
 
+Claude Code itself decides a Bash call's outcome from the last segment of the pipeline, and
+reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
+and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
+there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
+a call the harness marks `is_interrupt` is not recorded at all. What it cannot mirror is
+the pipeline's status, because a call whose last segment succeeded reports nothing: that
+gap is what the output rule above exists to close.
+
 ### 5.1 MCP tools
 
 The five dsh-errkb tools, renamed:

@@ -12,7 +12,7 @@
 // (src/failure-hints.ts) when the harness reported nothing at all. All three
 // become the `[exit code: N]` marker the ported capture code reads, so headline
 // extraction and keying by command line work unchanged.
-import { INFERRED_EXIT_CODE } from "./failure-hints";
+import { INFERRED_EXIT_CODE, benignExit } from "./failure-hints";
 import type { CaptureInput } from "./capture";
 import type { ToolCall } from "./resolve-detect";
 
@@ -54,6 +54,12 @@ export interface HookInput {
   inferredFailure?: boolean;
   /** PostToolUseFailure: the error text. */
   error?: string;
+  /**
+   * PostToolUseFailure: the call was interrupted - the user stopped it, or the
+   * session did - rather than failing on its own, so there is nothing to learn
+   * from it.
+   */
+  isInterrupt?: boolean;
 }
 
 /**
@@ -101,6 +107,9 @@ function commandFailure(
   if (!failed && input.event !== "PostToolUse") return undefined;
   if (input.exitCode !== undefined) {
     if (input.exitCode === 0) return undefined;
+    // The harness says what the code means for a `grep` and the like: 1 is
+    // "no matches", not a failure.
+    if (input.exitCode === 1 && benignExit(input.command)) return undefined;
     return { code: input.exitCode, body: input.output ?? "" };
   }
   const text = failed ? (input.error ?? "") : (input.output ?? "");
@@ -120,12 +129,13 @@ function commandFailure(
 }
 
 /**
- * The capture input for a failed call, or undefined when the call succeeded or
- * the event is not a tool result.
+ * The capture input for a failed call, or undefined when the call succeeded,
+ * was interrupted, or the event is not a tool result.
  *
  * @param input - a parsed hook call.
  */
 export function toCapture(input: HookInput): CaptureInput | undefined {
+  if (input.isInterrupt === true) return undefined;
   const toolName = input.toolName ?? "unknown";
   const failed = commandFailure(input);
   if (failed !== undefined) {

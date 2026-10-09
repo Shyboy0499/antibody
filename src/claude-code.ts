@@ -1,22 +1,25 @@
 // The Claude Code adapter: hook payloads in, capture inputs and tool calls out.
 //
 // Claude Code runs a command hook with one JSON object on stdin. The fields
-// antibody reads, from the hooks reference:
+// antibody reads, from the hooks reference and the 2.1.282 bundle:
 //
 // - every event: `hook_event_name`, `session_id`, `cwd`, and `agent_id` inside
 //   a subagent;
-// - PostToolUse: `tool_name`, `tool_input`, and the result as `tool_output`
-//   (older versions call it `tool_response`, sometimes an object);
-// - PostToolUseFailure: `tool_name`, `tool_input` and `error`.
+// - PostToolUse: `tool_name`, `tool_input`, and the result as `tool_response`
+//   (older versions call it `tool_output`, sometimes an object);
+// - PostToolUseFailure: `tool_name`, `tool_input`, `error` and `is_interrupt`;
+//   it carries no result, and PostToolUse carries no `error`.
 //
-// A failed Bash command reports `Exit code N` at the start of its result text,
-// on a PostToolUse as well as on a PostToolUseFailure; toCapture() in
-// hook-input.ts turns that into the capture code's marker. A pipeline reports
-// its last command's status, so `npm test 2>&1 | tail -15` arrives as a
-// successful PostToolUse with no code anywhere (#131); a Bash result that
-// names no code but ends on an error line is therefore inferred as a failure
-// (looksFailed(), src/failure-hints.ts). Parsing never throws: anything
-// unexpected reads as undefined.
+// A real Bash result holds `stdout`, `stderr`, `interrupted`, `timedOutAfterMs`
+// and `noOutputExpected` - no numeric exit code, so outputExitCode() below
+// never reads one for this harness. A failed Bash command reports `Exit code N`
+// at the start of its result text instead, which toCapture() in hook-input.ts
+// turns into the capture code's marker. A pipeline reports its last command's
+// status, so `npm test 2>&1 | tail -15` arrives as a successful PostToolUse
+// with no code anywhere (#131); a Bash result that names no code but ends on an
+// error line is therefore inferred as a failure (looksFailed(),
+// src/failure-hints.ts). Parsing never throws: anything unexpected reads as
+// undefined.
 //
 // Output goes back the documented way: JSON on stdout with
 // `hookSpecificOutput.additionalContext`, which Claude Code shows the model as
@@ -104,6 +107,7 @@ export function parseHookInput(text: string): HookInput | undefined {
   if (exitCode !== undefined) input.exitCode = exitCode;
   const error = str(value.error);
   if (error !== undefined) input.error = error;
+  if (value.is_interrupt === true) input.isInterrupt = true;
   if (
     event === "PostToolUse" &&
     toolName === "Bash" &&

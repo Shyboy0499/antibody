@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { INFERRED_EXIT_CODE, looksFailed } from "../src/failure-hints";
+import {
+  INFERRED_EXIT_CODE,
+  benignExit,
+  looksFailed,
+} from "../src/failure-hints";
 import {
   SPEC_FAILED,
   SPEC_PASSED,
@@ -72,6 +76,31 @@ describe("failure-hints", () => {
         "&& npm test 2>&1 | tail -15",
       ].join("\n");
       expect(looksFailed(heredoc, TAP_FAILED)).toBe(true);
+    });
+  });
+
+  describe("an exit of 1 that is a meaning", () => {
+    it.each([
+      ["grep -rn TODO src"],
+      ['npm test 2>&1 | grep -B3 -A25 "not ok"'],
+      ["git diff --exit-code"],
+      ["git grep -n TODO"],
+      ["rg TODO src"],
+      ["find src -name '*.ts'"],
+      ["test -f package.json"],
+      ["[ -d src ]"],
+    ])("%s is not a failure", (command) => {
+      expect(benignExit(command)).toBe(true);
+    });
+
+    it.each([
+      ["npm test"],
+      ["git push"],
+      ["node app.js"],
+      ["grep -rn TODO src | npm test"],
+      [undefined],
+    ])("%s is judged by its code", (command) => {
+      expect(benignExit(command)).toBe(false);
     });
   });
 });

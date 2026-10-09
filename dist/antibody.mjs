@@ -496,13 +496,45 @@ const DISPLAY_GIT = /* @__PURE__ */ new Set([
 	"grep",
 	"blame"
 ]);
+const BENIGN_EXITS = /* @__PURE__ */ new Set([
+	"grep",
+	"rg",
+	"egrep",
+	"fgrep",
+	"find",
+	"diff",
+	"test",
+	"["
+]);
+const BENIGN_GIT = /* @__PURE__ */ new Set(["diff", "grep"]);
 const CHAIN = /\s*(?:&&|\|\||;|\||&(?!\d))\s*/;
+/** A command line as its non-empty segments, in order. */
+function segmentsOf(command) {
+	return (command ?? "").split(CHAIN).map((segment) => segment.trim()).filter((segment) => segment !== "");
+}
 /** Whether one segment of a command line only shows files or text. */
 function displayOnly(segment) {
 	const words = segment.trim().split(/\s+/);
 	const first = words[0] ?? "";
 	if (DISPLAY_COMMANDS.has(first)) return true;
 	return first === "git" && DISPLAY_GIT.has(words[1] ?? "");
+}
+/**
+* Whether an exit of 1 is a meaning rather than a failure for a command.
+*
+* Claude Code reads the last segment of the pipeline for this - `npm test |
+* grep -c ok` is a `grep`, and its 1 means "no matches", not a failed test -
+* so a code it reports is only read as a failure when the last segment does
+* not give it a meaning. Nothing is inferred from this: a pipeline that
+* reports no code at all is still judged by its output.
+*
+* @param command - the command line, when known.
+*/
+function benignExit(command) {
+	const words = (segmentsOf(command).at(-1) ?? "").split(/\s+/);
+	const first = words[0] ?? "";
+	if (first === "git") return BENIGN_GIT.has(words[1] ?? "");
+	return BENIGN_EXITS.has(first);
 }
 /**
 * Whether a shell command's output reads like a failure, for a harness that
@@ -518,7 +550,7 @@ function displayOnly(segment) {
 * @param output - everything the command printed.
 */
 function looksFailed(command, output) {
-	const segments = (command ?? "").split(CHAIN).map((segment) => segment.trim()).filter((segment) => segment !== "");
+	const segments = segmentsOf(command);
 	if (segments.length > 0 && segments.every(displayOnly)) return false;
 	if (RUNNER_FAILURE.test(output)) return true;
 	const last = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "").at(-1);
@@ -562,6 +594,7 @@ function commandFailure(input) {
 	if (!failed && input.event !== "PostToolUse") return void 0;
 	if (input.exitCode !== void 0) {
 		if (input.exitCode === 0) return void 0;
+		if (input.exitCode === 1 && benignExit(input.command)) return void 0;
 		return {
 			code: input.exitCode,
 			body: input.output ?? ""
@@ -582,12 +615,13 @@ function commandFailure(input) {
 	};
 }
 /**
-* The capture input for a failed call, or undefined when the call succeeded or
-* the event is not a tool result.
+* The capture input for a failed call, or undefined when the call succeeded,
+* was interrupted, or the event is not a tool result.
 *
 * @param input - a parsed hook call.
 */
 function toCapture(input) {
+	if (input.isInterrupt === true) return void 0;
 	const toolName = input.toolName ?? "unknown";
 	const failed = commandFailure(input);
 	if (failed !== void 0) {
@@ -696,6 +730,7 @@ function parseHookInput(text) {
 	if (exitCode !== void 0) input.exitCode = exitCode;
 	const error = str$2(value.error);
 	if (error !== void 0) input.error = error;
+	if (value.is_interrupt === true) input.isInterrupt = true;
 	if (event === "PostToolUse" && toolName === "Bash" && input.command !== void 0 && input.exitCode === void 0 && looksFailed(input.command, input.output ?? "")) input.inferredFailure = true;
 	return input;
 }
