@@ -101,6 +101,11 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
   antibody's MCP server is loaded. Your own plugins, hooks and MCP servers are not.
 - **Transcripts are kept.** They are written where Claude Code keeps sessions
   (`CLAUDE_CONFIG_DIR`, or `~/.claude`). The runner keeps a copy with the results.
+- **A usage limit stops the schedule.** A session that a limit stopped is not a
+  measurement, so its run is left out, and the runner stops there rather than pay for the
+  rest of the runs. It prints what is left and the command that finishes it:
+  `--resume bench/results/<time>` keeps the runs already done and runs only the rest.
+  `--keep-going` finishes the schedule anyway.
 
 | Option | Default | |
 | --- | --- | --- |
@@ -109,6 +114,8 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
 | `--runs N` | 3 | runs per arm |
 | `--arms on,off` | both | which arms to run |
 | `--out DIR` | `bench/results/<time>` | where the results go |
+| `--resume DIR` | | carry on from a results directory: its runs are kept |
+| `--keep-going` | | finish the schedule after a usage limit stopped a run |
 | `--timeout-min N` | 30 | when an agent is given up on and stopped |
 | `--keep` | | keep each run's workspace to look at |
 | `--port N` | 4817 | the project's port, which each run keeps busy |
