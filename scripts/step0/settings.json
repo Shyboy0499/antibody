@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >> <folder-for-payloads>/payloads.jsonl && echo >> <folder-for-payloads>/payloads.jsonl"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >> <folder-for-payloads>/payloads.jsonl && echo >> <folder-for-payloads>/payloads.jsonl"
+          }
+        ]
+      }
+    ]
+  }
+}
