@@ -134,6 +134,11 @@ Each milestone ends with something that can be checked, not just written.
   scripted diagnosis takes 4 seconds, about as long as a hand-over, so waiting for a
   peer's fix does not pay there. Real diagnoses take far longer, which the real runs
   will show.
+- **A run whose sessions were stopped is left out (done).** Claude Code reports `is_error`
+  and its own `terminal_reason` on every turn, and `completed` is the one that ran to the
+  end. Anything else - an API error, a usage limit, the turn or budget cap the benchmark
+  sets - is recorded as an agent error, and a run with one is excluded from the medians and
+  listed under the table rather than scored as a fleet that did nothing (#133).
 - Run an eight-agent Claude Code fleet with injection on and off, several times
   each. This needs a real run's budget.
 - Put the measured numbers at the top of the README.

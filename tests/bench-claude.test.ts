@@ -29,7 +29,8 @@ const PORT = 4820;
 
 // Records how it was started, runs the hooks it was given as Claude Code would
 // on a failing command, and answers the way `claude -p --output-format json`
-// does. STUB_MODE picks a transcript, no transcript, a crash or a hang.
+// does. STUB_MODE picks a transcript, no transcript, a crash, a hang, or a
+// session the provider stopped on a usage limit.
 const STUB = `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
@@ -69,10 +70,20 @@ else if (mode === "crash") {
     fs.writeFileSync(path.join(dir, session, "subagents", "agent-a.jsonl"), line("s1", 300, 50));
     fs.writeFileSync(path.join(dir, session, "subagents", "notes.txt"), "not a transcript");
   }
-  process.stdout.write(JSON.stringify({
-    type: "result", subtype: "success", is_error: false, num_turns: 3, total_cost_usd: 0.42,
-    usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 999, output_tokens: 30 },
-  }));
+  process.stdout.write(JSON.stringify(
+    mode === "limit"
+      ? {
+          type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0,
+          terminal_reason: "blocking_limit", result: "API Error: usage limit reached",
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }
+      : {
+          type: "result", subtype: "success", is_error: false, num_turns: 3, total_cost_usd: 0.42,
+          terminal_reason: "completed",
+          usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 999, output_tokens: 30 },
+        },
+  ));
 }
 `;
 
@@ -197,6 +208,7 @@ describe("the Claude Code driver", () => {
       transcripts: 2,
       subtype: "success",
       isError: false,
+      terminalReason: "completed",
       turns: 3,
       costUsd: 0.42,
     });
@@ -215,6 +227,27 @@ describe("the Claude Code driver", () => {
       tokensFrom: "result",
       transcripts: 0,
     });
+    // A turn that finished: nothing about it is left out.
+    expect(runs[0]?.invalid).toBe(false);
+  }, 60_000);
+
+  it("records a session the provider stopped as a failed agent, and leaves the run out", async () => {
+    const { runs, markdown } = await bench("limit");
+    const run = runs[0];
+    expect(run?.agents[0]?.error).toBe(
+      "Error: claude stopped before it worked: blocking_limit",
+    );
+    expect(run?.invalid).toBe(true);
+    expect(run?.invalidReason).toBe("sessions hit a usage limit");
+    // Nothing was measured, so nothing is scored: both arms lose their run, and
+    // the table says why instead of reading as a fleet that did nothing.
+    expect(markdown).toContain("| on | 0 | - |");
+    expect(markdown).toContain("2 runs left out: sessions hit a usage limit.");
+    const written = JSON.parse(
+      readFileSync(join(root, "out", "results.json"), "utf8"),
+    ) as RunRecord[];
+    expect(written.map((r) => r.invalid)).toEqual([true, true]);
+    expect(written[0]?.invalidReason).toBe("sessions hit a usage limit");
   }, 60_000);
 
   it("records a claude that crashed, with the end of what it said", async () => {

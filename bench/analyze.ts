@@ -38,6 +38,8 @@ export interface AgentResult {
   durationMs: number;
   /** Whether its task's hidden check passed. */
   done: boolean;
+  /** Why its session failed, when it did: it never did its work. */
+  error?: string;
 }
 
 /** One run of one arm. */
@@ -51,6 +53,10 @@ export interface RunSummary {
   /** Notices that carried a fix, and what every notice cost. */
   fixNotices: number;
   noticeTokens: number;
+  /** A session failed in it: left out of the medians, not scored as zero. */
+  invalid: boolean;
+  /** Why, in the table's words, such as "sessions hit a usage limit". */
+  invalidReason?: string;
 }
 
 const isFixNotice = (e: MemoryEvent) =>
@@ -113,6 +119,44 @@ export function trapOutcomes(
   });
 }
 
+/** A run the table left out, and why. */
+export interface LeftOut {
+  reason: string;
+  runs: number;
+}
+
+// The client's own `terminal_reason` values for a session the provider stopped
+// (bench/claude.ts). Everything else that ends a turn early is the harness or
+// the benchmark itself: the turn and budget caps it sets, or an agent that hung.
+const PROVIDER_STOP =
+  /blocking_limit|rapid_refill_breaker|prompt_too_long|model_error|api_error|turn_setup_failed/;
+
+/**
+ * How a run with failed sessions reads in the table.
+ *
+ * @param errors - each failed agent's error, as the runner recorded it.
+ */
+export function leftOutReason(errors: readonly string[]): string {
+  if (errors.some((error) => PROVIDER_STOP.test(error)))
+    return "sessions hit a usage limit";
+  return "agents were stopped before they finished";
+}
+
+/**
+ * The runs with failed sessions, grouped by why, for the lines under the table.
+ *
+ * @param runs - every run, in any order.
+ */
+export function leftOutRuns(runs: readonly RunSummary[]): LeftOut[] {
+  const counts = new Map<string, number>();
+  for (const run of runs) {
+    if (!run.invalid) continue;
+    const reason = run.invalidReason ?? "a session failed";
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return [...counts].map(([reason, runs]) => ({ reason, runs }));
+}
+
 /**
  * Summarise one run.
  *
@@ -129,6 +173,11 @@ export function summariseRun(
 ): RunSummary {
   const traps = trapOutcomes(events, entries);
   const notices = events.filter((e) => e.kind === "notice");
+  // A session that failed before it worked leaves a run whose numbers - almost
+  // no tokens, nothing done - are about the failure, not about the fleet.
+  const errors = agents
+    .map((agent) => agent.error)
+    .filter((error): error is string => typeof error === "string");
   return {
     arm,
     agents,
@@ -140,6 +189,8 @@ export function summariseRun(
     ),
     fixNotices: notices.filter(isFixNotice).length,
     noticeTokens: notices.reduce((sum, e) => sum + (e.tokens ?? 0), 0),
+    invalid: errors.length > 0,
+    ...(errors.length === 0 ? {} : { invalidReason: leftOutReason(errors) }),
   };
 }
 
@@ -156,13 +207,16 @@ export function median(values: readonly number[]): number {
 /** One arm across its runs. */
 export interface ArmSummary {
   arm: Arm;
+  /** The runs whose sessions finished; the left-out ones are counted below. */
   runs: number;
+  /** Runs left out: a session in them failed before it did its work. */
+  leftOut: number;
   /** Medians per run. */
   tokens: number;
   wallMs: number;
   diagnoses: number;
   repeatDiagnoses: number;
-  /** Tasks done, over tasks given, across the runs. */
+  /** Tasks done, over tasks given, across the valid runs. */
   done: number;
   given: number;
   /** Runs where some agent's tokens could not be measured. */
@@ -177,19 +231,23 @@ const runTokens = (run: RunSummary) =>
 
 /**
  * Each arm across its runs: the median run's tokens, wall time and
- * diagnoses, and the share of tasks done.
+ * diagnoses, and the share of tasks done. A run with a failed session is left
+ * out - counted, never scored - so a fleet that was stopped by a usage limit
+ * cannot read as a fleet that did nothing.
  *
  * @param runs - every run, in any order.
  */
 export function summariseArms(runs: readonly RunSummary[]): ArmSummary[] {
   return ARMS.filter((arm) => runs.some((r) => r.arm === arm)).map((arm) => {
-    const mine = runs.filter((r) => r.arm === arm);
+    const all = runs.filter((r) => r.arm === arm);
+    const mine = all.filter((run) => !run.invalid);
     const measured = mine
       .map(runTokens)
       .filter((t): t is number => t !== undefined);
     return {
       arm,
       runs: mine.length,
+      leftOut: all.length - mine.length,
       tokens: median(measured),
       // The fleet is done when its slowest agent is.
       wallMs: median(
@@ -225,10 +283,13 @@ const change = (off: number, on: number, fewer: string, more: string) => {
  *
  * @param arms - from summariseArms().
  * @param label - what ran, such as "8 Claude Code agents".
+ * @param leftOut - from leftOutRuns(): the runs a session failed in, which the
+ *   table does not count.
  */
 export function renderResults(
   arms: readonly ArmSummary[],
   label: string,
+  leftOut: readonly LeftOut[] = [],
 ): string {
   const lines = [
     `Benchmark: ${label}. Medians per run.`,
@@ -253,6 +314,14 @@ export function renderResults(
     lines.push(
       "",
       `Tokens leave out ${unmeasured} ${unmeasured === 1 ? "run" : "runs"} where an agent's transcript could not be read.`,
+    );
+  if (leftOut.length > 0)
+    lines.push(
+      "",
+      ...leftOut.map(
+        ({ reason, runs }) =>
+          `${runs} ${runs === 1 ? "run" : "runs"} left out: ${reason}.`,
+      ),
     );
   return `${lines.join("\n")}\n`;
 }

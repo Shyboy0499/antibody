@@ -146,10 +146,15 @@ describe("runBenchmark", () => {
       true,
     );
     expect(run.diagnoses).toBe(0);
+    // Two of the three sessions failed, so the run is not scored: it is counted
+    // and named under the table instead (#133).
+    expect(run.invalid).toBe(true);
+    expect(run.invalidReason).toBe("agents were stopped before they finished");
     expect(markdown).toContain("Benchmark: 3 stubs. Medians per run.");
-    expect(markdown).toContain("| off | 1 | - |");
-    expect(markdown).toContain("0 / 3 |");
-    expect(markdown).toContain("Tokens leave out 1 run");
+    expect(markdown).toContain("| off | 0 | - |");
+    expect(markdown).toContain(
+      "1 run left out: agents were stopped before they finished.",
+    );
 
     // The workspace was kept, with injection off in its memory.
     const kept = lines
@@ -165,7 +170,7 @@ describe("runBenchmark", () => {
     expect(existsSync(join(out, "run-1-off", "summary.json"))).toBe(true);
     expect(lines[0]).toBe("run 1 of 1, injection off: 3 stubs");
     expect(lines.at(-1)).toBe(
-      "  0 trap diagnoses (0 repeats), 0 of 3 tasks done",
+      "  run left out: agents were stopped before they finished (2 of 3 agents failed)",
     );
   });
 
