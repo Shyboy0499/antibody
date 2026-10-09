@@ -208,13 +208,14 @@ describe("runBenchmark", () => {
     });
     // One run happened, and the other five were not paid for.
     expect(runs).toHaveLength(1);
+    // The run the limit stopped is not a run done: it is run again on resume.
     expect(stopped).toEqual({
       reason: "sessions hit a usage limit",
-      done: 1,
+      done: 0,
       total: 6,
     });
     expect(lines).toContain(
-      "  stopping: sessions hit a usage limit (1 of 6 runs done)",
+      "  stopping: sessions hit a usage limit (0 of 6 runs done)",
     );
     // The arm that never ran is not in the table at all.
     expect(markdown).toContain("| on | 0 | - |");
@@ -222,7 +223,7 @@ describe("runBenchmark", () => {
     expect(markdown).toContain("1 run left out: sessions hit a usage limit.");
     expect(stoppedMessage(stopped!, out)).toBe(
       [
-        "Stopped early: sessions hit a usage limit; 1 of 6 runs done.",
+        "Stopped early: sessions hit a usage limit; 0 of 6 runs done.",
         `Rerun the same command with --resume ${out} once it clears: the runs already done are kept.`,
       ].join("\n"),
     );
@@ -294,6 +295,49 @@ describe("runBenchmark", () => {
     expect(
       JSON.parse(readFileSync(join(out, "results.json"), "utf8")),
     ).toHaveLength(2);
+  }, 60_000);
+
+  it("runs again a run a limit made invalid, on resume", async () => {
+    let limited = true;
+    let calls = 0;
+    const stub: Driver = {
+      describe: (n) => `${n} stubs`,
+      run: async () => {
+        calls++;
+        if (limited)
+          throw new Error("claude stopped before it worked: blocking_limit");
+        return {};
+      },
+    };
+    const first = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["on", "off"],
+      out,
+      timeoutMs: 5_000,
+      port: PORT,
+    });
+    expect(first.stopped?.done).toBe(0);
+    expect(calls).toBe(1);
+
+    // The limit has cleared: the same directory finishes the schedule, and the
+    // run the limit made invalid is run, not kept.
+    limited = false;
+    const again = await runBenchmark({
+      driver: stub,
+      agents: 1,
+      runs: 2,
+      arms: ["on", "off"],
+      out,
+      resume: out,
+      timeoutMs: 5_000,
+      port: PORT,
+    });
+    expect(again.stopped).toBeUndefined();
+    expect(calls).toBe(5);
+    expect(again.runs.filter((r) => r.invalid)).toHaveLength(0);
+    expect(again.markdown).not.toContain("left out");
   }, 60_000);
 
   it("runs scripted agents with injection on and off, and writes the results", async () => {

@@ -81,8 +81,8 @@ export interface Stopped {
 
 /**
  * The runs a directory already holds, by arm and run number, so a schedule can
- * carry on from it: a `summary.json` that does not parse is not a finished run
- * and is run again.
+ * carry on from it: a `summary.json` that does not parse, or a run a usage limit
+ * made invalid, is not a finished run and is run again.
  *
  * @param dir - the results directory of an earlier run.
  */
@@ -95,10 +95,9 @@ export function earlierRuns(dir: string): Map<string, RunRecord> {
     const file = join(dir, entry, "summary.json");
     if (!existsSync(file)) continue;
     try {
-      found.set(
-        `${match[2]}:${match[1]}`,
-        JSON.parse(readFileSync(file, "utf8")) as RunRecord,
-      );
+      const record = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
+      // A run a limit made invalid did not finish: it is run again.
+      if (record.invalid !== true) found.set(`${match[2]}:${match[1]}`, record);
     } catch {
       // Run it again.
     }
@@ -309,7 +308,7 @@ export async function runBenchmark(
       ) {
         stopped = {
           reason: run.invalidReason,
-          done: runs.length,
+          done: runs.filter((r) => r.invalid !== true).length,
           total,
         };
         o.log?.(
