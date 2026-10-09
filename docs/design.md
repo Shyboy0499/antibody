@@ -214,7 +214,8 @@ never break or block an agent.
 Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
 shell result that names no exit code at all is a failure when the command is not one that
 only displays text and its last non-empty line reads like an error (`npm ERR!`,
-`error:`/`fatal:`, `EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …). It is
+`error:`/`fatal:`, `# fail 1` and `not ok` from `node --test`, `EADDRINUSE`,
+`Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …). It is
 the last resort, checked only after a reported code and after Claude Code's own
 `Exit code N`; an inferred failure is recorded with `[exit code: 1]`. It exists because a
 pipeline reports its last command's status, so `npm test 2>&1 | tail -15` is a success to

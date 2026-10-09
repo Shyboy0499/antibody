@@ -465,6 +465,8 @@ const FAILURE_LINES = [
 	/\bELIFECYCLE\b/,
 	/^(?:FAIL|FAILED)\b/,
 	/\b\d+ (?:failed|failing)\b/,
+	/^# fail [1-9]/,
+	/^not ok\b/,
 	/^make(?:\[\d+\])?: \*\*\*/
 ];
 const DISPLAY_COMMANDS = /* @__PURE__ */ new Set([

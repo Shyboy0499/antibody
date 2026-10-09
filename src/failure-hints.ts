@@ -32,6 +32,8 @@ const FAILURE_LINES = [
   /\bELIFECYCLE\b/,
   /^(?:FAIL|FAILED)\b/,
   /\b\d+ (?:failed|failing)\b/,
+  /^# fail [1-9]/, // node --test's TAP summary; `# fail 0` is a pass
+  /^not ok\b/, // node --test's TAP failure line
   /^make(?:\[\d+\])?: \*\*\*/,
 ];
 
