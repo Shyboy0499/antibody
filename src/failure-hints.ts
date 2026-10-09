@@ -38,11 +38,24 @@ const FAILURE_LINES = [
 
 // A test runner's verdict is a block of lines, not one line: a failing
 // `node --test` run ends its TAP output with `# fail 7` and then
-// `# duration_ms …`, and its spec reporter with `ℹ fail 7` and a list of `✖`
-// files. Reading only the last line misses both, so the runner's own markers
-// are read wherever they appear in the output. `# fail 0` and `ℹ fail 0` are
-// how a passing run ends, and match nothing here.
-const RUNNER_FAILURE = /^(?:# fail [1-9]\d*|not ok\b|ℹ fail [1-9]\d*|✖ )/m;
+// `# duration_ms …`, its spec reporter with `ℹ fail 7` and a list of `✖`
+// files, and vitest, jest or mocha print `Tests  30 failed | 1028 passed` or
+// `3 failing` above a `Duration` line. Reading only the last line misses all
+// of them, so the runner's own verdict is read wherever it appears in the
+// output. A passing run ends on `# fail 0`, `ℹ fail 0`, or a summary with
+// nothing failed, and matches nothing here.
+const RUNNER_VERDICTS = [
+  /^# fail [1-9]\d*/, // node --test, TAP
+  /^not ok\b/, // node --test, TAP
+  /^ℹ fail [1-9]\d*/, // node --test, spec reporter
+  /^✖ /, // node --test, spec reporter
+  /^\s*(?:Test Files?|Test Suites?|Tests?):?\s+[^\n]*\b[1-9]\d* (?:failed|failing)\b/, // vitest, jest
+  /^\s*[1-9]\d* failing\s*$/, // mocha
+];
+const RUNNER_FAILURE = new RegExp(
+  RUNNER_VERDICTS.map((pattern) => `(?:${pattern.source})`).join("|"),
+  "m",
+);
 
 // Commands that only show files or text: whatever their output says, it is
 // what they were asked to print, not a failure.

@@ -9,6 +9,8 @@ import {
   SPEC_PASSED,
   TAP_FAILED,
   TAP_PASSED,
+  VITEST_FAILED,
+  VITEST_PASSED,
 } from "./fixtures/test-output";
 
 describe("failure-hints", () => {
@@ -66,6 +68,13 @@ describe("failure-hints", () => {
     it("reads the spec reporter's summary and its list of files", () => {
       expect(looksFailed("npm test 2>&1 | tail -15", SPEC_FAILED)).toBe(true);
       expect(looksFailed("npm test 2>&1 | tail -15", SPEC_PASSED)).toBe(false);
+    });
+
+    it("reads vitest's summary, which sits above its Duration line", () => {
+      expect(looksFailed("npm test 2>&1 | tail -15", VITEST_FAILED)).toBe(true);
+      expect(looksFailed("npm test 2>&1 | tail -15", VITEST_PASSED)).toBe(
+        false,
+      );
     });
 
     it("reads a chain whose first segment only appends to a file", () => {
