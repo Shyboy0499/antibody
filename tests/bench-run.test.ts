@@ -115,7 +115,7 @@ describe("parseArgs", () => {
     [["--agent", "aider"], "unknown agent: aider"],
     [
       ["--agent", "claude", "--max-budget-usd", "1", "--pipe"],
-      "--pipe is for the scripted agent",
+      "--pipe and --chain are for the scripted agent",
     ],
   ])("refuses %j", (argv, message) => {
     const o = parseArgs(argv);

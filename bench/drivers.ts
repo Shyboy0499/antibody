@@ -48,13 +48,15 @@ export interface FakeDriverOptions {
   patienceMs?: number;
   /** Run the tests through a pipe, as real agents do (#131). */
   pipe?: boolean;
+  /** With `pipe`, add a command after the pipeline, so its status is that one's. */
+  chain?: boolean;
 }
 
 /** The scripted agent of bench/fake-agent.ts. */
 export function fakeDriver(options: FakeDriverOptions): Driver {
   return {
     describe: (n) =>
-      `${n} scripted ${n === 1 ? "agent" : "agents"} (fixes recorded ${options.record === "asked" ? "when asked" : "once they work"}${options.pipe === true ? ", tests piped" : ""})`,
+      `${n} scripted ${n === 1 ? "agent" : "agents"} (fixes recorded ${options.record === "asked" ? "when asked" : "once they work"}${options.pipe === true ? `, tests piped${options.chain === true ? " with a trailing command" : ""}` : ""})`,
     async run(context) {
       const transcript = join(context.runDir, `${context.session}.jsonl`);
       const report = await runFakeAgent({
@@ -71,6 +73,7 @@ export function fakeDriver(options: FakeDriverOptions): Driver {
           ? {}
           : { patienceMs: options.patienceMs }),
         ...(options.pipe === undefined ? {} : { pipe: options.pipe }),
+        ...(options.chain === undefined ? {} : { chain: options.chain }),
       });
       const tokens = tokensBetween(
         readFileSync(transcript, "utf8"),

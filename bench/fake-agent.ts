@@ -19,12 +19,14 @@
 // and show the protocol at work - they are not a result about real agents.
 //
 // With `pipe: true` it runs the tests the way real Claude Code agents do, in a
-// shell: `npm test 2>&1 | tail -60` (#131). A pipeline reports its last
-// command's status, so the client calls a failing run a success and its result
-// carries no exit code at all. The agent asks the plugin's PreToolUse hook what
-// to run before each call, as the client does, and hands the hook the payload
-// the client would send for the status the shell reported: a failure when the
-// hook's rewrite made the shell report one, and a success whose result is only
+// shell: `npm test 2>&1 | tail -60` (#131), through the invocation the client
+// itself uses (clientInvocation() below), and with `chain: true` it adds a
+// trailing command, the shape whose status belongs to that command. The client
+// calls a piped run a success and its result carries no exit code at all unless
+// the rewrite made the shell report one. The agent asks the plugin's PreToolUse
+// hook what to run before each call, as the client does, and hands the hook the
+// payload the client would send for the status the shell reported: a failure
+// when the rewrite made the shell report one, and a success whose result is only
 // the output otherwise. What the hook makes of that is what the run measures.
 import { spawn } from "node:child_process";
 import { appendFileSync, cpSync, readFileSync } from "node:fs";
@@ -51,6 +53,32 @@ type TrapId = Trap["id"];
  * that names all four.
  */
 export const PIPED_TEST_COMMAND = "npm test 2>&1 | tail -60";
+
+/**
+ * The chained test command, for `chain: true`: the same pipeline with a command
+ * after it, which is how agents often write a call that also reports something.
+ * The shell's status is then the trailing command's, so neither the rewrite nor
+ * the shared output rule can see a failure the middle of the command hid - the
+ * shape #131 keeps open, measured rather than assumed.
+ */
+export const CHAINED_TEST_COMMAND = `${PIPED_TEST_COMMAND}; echo done`;
+
+/**
+ * One Bash call as Claude Code 2.1.282 really runs it - read off the client
+ * itself (scripts/step0): the command is eval'ed inside a `&&` list, and a
+ * command follows the eval.
+ *
+ * The shape decides what a rewrite can do: bash runs no ERR trap and honours no
+ * errexit for a command in a `&&` list, and a subshell inside one inherits that
+ * (tests/pipefail.test.ts pins both, live). A run that simply hands the command
+ * to `bash -c` measures a shell the client never uses, and flatters any rewrite
+ * that relies on either.
+ *
+ * @param command - the command as the hook would have the client run it.
+ */
+export function clientInvocation(command: string): string {
+  return `eval '${command.replaceAll("'", "'\\''")}' < /dev/null && pwd -P > /dev/null`;
+}
 
 /**
  * The shell a piped run uses, when the environment does not name one: `bash`,
@@ -111,6 +139,12 @@ export interface FakeAgentOptions {
    * the payload the client would send for the status the shell reported.
    */
   pipe?: boolean;
+  /**
+   * With `pipe`, add a command after the pipeline (`…; echo done`), so the
+   * shell's status is that command's and a failure inside the pipeline has to
+   * be read from the output.
+   */
+  chain?: boolean;
 }
 
 /** What it did. */
@@ -405,11 +439,15 @@ export async function runFakeAgent(
     // go through a shell as a pipeline, and the plugin's PreToolUse hook may
     // have put `set -o pipefail` in front of it.
     const command =
-      o.pipe === true ? await preTool(PIPED_TEST_COMMAND) : "npm test";
+      o.pipe === true
+        ? await preTool(
+            o.chain === true ? CHAINED_TEST_COMMAND : PIPED_TEST_COMMAND,
+          )
+        : "npm test";
     toolCall(command);
     const test =
       o.pipe === true
-        ? await shellRun(command, {
+        ? await shellRun(clientInvocation(command), {
             cwd: o.worktree,
             env: { ...process.env, npm_config_loglevel: "silent" },
           })
@@ -419,10 +457,10 @@ export async function runFakeAgent(
           });
     const output = `${test.out}${test.err}`;
     const trap = trapOf(output);
-    // A pipeline reports its last command's status, so an un-rewritten
-    // `npm test | tail` that failed exits 0: the client calls the call a
-    // success, and only the output says otherwise. The agent reads the output
-    // either way, which is what a real one does.
+    // The shell's status is the last command's, so a failing pipeline behind a
+    // trailing command exits 0: the client calls the call a success, and only
+    // the output says otherwise. The agent reads the output either way, which
+    // is what a real one does.
     const failed =
       test.code !== 0 || (o.pipe === true && looksFailed(command, output));
 

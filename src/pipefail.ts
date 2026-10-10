@@ -1,57 +1,38 @@
-// The PreToolUse rewrite, for Bash commands whose own status is not the whole
-// story (#131).
+// The PreToolUse rewrite for piped Bash commands (#131).
 //
-// A shell reports the last command's status: for a pipeline (`npm test 2>&1 |
-// tail -15`) and for a `;` chain (`npm test; echo done`) alike. So a failure
-// anywhere else in the command line reaches the hooks as a success, and Claude
-// Code reports no exit code for a Bash result at all (src/claude-code.ts). The
-// hook therefore wraps such a command, so the shell itself reports the truth:
+// A pipeline's exit status is its last command's, so `npm test 2>&1 | tail -15`
+// reaches the hooks as a success whatever `npm test` did, and Claude Code
+// reports no exit code for a Bash result (src/claude-code.ts). With
+// `set -o pipefail` in front, the shell's status is the first failing stage's,
+// and Claude Code's own failure path reports it as `Exit code N`, which
+// toCapture() already reads. So the hook adds that prefix to a piped command
+// and leaves every other command alone.
 //
-//   set -o pipefail 2>/dev/null; __antibody_failed=0
-//   trap '__antibody_failed=$?' ERR 2>/dev/null
-//   <the command, verbatim>
-//   __antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit
-//   "$__antibody_failed"; fi; exit "$__antibody_last"
+// This changes what the agent runs: a pipeline now fails when any stage fails,
+// so `grep pattern file | head` with no match reports a failure. Set
+// ANTIBODY_PIPEFAIL=0 to turn the rewrite off.
 //
-// `set -o pipefail` makes a pipeline's status its first failing stage's, and
-// the ERR trap fires for a command that failed outside a tested context - the
-// left of `&&` or `||`, the condition of `if`/`while`/`until`, and `! cmd` are
-// all exempt - so a failure the agent handled is not recorded, and the trap's
-// own `$?` keeps the failing command's code. The epilogue exits with it, which
-// Claude Code's failure path reports as `Exit code N`, which toCapture() already
-// reads.
+// The prefix is as far as a rewrite can go, measured against the client itself
+// (Claude Code 2.1.282, scripts/step0): it runs a Bash call as
 //
-// This changes what the agent runs: a call now fails when any command in it
-// failed without being handled, so a bare `grep -q pattern file` before a
-// passing command is a failure, and `cmd | head` can report 141 when `head`
-// closes early. Set ANTIBODY_PIPEFAIL=0 to turn the rewrite off.
-
+//   source <snapshot> && … && eval '<command>' < /dev/null && pwd -P >| <file>
+//
+// so the command is eval'ed inside a `&&` list. Bash runs no ERR trap and
+// honours no errexit for a command in such a list, and a subshell inside one
+// inherits that: only `set -o pipefail` still reaches the shell (the live
+// payloads in tests/pipefail.test.ts pin both halves). Wrapping the command to
+// read a failure out of it therefore reports nothing, which is why the rewrite
+// stops here and a pipeline that is not the last command of a `;` chain stays
+// unrecorded - the gap #131 keeps open.
 /** The environment variable that turns the rewrite off when set to 0. */
 export const PIPEFAIL_ENV = "ANTIBODY_PIPEFAIL";
 
 /**
- * What the rewrite puts in front of a command. The trailing space keeps the
- * command's own first line readable, and the `2>/dev/null` on both builtins
- * leaves a shell that has neither pipefail nor an ERR trap running the command
- * unchanged rather than printing about it.
+ * The prefix the rewrite puts in front of a piped command. The `2>/dev/null`
+ * leaves a shell without pipefail (dash, `sh`) running the command unchanged
+ * rather than printing an error over the agent's own output.
  */
-export const REWRITE_PREFIX =
-  "set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ";
-
-/**
- * What the rewrite puts after it, on a line of its own: a line of its own
- * because a command may end in a heredoc, whose terminator the epilogue would
- * otherwise swallow.
- */
-export const REWRITE_SUFFIX =
-  '__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; if [ "$__antibody_quiet" = 1 ] && [ "$__antibody_last" -eq 1 ]; then exit 0; fi; exit "$__antibody_last"';
-
-/** The prefix the rewrite used before the wrapper (#143). */
-export const LEGACY_PREFIX = "set -o pipefail; ";
-
-// The names the rewrite uses. A command that already carries one is left alone:
-// the rewrite is then idempotent, and unwrapCommand() has nothing to guess.
-const MARKER = "__antibody_";
+export const PIPEFAIL_PREFIX = "set -o pipefail 2>/dev/null; ";
 
 /** The harness name the PreToolUse hook is registered under. */
 export const PRE_TOOL_HARNESS = "claude-code-pretool";
@@ -60,11 +41,9 @@ export const PRE_TOOL_HARNESS = "claude-code-pretool";
 // `a || b` is not, and neither is a `2>&1` redirection.
 const PIPELINE = /(^|[^|])\|([^|]|$)/;
 
-// More than one command at the top level: `;`, a newline, a pipe (or `||`), or
-// an `&` that is not a redirection's `2>&1`. The reading is textual - a `;`
-// inside quotes counts - and wrapping a command that turns out to be one
-// command anyway costs nothing, because the epilogue then exits its status.
-const COMPOUND = /[;\n|]|&(?!\d)/;
+// What an earlier version of the rewrite wrote. Still taken off a payload, so a
+// command captured across that upgrade keeps the signature it had.
+const EARLIER_PREFIX = "set -o pipefail; ";
 
 /**
  * Whether a command line holds a pipeline, as the rewrite tells one.
@@ -81,51 +60,33 @@ export function hasPipeline(command: string): boolean {
 }
 
 /**
- * Whether the shell's own status for this command line cannot speak for all of
- * it, because it holds more than one command.
- *
- * @param command - a shell command line.
- */
-export function needsRewrite(command: string): boolean {
-  return COMPOUND.test(command);
-}
-
-/**
- * The command as the shell must run it: wrapped, so a failure anywhere in it
- * reaches Claude Code as an `Exit code N`. Undefined when it needs none: one
- * command, already wrapped, or the rewrite is switched off.
+ * The command with the pipefail prefix, or undefined when it needs none: not
+ * a pipeline, already set, or the rewrite is switched off.
  *
  * @param command - the Bash command the agent wrote.
  * @param env - the environment; ANTIBODY_PIPEFAIL=0 switches the rewrite off.
  */
-export function rewriteCommand(
+export function pipefailCommand(
   command: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   if (env[PIPEFAIL_ENV] === "0") return undefined;
-  if (!needsRewrite(command)) return undefined;
-  if (command.includes(MARKER)) return undefined;
-  return `${REWRITE_PREFIX}${command}\n${REWRITE_SUFFIX}`;
+  if (!hasPipeline(command)) return undefined;
+  if (/\bpipefail\b/.test(command)) return undefined;
+  return `${PIPEFAIL_PREFIX}${command}`;
 }
 
 /**
  * The command the agent wrote, from the command a PostToolUse payload carries:
- * the rewrite's prefix and epilogue taken off again, so one command keeps one
- * signature whether or not the shell was told to wrap it.
+ * a prefix the rewrite added is taken off again, so one command keeps one
+ * signature whether or not the shell was told to run it piped.
  *
  * @param command - the command as the harness reports it.
  */
 export function unwrapCommand(command: string): string {
-  // The `set -o pipefail; ` prefix of the earlier rewrite (#143) is still taken
-  // off: a payload from that version must keep the signature of its command.
-  if (command.startsWith(LEGACY_PREFIX))
-    return command.slice(LEGACY_PREFIX.length);
-  if (!command.startsWith(REWRITE_PREFIX)) return command;
-  const body = command.slice(REWRITE_PREFIX.length);
-  const epilogue = `\n${REWRITE_SUFFIX}`;
-  return body.endsWith(epilogue)
-    ? body.slice(0, body.length - epilogue.length)
-    : body;
+  for (const prefix of [PIPEFAIL_PREFIX, EARLIER_PREFIX])
+    if (command.startsWith(prefix)) return command.slice(prefix.length);
+  return command;
 }
 
 /**
@@ -134,7 +95,7 @@ export function unwrapCommand(command: string): string {
  * nothing, so the command runs unchanged.
  *
  * @param text - the JSON Claude Code wrote on stdin.
- * @param env - the environment, passed to rewriteCommand().
+ * @param env - the environment, passed to pipefailCommand().
  */
 export function pipefailResponse(
   text: string,
@@ -158,7 +119,7 @@ export function pipefailResponse(
   if (typeof input !== "object" || input === null) return "";
   const command = (input as { command?: unknown }).command;
   if (typeof command !== "string") return "";
-  const rewritten = rewriteCommand(command, env);
+  const rewritten = pipefailCommand(command, env);
   if (rewritten === undefined) return "";
   return JSON.stringify({
     hookSpecificOutput: {
