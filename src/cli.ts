@@ -216,7 +216,7 @@ export async function runHook(
 }
 
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
-       antibody hook claude-code-pretool   rewrite a piped Bash command (#131)
+       antibody hook claude-code-pretool   wrap a compound Bash command (#131)
        antibody hook gemini        handle one Gemini CLI hook call
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio
