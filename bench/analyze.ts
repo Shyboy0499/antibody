@@ -63,6 +63,32 @@ const isFixNotice = (e: MemoryEvent) =>
   e.kind === "notice" && FIX_NOTICE_KINDS.includes(e.notice as NoticeKind);
 
 /**
+ * Each entry's trap, keyed by the names an event may use for it.
+ *
+ * Events name an entry by its ID, or, while an error is too new to have one, as
+ * "new error <fingerprint>": a peer told to hold met it all the same. Both
+ * readers of the log - the table (trapOutcomes) and the coverage report
+ * (bench/coverage.ts) - tell the traps apart the same way.
+ *
+ * @param entries - the run's ANTIBODIES.md entries.
+ */
+export function trapOfEntries(
+  entries: readonly Entry[],
+): Map<string, Trap["id"]> {
+  const trapOfEntry = new Map<string, Trap["id"]>();
+  for (const entry of entries) {
+    const trap = trapOf(`${entry.title}\n${entry.raw}`);
+    if (trap === undefined) continue;
+    trapOfEntry.set(entry.id, trap.id);
+    trapOfEntry.set(
+      `new error ${entry.meta.sig ?? entry.fingerprint}`,
+      trap.id,
+    );
+  }
+  return trapOfEntry;
+}
+
+/**
  * How each trap went: who met it, who a fix reached in time, and who
  * diagnosed it. A fix counts only when it reached the agent before the agent
  * got past the error on its own (its `resolve` event for the entry).
@@ -74,18 +100,7 @@ export function trapOutcomes(
   events: readonly MemoryEvent[],
   entries: readonly Entry[],
 ): TrapOutcome[] {
-  // Events name an entry by its ID, or, while an error is too new to have
-  // one, as "new error <fingerprint>": a peer told to hold met it all the same.
-  const trapOfEntry = new Map<string, Trap["id"]>();
-  for (const entry of entries) {
-    const trap = trapOf(`${entry.title}\n${entry.raw}`);
-    if (trap === undefined) continue;
-    trapOfEntry.set(entry.id, trap.id);
-    trapOfEntry.set(
-      `new error ${entry.meta.sig ?? entry.fingerprint}`,
-      trap.id,
-    );
-  }
+  const trapOfEntry = trapOfEntries(entries);
   // Per trap and agent: when it met it, got a fix, and got past it.
   const met = new Map<string, Set<string>>();
   const fixedAt = new Map<string, number>();

@@ -111,10 +111,25 @@ Each milestone ends with something that can be checked, not just written.
   agents run through the committed bundle end to end, and the Claude Code driver
   against a stand-in for `claude` that runs the hooks it was given. It lives in this
   repository; a separate public benchmark repo is still open.
-- **The scripted runs are unpiped (recorded).** Their agents run `npm test` on its own, so
-  the four traps reach a hook as failures and the piped shape real agents use does not
-  appear in the numbers (#131). Rerunning them piped is what measures the fix; the
-  scripted agent has no switch for it yet.
+- **The scripted agent can pipe (added after the first runs).** The numbers below are
+  from agents that ran `npm test` on its own, so the piped shape real agents use does not
+  appear in them (#131). `--pipe` runs the tests as real agents do -
+  `npm test 2>&1 | tail -60`, in a shell - asks the plugin's PreToolUse hook what to run
+  first, and hands the hook the payload the client would send for the status the shell
+  reported: a failure when the rewrite made the shell report one, and a success whose
+  result is only the output otherwise. The coverage report reads the agent's own transcript
+  for the commands its traps came through, so a scripted run says `0 piped` until it is
+  rerun with `--pipe`. Rerunning the numbers piped is what measures the fix.
+- **A run says what it measured, and can be published (done).** `--publish DIR`
+  ([`bench/publish.ts`](../bench/publish.ts)) writes the directory a commit can hold: the
+  table and the record as they are, each run's summary, an `environment.md` with the
+  command, the fleet, the schedule, the cap, the antibody commit and the node version, and
+  a `coverage.md` from the agents' transcripts saying which traps each run met after a
+  piped command ([`bench/coverage.ts`](../bench/coverage.ts), #131). The files that name
+  this machine - the transcripts, the client's output files, the kept workspaces - are
+  never published, and an absolute path in the command itself is collapsed. **Checked:**
+  the scripted agents publish a complete directory whose files carry no machine path, and
+  the coverage report says their coverage is unknown rather than empty.
 - **Protocol fixes the benchmark found (done).** Scripted agents in the harness
   showed antibody's protocol holding its own fixes back:
   - a hook that claimed an error could read the memory just before a peer's fix
@@ -142,7 +157,8 @@ Each milestone ends with something that can be checked, not just written.
   limit also stops the schedule: the runner keeps what it has, prints what is left, and
   `--resume <dir>` finishes the rest without paying for the runs already done.
 - Run an eight-agent Claude Code fleet with injection on and off, several times
-  each. This needs a real run's budget.
+  each. This needs a real run's budget; `--publish` then writes the directory the
+  README's section cites, environment and coverage included.
 - Put the measured numbers at the top of the README.
 - **Done when:** the numbers are reproducible from a script in the benchmark.
 
