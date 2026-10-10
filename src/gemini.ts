@@ -29,6 +29,7 @@ import { looksFailed } from "./failure-hints";
 import { withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
 import { clip } from "./notice";
+import { hasPipeline } from "./pipefail";
 
 /** The harness name, as agent names and events use it. */
 export const GEMINI = "gemini";
@@ -141,9 +142,17 @@ export function parseGeminiInput(text: string): HookInput | undefined {
   if (toolName !== undefined && GEMINI_SHELL_TOOLS.includes(toolName)) {
     const shell = shellResult(content);
     input.output = shell.output;
-    if (shell.exitCode !== undefined) input.exitCode = shell.exitCode;
-    else if (
+    const reported = shell.exitCode;
+    if (reported !== undefined) input.exitCode = reported;
+    // A code a harness reports is believed, with one exception: a pipeline's
+    // status is its last command's, so the zero a failing
+    // `pnpm test 2>&1 | tail -15` reports is the tail's and says nothing about
+    // the tests. When the output reads like a failure, the output decides
+    // (src/failure-hints.ts, #131).
+    if (
       input.command !== undefined &&
+      (reported === undefined ||
+        (reported === 0 && hasPipeline(input.command))) &&
       looksFailed(input.command, shell.output)
     )
       input.inferredFailure = true;

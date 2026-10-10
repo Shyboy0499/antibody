@@ -592,15 +592,23 @@ const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
 * The exit code and output of a failed shell command, when the call is one.
 *
 * A code the harness reports is believed as it stands - a reported zero is a
-* success, never second-guessed. Without one, Claude Code's `Exit code N` is
-* read from wherever the harness put the text, and only then is an inferred
-* failure accepted.
+* success, never second-guessed - with one exception: a zero the adapter read
+* the output as a failure against, which is a pipeline whose last stage
+* succeeded while the command failed (#131). Without a code, Claude Code's
+* `Exit code N` is read from wherever the harness put the text, and only then is
+* an inferred failure accepted.
 */
 function commandFailure(input) {
 	const failed = input.event === "PostToolUseFailure";
 	if (!failed && input.event !== "PostToolUse") return void 0;
 	if (input.exitCode !== void 0) {
-		if (input.exitCode === 0) return void 0;
+		if (input.exitCode === 0) {
+			if (input.inferredFailure !== true) return void 0;
+			return {
+				code: 1,
+				body: input.output ?? ""
+			};
+		}
 		if (input.exitCode === 1 && benignExit(input.command)) return void 0;
 		return {
 			code: input.exitCode,
@@ -672,6 +680,20 @@ function toToolCall(input) {
 }
 /** The prefix the rewrite puts in front of a piped command. */
 const PIPEFAIL_PREFIX = "set -o pipefail; ";
+const PIPELINE = /(^|[^|])\|([^|]|$)/;
+/**
+* Whether a command line holds a pipeline, as the rewrite tells one.
+*
+* A pipeline's status is its last command's, which is the whole of #131: the
+* rewrite exists so a shell reports the failing stage's status, and an adapter
+* reads the output when its harness reports the last stage's zero instead
+* (src/gemini.ts).
+*
+* @param command - a shell command line.
+*/
+function hasPipeline(command) {
+	return PIPELINE.test(command);
+}
 /**
 * The command with the pipefail prefix, or undefined when it needs none: not
 * a pipeline, already set, or the rewrite is switched off.
@@ -681,7 +703,7 @@ const PIPEFAIL_PREFIX = "set -o pipefail; ";
 */
 function pipefailCommand(command, env = process.env) {
 	if (env["ANTIBODY_PIPEFAIL"] === "0") return void 0;
-	if (!/(^|[^|])\|([^|]|$)/.test(command)) return void 0;
+	if (!hasPipeline(command)) return void 0;
 	if (/\bpipefail\b/.test(command)) return void 0;
 	return `${PIPEFAIL_PREFIX}${command}`;
 }
@@ -4335,8 +4357,9 @@ function parseGeminiInput(text) {
 	if (toolName !== void 0 && GEMINI_SHELL_TOOLS.includes(toolName)) {
 		const shell = shellResult(content);
 		input.output = shell.output;
-		if (shell.exitCode !== void 0) input.exitCode = shell.exitCode;
-		else if (input.command !== void 0 && looksFailed(input.command, shell.output)) input.inferredFailure = true;
+		const reported = shell.exitCode;
+		if (reported !== void 0) input.exitCode = reported;
+		if (input.command !== void 0 && (reported === void 0 || reported === 0 && hasPipeline(input.command)) && looksFailed(input.command, shell.output)) input.inferredFailure = true;
 		return input;
 	}
 	input.output = content;
