@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 //#region src/lazy.ts
 /** node:child_process, loaded on first use. */
 const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
@@ -265,7 +267,7 @@ var CapTracker = class CapTracker {
 };
 //#endregion
 //#region src/paths.ts
-const { readFileSync: readFileSync$2, realpathSync, statSync: statSync$1 } = nodeFs;
+const { readFileSync: readFileSync$3, realpathSync, statSync: statSync$1 } = nodeFs;
 /** The file names the memory directory holds. */
 const KB_FILE = {
 	errors: "ANTIBODIES.md",
@@ -372,12 +374,12 @@ function findGitDirs(cwd) {
 			commonDir: realpathSync(dotGit)
 		};
 		if (stat?.isFile()) {
-			const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(readFileSync$2(dotGit, "utf8"));
+			const pointer = /^gitdir:[ \t]*(\S.*?)[ \t\r]*$/m.exec(readFileSync$3(dotGit, "utf8"));
 			if (pointer === null) return void 0;
 			const gitdir = resolve(dir, pointer[1]);
 			let common = gitdir;
 			try {
-				common = resolve(gitdir, readFileSync$2(join(gitdir, "commondir"), "utf8").trim());
+				common = resolve(gitdir, readFileSync$3(join(gitdir, "commondir"), "utf8").trim());
 			} catch {}
 			try {
 				return {
@@ -601,6 +603,10 @@ const withMarker = (body, code) => `${body.trimEnd()}\n[exit code: ${code}]`;
 function commandFailure(input) {
 	const failed = input.event === "PostToolUseFailure";
 	if (!failed && input.event !== "PostToolUse") return void 0;
+	if (!failed && input.maskedStatus !== void 0) return {
+		code: input.maskedStatus,
+		body: input.output ?? ""
+	};
 	if (input.exitCode !== void 0) {
 		if (input.exitCode === 0) {
 			if (input.inferredFailure !== true) return void 0;
@@ -678,29 +684,15 @@ function toToolCall(input) {
 	}
 	return call;
 }
-/**
-* What the rewrite puts in front of a command. The trailing space keeps the
-* command's own first line readable, and the `2>/dev/null` on both builtins
-* leaves a shell that has neither pipefail nor an ERR trap running the command
-* unchanged rather than printing about it.
-*/
-const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ";
-/**
-* What the rewrite puts after it, on a line of its own: a line of its own
-* because a command may end in a heredoc, whose terminator the epilogue would
-* otherwise swallow.
-*/
-const REWRITE_SUFFIX = "__antibody_last=$?; if [ \"$__antibody_failed\" -ne 0 ]; then exit \"$__antibody_failed\"; fi; if [ \"$__antibody_quiet\" = 1 ] && [ \"$__antibody_last\" -eq 1 ]; then exit 0; fi; exit \"$__antibody_last\"";
-const MARKER = "__antibody_";
+/** What the rewrite puts in front of a command, all on one line. */
+const REWRITE_PREFIX = String.raw`set -o pipefail 2>/dev/null; __antibody_f=0; __antibody_lb=0; __antibody_p=; trap '__antibody_s=$?; if [ -n "$__antibody_p" ]; then case $__antibody_p in "[["*) ;; grep\ *|grep|egrep\ *|egrep|fgrep\ *|fgrep|rg\ *|rg|find\ *|find|diff\ *|diff|test\ *|test|\[\ *|\[) if [ $__antibody_s -eq 1 ]; then __antibody_lb=1; elif [ $__antibody_s -gt 1 ]; then __antibody_f=$__antibody_s; __antibody_lb=0; fi;; *) if [ $__antibody_s -ne 0 ]; then __antibody_f=$__antibody_s; __antibody_lb=0; fi;; esac; fi; __antibody_p=$BASH_COMMAND' DEBUG 2>/dev/null; `;
+/** The epilogue's first line, which unwrapCommand() looks for. */
+const EPILOGUE_MARK = "\n__antibody_last=$?;";
 const PIPELINE = /(^|[^|])\|([^|]|$)/;
 const COMPOUND = /[;\n|]|&(?!\d)/;
+const MARKER = "__antibody_";
 /**
 * Whether a command line holds a pipeline, as the rewrite tells one.
-*
-* A pipeline's status is its last command's, which is the whole of #131: the
-* rewrite exists so a shell reports the failing stage's status, and an adapter
-* reads the output when its harness reports the last stage's zero instead
-* (src/gemini.ts).
 *
 * @param command - a shell command line.
 */
@@ -716,33 +708,76 @@ function hasPipeline(command) {
 function needsRewrite(command) {
 	return COMPOUND.test(command);
 }
+/** The directory the status files are kept in. */
+const STATUS_DIR = join(tmpdir(), "antibody-status");
 /**
-* The command as the shell must run it: wrapped, so a failure anywhere in it
-* reaches Claude Code as an `Exit code N`. Undefined when it needs none: one
-* command, already wrapped, or the rewrite is switched off.
+* The file a tool call's status is written to, or undefined for an id that is
+* not a plain token (so nothing is written under an unexpected name).
+*
+* @param toolUseId - the id Claude Code gives the tool call.
+*/
+function statusPathFor(toolUseId) {
+	if (!/^[A-Za-z0-9_-]{1,128}$/.test(toolUseId)) return void 0;
+	return join(STATUS_DIR, `${toolUseId}.status`);
+}
+/**
+* The command as the shell must run it: wrapped, so a failure anywhere in it is
+* noted in the status file. Undefined when it needs none: one command, already
+* wrapped, or the rewrite is switched off.
 *
 * @param command - the Bash command the agent wrote.
+* @param statusPath - where the failure's status is written, if anywhere.
 * @param env - the environment; ANTIBODY_PIPEFAIL=0 switches the rewrite off.
 */
-function rewriteCommand(command, env = process.env) {
+function rewriteCommand(command, statusPath, env = process.env) {
 	if (env["ANTIBODY_PIPEFAIL"] === "0") return void 0;
 	if (!needsRewrite(command)) return void 0;
 	if (command.includes(MARKER)) return void 0;
-	return `${REWRITE_PREFIX}${command}\n${REWRITE_SUFFIX}`;
+	const write = statusPath === void 0 ? "" : ` mkdir -p "${STATUS_DIR}" 2>/dev/null; printf '%s' "$__antibody_f" > "${statusPath}" 2>/dev/null;`;
+	return `${REWRITE_PREFIX}${command}${EPILOGUE_MARK} trap - DEBUG; if [ "$__antibody_last" -eq 1 ] && [ "$__antibody_lb" -eq 1 ] && [ "$__antibody_f" -eq 0 ]; then __antibody_last=0; fi;${write} ( exit "$__antibody_last" )`;
+}
+/**
+* Whether a command carries the rewrite, as the hook reads it back.
+*
+* @param command - the command as a PostToolUse payload carries it.
+*/
+function isWrapped(command) {
+	return command.startsWith(REWRITE_PREFIX) || command.startsWith("set -o pipefail; ");
 }
 /**
 * The command the agent wrote, from the command a PostToolUse payload carries:
-* the rewrite's prefix and epilogue taken off again, so one command keeps one
-* signature whether or not the shell was told to wrap it.
+* the rewrite taken off again, so one command keeps one signature whether or
+* not the shell was told to wrap it.
 *
 * @param command - the command as the harness reports it.
 */
 function unwrapCommand(command) {
 	if (command.startsWith("set -o pipefail; ")) return command.slice(17);
-	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ")) return command;
-	const body = command.slice(416);
-	const epilogue = `\n${REWRITE_SUFFIX}`;
-	return body.endsWith(epilogue) ? body.slice(0, body.length - epilogue.length) : body;
+	if (!command.startsWith(REWRITE_PREFIX)) return command;
+	const body = command.slice(REWRITE_PREFIX.length);
+	const at = body.lastIndexOf(EPILOGUE_MARK);
+	return at === -1 ? body : body.slice(0, at);
+}
+/**
+* The first failure a wrapped command recorded, read back and removed. Undefined
+* when there is none, or the file is missing or unreadable.
+*
+* @param toolUseId - the id of the tool call the file was written for.
+*/
+function readStatus(toolUseId) {
+	const path = statusPathFor(toolUseId);
+	if (path === void 0) return void 0;
+	let text;
+	try {
+		text = readFileSync(path, "utf8");
+	} catch {
+		return;
+	}
+	try {
+		rmSync(path, { force: true });
+	} catch {}
+	const code = Number(text.trim());
+	return Number.isInteger(code) && code > 0 && code < 256 ? code : void 0;
 }
 /**
 * The stdout for a PreToolUse hook call: the rewritten Bash input, or nothing
@@ -766,7 +801,7 @@ function pipefailResponse(text, env = process.env) {
 	if (typeof input !== "object" || input === null) return "";
 	const command = input.command;
 	if (typeof command !== "string") return "";
-	const rewritten = rewriteCommand(command, env);
+	const rewritten = rewriteCommand(command, statusPathFor(typeof event.tool_use_id === "string" ? event.tool_use_id : ""), env);
 	if (rewritten === void 0) return "";
 	return JSON.stringify({ hookSpecificOutput: {
 		hookEventName: "PreToolUse",
@@ -834,8 +869,13 @@ function parseHookInput(text) {
 	if (toolName !== void 0) input.toolName = toolName;
 	if (isRecord$5(value.tool_input)) {
 		const command = str$2(value.tool_input.command);
-		if (command !== void 0 && command.trim() !== "") input.command = unwrapCommand(command);
+		if (command !== void 0 && command.trim() !== "") {
+			input.command = unwrapCommand(command);
+			if (isWrapped(command)) input.wrapped = true;
+		}
 	}
+	const toolUseId = str$2(value.tool_use_id);
+	if (toolUseId !== void 0 && toolUseId !== "") input.toolUseId = toolUseId;
 	const result = value.tool_output ?? value.tool_response;
 	const output = outputText(result);
 	if (output !== void 0) input.output = output;
@@ -1433,7 +1473,7 @@ function afterOwnFix(meta) {
 }
 //#endregion
 //#region src/store.ts
-const { appendFileSync: appendFileSync$1, mkdirSync: mkdirSync$1, readFileSync: readFileSync$1, readdirSync, renameSync, rmSync, statSync, writeFileSync } = nodeFs;
+const { appendFileSync: appendFileSync$1, mkdirSync: mkdirSync$1, readFileSync: readFileSync$2, readdirSync, renameSync, rmSync: rmSync$1, statSync, writeFileSync } = nodeFs;
 /** Entry status values (§8). */
 const ENTRY_STATUSES = [
 	"open",
@@ -2037,7 +2077,7 @@ function nodeStoreFs() {
 	return {
 		async readFile(path) {
 			try {
-				return readFileSync$1(path, "utf8");
+				return readFileSync$2(path, "utf8");
 			} catch (error) {
 				if (errorCode$1(error) === "ENOENT") return void 0;
 				throw error;
@@ -2073,7 +2113,7 @@ function nodeStoreFs() {
 			}
 		},
 		async remove(path) {
-			rmSync(path, { force: true });
+			rmSync$1(path, { force: true });
 		},
 		async list(dir) {
 			try {
@@ -6548,6 +6588,10 @@ async function runHook(harness, io, deps = {}) {
 		if (adapter === void 0) throw new Error(`unknown harness: ${harness}`);
 		const input = adapter.parse(await io.readStdin());
 		if (input === void 0) return "";
+		if (input.wrapped === true && input.toolUseId !== void 0) {
+			const status = readStatus(input.toolUseId);
+			if (input.event === "PostToolUse" && input.command !== void 0 && !input.command.includes("||")) input.maskedStatus = status;
+		}
 		let memory;
 		try {
 			memory = memoryDir(input.cwd, deps.git, io.env);
@@ -6702,13 +6746,13 @@ async function main(argv, io, deps = {}) {
 }
 //#endregion
 //#region src/bin.ts
-const { fstatSync, readFileSync, writeSync } = nodeFs;
+const { fstatSync, readFileSync: readFileSync$1, writeSync } = nodeFs;
 const errorCode = (error) => error.code;
 /** All of stdin as text; nothing when it is a terminal. */
 async function readStdin() {
 	if (fstatSync(0).isCharacterDevice()) return "";
 	try {
-		return readFileSync(0, "utf8");
+		return readFileSync$1(0, "utf8");
 	} catch (error) {
 		if (errorCode(error) !== "EAGAIN") throw error;
 		const chunks = [];

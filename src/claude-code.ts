@@ -27,7 +27,7 @@
 import { looksFailed } from "./failure-hints";
 import { HOOK_EVENTS, withTranscript } from "./hook-input";
 import type { HookEvent, HookInput } from "./hook-input";
-import { unwrapCommand } from "./pipefail";
+import { isWrapped, unwrapCommand } from "./pipefail";
 import { clip } from "./notice";
 
 /** The harness name, as agent names and events use it. */
@@ -101,9 +101,13 @@ export function parseHookInput(text: string): HookInput | undefined {
     const command = str(value.tool_input.command);
     // The command the agent wrote, without the wrapper the PreToolUse rewrite
     // adds around it (src/pipefail.ts), so the same command keeps one signature.
-    if (command !== undefined && command.trim() !== "")
+    if (command !== undefined && command.trim() !== "") {
       input.command = unwrapCommand(command);
+      if (isWrapped(command)) input.wrapped = true;
+    }
   }
+  const toolUseId = str(value.tool_use_id);
+  if (toolUseId !== undefined && toolUseId !== "") input.toolUseId = toolUseId;
   const result = value.tool_output ?? value.tool_response;
   const output = outputText(result);
   if (output !== undefined) input.output = output;
