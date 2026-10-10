@@ -684,13 +684,13 @@ function toToolCall(input) {
 * leaves a shell that has neither pipefail nor an ERR trap running the command
 * unchanged rather than printing about it.
 */
-const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ";
+const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ";
 /**
 * What the rewrite puts after it, on a line of its own: a line of its own
 * because a command may end in a heredoc, whose terminator the epilogue would
 * otherwise swallow.
 */
-const REWRITE_SUFFIX = "__antibody_last=$?; if [ \"$__antibody_failed\" -ne 0 ]; then exit \"$__antibody_failed\"; fi; exit \"$__antibody_last\"";
+const REWRITE_SUFFIX = "__antibody_last=$?; if [ \"$__antibody_failed\" -ne 0 ]; then exit \"$__antibody_failed\"; fi; if [ \"$__antibody_quiet\" = 1 ] && [ \"$__antibody_last\" -eq 1 ]; then exit 0; fi; exit \"$__antibody_last\"";
 const MARKER = "__antibody_";
 const PIPELINE = /(^|[^|])\|([^|]|$)/;
 const COMPOUND = /[;\n|]|&(?!\d)/;
@@ -738,8 +738,8 @@ function rewriteCommand(command, env = process.env) {
 * @param command - the command as the harness reports it.
 */
 function unwrapCommand(command) {
-	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ")) return command;
-	const body = command.slice(321);
+	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ")) return command;
+	const body = command.slice(416);
 	const epilogue = `\n${REWRITE_SUFFIX}`;
 	return body.endsWith(epilogue) ? body.slice(0, body.length - epilogue.length) : body;
 }

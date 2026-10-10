@@ -195,6 +195,18 @@ describe("the wrapper in a real shell", () => {
   );
 
   it.skipIf(!shellWorks)(
+    "does not count a chain that ends on a grep that found nothing",
+    () => {
+      // Nothing failed before it, so the chain ends well: the shell reports 0.
+      const run = bash(
+        rewriteCommand("echo a; grep -q zzz package.json", {}) as string,
+      );
+      expect(run.status).toBe(0);
+      expect(run.stdout).toBe("a\n");
+    },
+  );
+
+  it.skipIf(!shellWorks)(
     "still counts a real failure beside a grep that found nothing",
     () => {
       const beside = bash(

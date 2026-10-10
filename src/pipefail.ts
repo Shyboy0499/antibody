@@ -36,7 +36,7 @@ export const PIPEFAIL_ENV = "ANTIBODY_PIPEFAIL";
  * unchanged rather than printing about it.
  */
 export const REWRITE_PREFIX =
-  "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ";
+  "set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ";
 
 /**
  * What the rewrite puts after it, on a line of its own: a line of its own
@@ -44,7 +44,7 @@ export const REWRITE_PREFIX =
  * otherwise swallow.
  */
 export const REWRITE_SUFFIX =
-  '__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; exit "$__antibody_last"';
+  '__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; if [ "$__antibody_quiet" = 1 ] && [ "$__antibody_last" -eq 1 ]; then exit 0; fi; exit "$__antibody_last"';
 
 // The names the rewrite uses. A command that already carries one is left alone:
 // the rewrite is then idempotent, and unwrapCommand() has nothing to guess.
