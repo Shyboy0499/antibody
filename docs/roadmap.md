@@ -114,7 +114,18 @@ Each milestone ends with something that can be checked, not just written.
 - **The scripted runs are unpiped (recorded).** Their agents run `npm test` on its own, so
   the four traps reach a hook as failures and the piped shape real agents use does not
   appear in the numbers (#131). Rerunning them piped is what measures the fix; the
-  scripted agent has no switch for it yet.
+  scripted agent has no switch for it yet. The coverage report below marks those runs
+  `unknown` rather than `0 piped`, so a published table cannot claim them as piped.
+- **A run says what it measured, and can be published (done).** `--publish DIR`
+  ([`bench/publish.ts`](../bench/publish.ts)) writes the directory a commit can hold: the
+  table and the record as they are, each run's summary, an `environment.md` with the
+  command, the fleet, the schedule, the cap, the antibody commit and the node version, and
+  a `coverage.md` from the agents' transcripts saying which traps each run met after a
+  piped command ([`bench/coverage.ts`](../bench/coverage.ts), #131). The files that name
+  this machine - the transcripts, the client's output files, the kept workspaces - are
+  never published, and an absolute path in the command itself is collapsed. **Checked:**
+  the scripted agents publish a complete directory whose files carry no machine path, and
+  the coverage report says their coverage is unknown rather than empty.
 - **Protocol fixes the benchmark found (done).** Scripted agents in the harness
   showed antibody's protocol holding its own fixes back:
   - a hook that claimed an error could read the memory just before a peer's fix
@@ -142,7 +153,8 @@ Each milestone ends with something that can be checked, not just written.
   limit also stops the schedule: the runner keeps what it has, prints what is left, and
   `--resume <dir>` finishes the rest without paying for the runs already done.
 - Run an eight-agent Claude Code fleet with injection on and off, several times
-  each. This needs a real run's budget.
+  each. This needs a real run's budget; `--publish` then writes the directory the
+  README's section cites, environment and coverage included.
 - Put the measured numbers at the top of the README.
 - **Done when:** the numbers are reproducible from a script in the benchmark.
 

@@ -54,6 +54,10 @@ Runs alternate which arm goes first.
 - **Repeat diagnoses:** the trap diagnoses beyond the first of each trap. This is
   the waste antibody exists to remove (design §2).
 - **Tasks done:** tasks whose hidden check passes.
+- **Coverage:** which of the traps an agent met after running a command with a pipe in
+  its session, read from the agent's transcript ([`coverage.ts`](coverage.ts)). The memory
+  says the traps were met; the transcripts say which commands they came through, which is
+  what tells a run that measured piped commands from one that did not (#131).
 
 The results table shows each arm's median run. A run a session failed in - a Claude Code
 turn that stopped on an API error or a usage limit, say - is **left out** rather than scored:
@@ -116,6 +120,7 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
 | `--out DIR` | `bench/results/<time>` | where the results go |
 | `--resume DIR` | | carry on from a results directory: its runs are kept |
 | `--keep-going` | | finish the schedule after a usage limit stopped a run |
+| `--publish DIR` | | also publish the results there, without this machine's paths |
 | `--timeout-min N` | 30 | when an agent is given up on and stopped |
 | `--keep` | | keep each run's workspace to look at |
 | `--port N` | 4817 | the project's port, which each run keeps busy |
@@ -132,9 +137,29 @@ Results go to `bench/results/<time>/`, which git ignores until results are publi
 
 - `results.md`: the table, a line saying what injection changed, and what was left out;
 - `results.json`: every run's summary, each with `invalid` and, when it is, why;
-- `run-<n>-<arm>/summary.json`: the run, agent by agent, with any error;
+- `run-<n>-<arm>/summary.json`: the run, agent by agent, with any error, and its coverage;
 - `run-<n>-<arm>/<session>.jsonl`: each agent's transcript. For Claude Code there is
   also `<session>.out.json`, which records its cost and turns.
+
+**Publishing.** `--publish bench/published/<date>` writes the directory a commit can hold
+([`publish.ts`](publish.ts)):
+
+```sh
+pnpm run bench -- --agent claude --max-budget-usd 1 --agents 8 --runs 3 \
+  --publish bench/published/2026-10-10
+```
+
+- `results.md` and `results.json`, copied as they are;
+- `run-<n>-<arm>/summary.json`, one per run;
+- `environment.md`: the command to rerun, the fleet, the schedule, each agent's cap, the
+  antibody commit, the node version and when it was published;
+- `coverage.md`: what each run's traps came through, from [`coverage.ts`](coverage.ts).
+
+The transcripts, the client's output files and the kept workspaces are **never** published:
+they name paths on this machine, and the repository's privacy guard rejects those. The
+coverage report says "unknown" for a run whose transcripts hold no command at all - the
+scripted agents run `npm test` themselves, without the client - rather than claiming it met
+nothing through a pipe.
 
 ## Adding a kind of agent
 

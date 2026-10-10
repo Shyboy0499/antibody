@@ -9,6 +9,10 @@
 // (bench/analyze.ts). In the off arm the hooks still record, silently, so both
 // arms are measured the same way. Runs alternate which arm goes first, so
 // nothing that drifts over a session favours one.
+//
+// A run also says what its traps came through (bench/coverage.ts), and the
+// results can be published (`--publish`): the artifacts a reader needs, and none
+// of the files that name this machine (bench/publish.ts).
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -36,8 +40,11 @@ import {
 } from "./analyze";
 import type { AgentResult, Arm, RunSummary } from "./analyze";
 import { claudeDriver } from "./claude";
+import { coverageOf } from "./coverage";
+import type { RunCoverage, SessionTranscript } from "./coverage";
 import { fakeDriver } from "./drivers";
 import type { Driver, DriverResult } from "./drivers";
+import { antibodyCommit, publishRun } from "./publish";
 import { BENCH_DIR, TASKS, checkFile } from "./tasks";
 import type { Task } from "./tasks";
 import { BENCH_PORT } from "./traps";
@@ -67,6 +74,12 @@ export interface BenchOptions {
   /** Keep going after a session was stopped by a usage limit. Stopping is the
    * default, because a limit that has started will not clear by itself. */
   keepGoing?: boolean;
+  /**
+   * Where to publish the results once they are written: the table, the record,
+   * each run's summary, the environment and the coverage - and none of the
+   * files that name this machine (bench/publish.ts).
+   */
+  publish?: string;
   log?: (line: string) => void;
 }
 
@@ -126,7 +139,29 @@ export interface AgentRecord extends AgentResult {
 }
 
 /** One run's summary, with each agent's full record. */
-export type RunRecord = Omit<RunSummary, "agents"> & { agents: AgentRecord[] };
+export type RunRecord = Omit<RunSummary, "agents"> & {
+  agents: AgentRecord[];
+  /** What the run's transcripts say about the commands its traps came through. */
+  coverage?: RunCoverage;
+};
+
+/**
+ * The transcripts a run left in its own directory. A subagent's transcript is
+ * `<session>.<n>.jsonl`, so the session is the name before the first dot, which
+ * keeps it with the session that started it.
+ *
+ * @param runDir - the run's directory.
+ */
+export function runTranscripts(runDir: string): SessionTranscript[] {
+  if (!existsSync(runDir)) return [];
+  return readdirSync(runDir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()
+    .map((name) => ({
+      session: name.slice(0, name.indexOf(".")),
+      text: readFileSync(join(runDir, name), "utf8"),
+    }));
+}
 
 /**
  * Check a task the way the benchmark scores it: the hidden check, in the
@@ -242,7 +277,15 @@ export async function runOnce(
         (b) => b.entry,
       )
     : [];
-  const summary = { ...summariseRun(arm, agents, events, entries), agents };
+  const summary = {
+    ...summariseRun(arm, agents, events, entries),
+    agents,
+    coverage: coverageOf({
+      transcripts: runTranscripts(runDir),
+      events,
+      entries,
+    }),
+  };
   writeFileSync(
     join(runDir, "summary.json"),
     `${JSON.stringify(summary, null, 2)}\n`,
@@ -341,6 +384,9 @@ const USAGE = `usage: pnpm run bench -- [options]
                         there are kept, and only the rest are run
   --keep-going          keep going after a usage limit stopped a session;
                         by default the schedule stops there
+  --publish DIR         also publish the results there: the table, the record,
+                        each run's summary, the environment and the coverage,
+                        and none of the files that name this machine
   --timeout-min N       give up on an agent after N minutes (default 30)
   --keep                keep each run's workspace
   --port N              the project's port, which each run keeps busy (default ${BENCH_PORT})
@@ -375,6 +421,7 @@ export function parseArgs(
     "--arms",
     "--out",
     "--resume",
+    "--publish",
     "--timeout-min",
     "--speed",
     "--record",
@@ -392,6 +439,7 @@ export function parseArgs(
     return {
       error: "--resume already says where the results go, so drop --out",
     };
+  const publish = flags.get("--publish");
 
   const count = (flag: string, fallback: number) => {
     const value = flags.get(flag);
@@ -460,6 +508,7 @@ export function parseArgs(
     port,
     ...(resume === undefined ? {} : { resume }),
     keepGoing: switches.has("--keep-going"),
+    ...(publish === undefined ? {} : { publish }),
   };
 }
 
@@ -489,6 +538,27 @@ export async function main(
   }
   const { markdown, stopped } = await runBenchmark({ ...options, log });
   log(`\n${markdown}\nResults in ${options.out}`);
+  if (options.publish !== undefined) {
+    const published = publishRun({
+      out: options.out,
+      dir: options.publish,
+      environment: {
+        // The command as a reader would rerun it, with this machine's paths
+        // (a `--resume`, an `--out`, a `--claude-bin`) collapsed.
+        command: `pnpm run bench -- ${argv.join(" ")}`,
+        fleet: options.driver.describe(options.agents),
+        agents: options.agents,
+        runs: options.runs,
+        arms: options.arms,
+        ...(options.driver.capUsd === undefined
+          ? {}
+          : { capUsd: options.driver.capUsd }),
+        commit: antibodyCommit(resolve(BENCH_DIR, "..")),
+        at: new Date(),
+      },
+    });
+    log(`Published ${published.length} files to ${options.publish}`);
+  }
   // A schedule that stopped early says what is left and how to finish it.
   if (stopped !== undefined) log(`\n${stoppedMessage(stopped, options.out)}`);
   return 0;
