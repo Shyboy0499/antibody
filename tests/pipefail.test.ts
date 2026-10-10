@@ -175,4 +175,41 @@ describe("the wrapper in a real shell", () => {
       expect(reads.stdout).toBe("rc=1\n");
     },
   );
+
+  it.skipIf(!shellWorks)(
+    "does not count a grep, diff or test that found nothing as a failure",
+    () => {
+      // Claude Code's own table reads exit 1 from these as "no match", not a
+      // failure; the wrapper follows it, so a chain that ends well is not
+      // recorded.
+      for (const command of [
+        "grep -q zzz package.json; echo done",
+        "diff <(echo a) <(echo b); echo done",
+        "test -f no-such-file; echo done",
+      ]) {
+        const run = bash(rewriteCommand(command, {}) as string);
+        expect(run.status, command).toBe(0);
+        expect(run.stdout, command).toMatch(/done\n$/);
+      }
+    },
+  );
+
+  it.skipIf(!shellWorks)(
+    "still counts a real failure beside a grep that found nothing",
+    () => {
+      const beside = bash(
+        rewriteCommand(
+          "grep -q zzz package.json; false; echo done",
+          {},
+        ) as string,
+      );
+      expect(beside.status).toBe(1);
+      const last = bash(
+        rewriteCommand("false; grep -q zzz package.json", {}) as string,
+      );
+      // The shell still reports the earlier failure; which command the
+      // recorder reads it against is a separate question, kept open.
+      expect(last.status).toBe(1);
+    },
+  );
 });

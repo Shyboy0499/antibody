@@ -684,7 +684,7 @@ function toToolCall(input) {
 * leaves a shell that has neither pipefail nor an ERR trap running the command
 * unchanged rather than printing about it.
 */
-const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_failed=$?' ERR 2>/dev/null; ";
+const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ";
 /**
 * What the rewrite puts after it, on a line of its own: a line of its own
 * because a command may end in a heredoc, whose terminator the epilogue would
@@ -738,8 +738,8 @@ function rewriteCommand(command, env = process.env) {
 * @param command - the command as the harness reports it.
 */
 function unwrapCommand(command) {
-	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_failed=$?' ERR 2>/dev/null; ")) return command;
-	const body = command.slice(95);
+	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ")) return command;
+	const body = command.slice(321);
 	const epilogue = `\n${REWRITE_SUFFIX}`;
 	return body.endsWith(epilogue) ? body.slice(0, body.length - epilogue.length) : body;
 }

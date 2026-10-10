@@ -36,7 +36,7 @@ export const PIPEFAIL_ENV = "ANTIBODY_PIPEFAIL";
  * unchanged rather than printing about it.
  */
 export const REWRITE_PREFIX =
-  "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_failed=$?' ERR 2>/dev/null; ";
+  "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) [ $__antibody_rc -eq 1 ] || __antibody_failed=$__antibody_rc;; *) __antibody_failed=$__antibody_rc;; esac' ERR 2>/dev/null; ";
 
 /**
  * What the rewrite puts after it, on a line of its own: a line of its own
