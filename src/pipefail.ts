@@ -20,6 +20,24 @@ export const PIPEFAIL_PREFIX = "set -o pipefail; ";
 /** The harness name the PreToolUse hook is registered under. */
 export const PRE_TOOL_HARNESS = "claude-code-pretool";
 
+// A pipe between two stages, and not a shell `||`: `a | b` is a pipeline,
+// `a || b` is not, and neither is a `2>&1` redirection.
+const PIPELINE = /(^|[^|])\|([^|]|$)/;
+
+/**
+ * Whether a command line holds a pipeline, as the rewrite tells one.
+ *
+ * A pipeline's status is its last command's, which is the whole of #131: the
+ * rewrite exists so a shell reports the failing stage's status, and an adapter
+ * reads the output when its harness reports the last stage's zero instead
+ * (src/gemini.ts).
+ *
+ * @param command - a shell command line.
+ */
+export function hasPipeline(command: string): boolean {
+  return PIPELINE.test(command);
+}
+
 /**
  * The command with the pipefail prefix, or undefined when it needs none: not
  * a pipeline, already set, or the rewrite is switched off.
@@ -32,7 +50,7 @@ export function pipefailCommand(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   if (env[PIPEFAIL_ENV] === "0") return undefined;
-  if (!/(^|[^|])\|([^|]|$)/.test(command)) return undefined;
+  if (!hasPipeline(command)) return undefined;
   if (/\bpipefail\b/.test(command)) return undefined;
   return `${PIPEFAIL_PREFIX}${command}`;
 }

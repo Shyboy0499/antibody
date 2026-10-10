@@ -315,10 +315,10 @@ The Gemini CLI and Codex CLI adapters were written against the payloads in each
 CLI's own source (Gemini CLI 0.62.0, Codex CLI 0.160.1), and the end-to-end check
 plays those payloads in every direction.
 
-All three read the same failure rule, `src/failure-hints.ts`: a shell result that names
-no exit code is a failure when the command is not one that only displays text and its
-output ends on an error line. That is what catches `npm test 2>&1 | tail -15`, whose
-exit status belongs to `tail`.
+All three read the same failure rule, `src/failure-hints.ts`: a shell result that names no
+exit code - or names a zero only a pipeline's last stage earned - is a failure when the
+command is not one that only displays text and its output ends on an error line. That is
+what catches `npm test 2>&1 | tail -15`, whose exit status belongs to `tail`.
 
 It works under any orchestrator, because it only needs the agents' own hooks:
 herdr, vibe-kanban, superset, claude-squad, agent-orchestrator, paperclip, or plain

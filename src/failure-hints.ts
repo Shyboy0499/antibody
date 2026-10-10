@@ -1,9 +1,11 @@
 // The one "this output reads like a failure" rule, shared by the harness
-// adapters that cannot read an exit code.
+// adapters that cannot read an exit code, or cannot trust the one they read.
 //
 // Codex CLI never reports one, and neither does Claude Code for a pipeline
 // whose last command succeeded: `npm test 2>&1 | tail -15` exits 0, so the
-// result text is the only evidence a failure happened (#131). One module,
+// result text is the only evidence a failure happened (#131). Gemini CLI
+// reports the zero such a pipeline earns, and only that: it says what the last
+// stage did, so the output decides there too (src/gemini.ts). One module,
 // because three copies of the rule would let the same command be a failure in
 // one harness and a success in another - the divergence the fingerprints exist
 // to prevent.

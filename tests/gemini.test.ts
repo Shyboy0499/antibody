@@ -37,6 +37,27 @@ const afterShell = (llmContent: unknown, extra: object = {}) =>
     tool_input: { command: "pnpm test", description: "Run the tests" },
     tool_response: { llmContent, returnDisplay: "…", ...extra },
   });
+// The same call, with the command the agent wrote: a pipeline's status is its
+// last stage's, so what Gemini reports for one is not the tests' status (#131).
+const shellCall = (command: string, llmContent: unknown) =>
+  parse({
+    hook_event_name: "AfterTool",
+    tool_name: "run_shell_command",
+    tool_input: { command, description: "Run the tests" },
+    tool_response: { llmContent, returnDisplay: "…" },
+  });
+// What Gemini 0.62.0 returns for a failing `pnpm test 2>&1 | tail -15`: the
+// status line is the tail's, and the error is the command's own.
+const pipedFailure = [
+  "<untrusted_context>",
+  "Output: > repo@1.0.0 test",
+  "> vitest run",
+  "",
+  "Error: Environment variable not found: DATABASE_URL.",
+  "Exit Code: 0",
+  "Process Group PGID: 48213",
+  "</untrusted_context>",
+].join("\n");
 
 describe("parseGeminiInput: events", () => {
   it("maps Gemini's events onto antibody's", () => {
@@ -158,6 +179,69 @@ describe("parseGeminiInput: tool results", () => {
     expect(succeeded?.exitCode).toBe(0);
     expect(succeeded?.inferredFailure).toBeUndefined();
     expect(toCapture(succeeded as HookInput)).toBeUndefined();
+  });
+
+  it("infers a piped failure the zero of its last stage cannot settle", () => {
+    const input = shellCall("pnpm test 2>&1 | tail -15", pipedFailure);
+    // The line is the tail's status, not the tests': the output decides.
+    expect(input?.exitCode).toBe(0);
+    expect(input?.inferredFailure).toBe(true);
+    const capture = toCapture(input as HookInput);
+    expect(capture).toMatchObject({
+      kind: "command",
+      command: "pnpm test 2>&1 | tail -15",
+      text: "> repo@1.0.0 test\n> vitest run\n\nError: Environment variable not found: DATABASE_URL.\n[exit code: 1]",
+    });
+    // The same failure in Claude Code's words gets the same signature, so a
+    // mixed fleet shares one entry (#131).
+    const claude = parseHookInput(
+      JSON.stringify({
+        ...base,
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm test 2>&1 | tail -15" },
+        tool_response: {
+          stdout:
+            "> repo@1.0.0 test\n> vitest run\n\nError: Environment variable not found: DATABASE_URL.",
+          stderr: "",
+          interrupted: false,
+          isImage: false,
+          noOutputExpected: false,
+        },
+      }),
+    );
+    const sign = (hook: HookInput) =>
+      classify(toCapture(hook)!, new TransientCounter())?.record;
+    expect(sign(input as HookInput)?.signature).toBe(
+      sign(claude as HookInput)?.signature,
+    );
+  });
+
+  it("leaves a piped success alone, and a zero for a pipeline that prints nothing", () => {
+    const succeeded = shellCall(
+      "pnpm test 2>&1 | tail -15",
+      "<untrusted_context>\nOutput: 12 passed\nExit Code: 0\n</untrusted_context>",
+    );
+    expect(succeeded?.inferredFailure).toBeUndefined();
+    expect(toCapture(succeeded as HookInput)).toBeUndefined();
+    // Nothing failure-like in the output: the silent case no output rule can
+    // reach, whatever the code says.
+    const quiet = shellCall(
+      "node -e 'process.exit(3)' 2>&1 | tail -5",
+      "<untrusted_context>\nOutput: 2\nExit Code: 0\n</untrusted_context>",
+    );
+    expect(quiet?.inferredFailure).toBeUndefined();
+    expect(toCapture(quiet as HookInput)).toBeUndefined();
+  });
+
+  it("does not second-guess a zero for a command that is not a pipeline", () => {
+    const plain = shellCall(
+      "pnpm test",
+      "<untrusted_context>\nOutput: npm ERR! code ELIFECYCLE\nExit Code: 0\n</untrusted_context>",
+    );
+    expect(plain?.exitCode).toBe(0);
+    expect(plain?.inferredFailure).toBeUndefined();
+    expect(toCapture(plain as HookInput)).toBeUndefined();
   });
 
   it("reads a tool's reported error as a failure", () => {

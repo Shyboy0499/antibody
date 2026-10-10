@@ -9,9 +9,10 @@
 // that starts with Claude Code's `Exit code N` - which is how a real Bash
 // result reports a failure, on a PostToolUse as well as on a
 // PostToolUseFailure; or a PostToolUse an adapter inferred a failure for
-// (src/failure-hints.ts) when the harness reported nothing at all. All three
-// become the `[exit code: N]` marker the ported capture code reads, so headline
-// extraction and keying by command line work unchanged.
+// (src/failure-hints.ts) when the harness reported no usable code at all, or a
+// zero a pipeline's last stage earned (src/gemini.ts). All three become the
+// `[exit code: N]` marker the ported capture code reads, so headline extraction
+// and keying by command line work unchanged.
 import { INFERRED_EXIT_CODE, benignExit } from "./failure-hints";
 import type { CaptureInput } from "./capture";
 import type { ToolCall } from "./resolve-detect";
@@ -44,12 +45,15 @@ export interface HookInput {
   command?: string;
   /** PostToolUse: the tool's output as text. */
   output?: string;
-  /** PostToolUse: an exit code the result reports, when it has one. */
+  /**
+   * PostToolUse: an exit code the result reports, when it has one.
+   */
   exitCode?: number;
   /**
-   * PostToolUse: the harness reported no exit code, but the adapter read the
-   * output as a failure. An inferred failure never overrides a reported code,
-   * and is only ever read after one.
+   * PostToolUse: the adapter read the output as a failure even though the
+   * harness reported no code, or reported a zero that cannot speak for the
+   * command - a pipeline's status is its last stage's. An inferred failure
+   * never overrides a reported non-zero code.
    */
   inferredFailure?: boolean;
   /** PostToolUseFailure: the error text. */
@@ -96,9 +100,11 @@ const withMarker = (body: string, code: number) =>
  * The exit code and output of a failed shell command, when the call is one.
  *
  * A code the harness reports is believed as it stands - a reported zero is a
- * success, never second-guessed. Without one, Claude Code's `Exit code N` is
- * read from wherever the harness put the text, and only then is an inferred
- * failure accepted.
+ * success, never second-guessed - with one exception: a zero the adapter read
+ * the output as a failure against, which is a pipeline whose last stage
+ * succeeded while the command failed (#131). Without a code, Claude Code's
+ * `Exit code N` is read from wherever the harness put the text, and only then is
+ * an inferred failure accepted.
  */
 function commandFailure(
   input: HookInput,
@@ -106,7 +112,14 @@ function commandFailure(
   const failed = input.event === "PostToolUseFailure";
   if (!failed && input.event !== "PostToolUse") return undefined;
   if (input.exitCode !== undefined) {
-    if (input.exitCode === 0) return undefined;
+    // A code the harness reports is believed as it stands, with one exception:
+    // a zero does not settle a call an adapter read as a failure, because the
+    // zero a pipeline reports is its last command's, not the command's
+    // (src/gemini.ts, #131).
+    if (input.exitCode === 0) {
+      if (input.inferredFailure !== true) return undefined;
+      return { code: INFERRED_EXIT_CODE, body: input.output ?? "" };
+    }
     // The harness says what the code means for a `grep` and the like: 1 is
     // "no matches", not a failure.
     if (input.exitCode === 1 && benignExit(input.command)) return undefined;
