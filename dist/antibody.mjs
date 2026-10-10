@@ -678,9 +678,22 @@ function toToolCall(input) {
 	}
 	return call;
 }
-/** The prefix the rewrite puts in front of a piped command. */
-const PIPEFAIL_PREFIX = "set -o pipefail; ";
+/**
+* What the rewrite puts in front of a command. The trailing space keeps the
+* command's own first line readable, and the `2>/dev/null` on both builtins
+* leaves a shell that has neither pipefail nor an ERR trap running the command
+* unchanged rather than printing about it.
+*/
+const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_failed=$?' ERR 2>/dev/null; ";
+/**
+* What the rewrite puts after it, on a line of its own: a line of its own
+* because a command may end in a heredoc, whose terminator the epilogue would
+* otherwise swallow.
+*/
+const REWRITE_SUFFIX = "__antibody_last=$?; if [ \"$__antibody_failed\" -ne 0 ]; then exit \"$__antibody_failed\"; fi; exit \"$__antibody_last\"";
+const MARKER = "__antibody_";
 const PIPELINE = /(^|[^|])\|([^|]|$)/;
+const COMPOUND = /[;\n|]|&(?!\d)/;
 /**
 * Whether a command line holds a pipeline, as the rewrite tells one.
 *
@@ -695,17 +708,40 @@ function hasPipeline(command) {
 	return PIPELINE.test(command);
 }
 /**
-* The command with the pipefail prefix, or undefined when it needs none: not
-* a pipeline, already set, or the rewrite is switched off.
+* Whether the shell's own status for this command line cannot speak for all of
+* it, because it holds more than one command.
+*
+* @param command - a shell command line.
+*/
+function needsRewrite(command) {
+	return COMPOUND.test(command);
+}
+/**
+* The command as the shell must run it: wrapped, so a failure anywhere in it
+* reaches Claude Code as an `Exit code N`. Undefined when it needs none: one
+* command, already wrapped, or the rewrite is switched off.
 *
 * @param command - the Bash command the agent wrote.
 * @param env - the environment; ANTIBODY_PIPEFAIL=0 switches the rewrite off.
 */
-function pipefailCommand(command, env = process.env) {
+function rewriteCommand(command, env = process.env) {
 	if (env["ANTIBODY_PIPEFAIL"] === "0") return void 0;
-	if (!hasPipeline(command)) return void 0;
-	if (/\bpipefail\b/.test(command)) return void 0;
-	return `${PIPEFAIL_PREFIX}${command}`;
+	if (!needsRewrite(command)) return void 0;
+	if (command.includes(MARKER)) return void 0;
+	return `${REWRITE_PREFIX}${command}\n${REWRITE_SUFFIX}`;
+}
+/**
+* The command the agent wrote, from the command a PostToolUse payload carries:
+* the rewrite's prefix and epilogue taken off again, so one command keeps one
+* signature whether or not the shell was told to wrap it.
+*
+* @param command - the command as the harness reports it.
+*/
+function unwrapCommand(command) {
+	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; trap '__antibody_failed=$?' ERR 2>/dev/null; ")) return command;
+	const body = command.slice(95);
+	const epilogue = `\n${REWRITE_SUFFIX}`;
+	return body.endsWith(epilogue) ? body.slice(0, body.length - epilogue.length) : body;
 }
 /**
 * The stdout for a PreToolUse hook call: the rewritten Bash input, or nothing
@@ -713,7 +749,7 @@ function pipefailCommand(command, env = process.env) {
 * nothing, so the command runs unchanged.
 *
 * @param text - the JSON Claude Code wrote on stdin.
-* @param env - the environment, passed to pipefailCommand().
+* @param env - the environment, passed to rewriteCommand().
 */
 function pipefailResponse(text, env = process.env) {
 	let value;
@@ -729,7 +765,7 @@ function pipefailResponse(text, env = process.env) {
 	if (typeof input !== "object" || input === null) return "";
 	const command = input.command;
 	if (typeof command !== "string") return "";
-	const rewritten = pipefailCommand(command, env);
+	const rewritten = rewriteCommand(command, env);
 	if (rewritten === void 0) return "";
 	return JSON.stringify({ hookSpecificOutput: {
 		hookEventName: "PreToolUse",
@@ -797,7 +833,7 @@ function parseHookInput(text) {
 	if (toolName !== void 0) input.toolName = toolName;
 	if (isRecord$5(value.tool_input)) {
 		const command = str$2(value.tool_input.command);
-		if (command !== void 0 && command.trim() !== "") input.command = command.startsWith("set -o pipefail; ") ? command.slice(17) : command;
+		if (command !== void 0 && command.trim() !== "") input.command = unwrapCommand(command);
 	}
 	const result = value.tool_output ?? value.tool_response;
 	const output = outputText(result);
@@ -6546,7 +6582,7 @@ async function runHook(harness, io, deps = {}) {
 	return 0;
 }
 const USAGE = `usage: antibody hook claude-code   handle one Claude Code hook call
-       antibody hook claude-code-pretool   rewrite a piped Bash command (#131)
+       antibody hook claude-code-pretool   wrap a compound Bash command (#131)
        antibody hook gemini        handle one Gemini CLI hook call
        antibody hook codex         handle one Codex CLI hook call
        antibody mcp [harness]      serve the agent tools over MCP on stdio

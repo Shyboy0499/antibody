@@ -8,6 +8,7 @@ import {
 } from "../src/claude-code";
 import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
+import { REWRITE_PREFIX, REWRITE_SUFFIX } from "../src/pipefail";
 import { callOutcome } from "../src/resolve-detect";
 import { TAP_FAILED, VITEST_FAILED } from "./fixtures/test-output";
 
@@ -511,6 +512,33 @@ describe("issue #131: a call whose pipeline reported success", () => {
     expect(input.exitCode).toBe(0);
     expect(input.inferredFailure).toBeUndefined();
     expect(toCapture(input)).toBeUndefined();
+  });
+
+  it("records the command the agent wrote, from the wrapper the shell ran", () => {
+    const wrapped = `${REWRITE_PREFIX}make test; echo done\n${REWRITE_SUFFIX}`;
+    // A plain PostToolUse the wrapper made fail: the aggregate status arrives as
+    // the failure the client reports, and the command keeps its own text.
+    const failed = parseHookInput(
+      payload({
+        hook_event_name: "PostToolUseFailure",
+        tool_name: "Bash",
+        tool_input: { command: wrapped },
+        error: "Exit code 2\nmake: *** [all] Error 2",
+      }),
+    ) as HookInput;
+    expect(failed.command).toBe("make test; echo done");
+    expect(toCapture(failed)).toEqual({
+      kind: "command",
+      toolName: "Bash",
+      command: "make test; echo done",
+      text: "make: *** [all] Error 2\n[exit code: 2]",
+    });
+    // The wrapper is not part of the command a success carries either.
+    const succeeded = bash({
+      tool_input: { command: wrapped },
+      tool_response: { stdout: "done", stderr: "" },
+    });
+    expect(succeeded.command).toBe("make test; echo done");
   });
 
   it("infers nothing for a non-shell tool, or a shell call with no command", () => {
