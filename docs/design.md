@@ -208,15 +208,14 @@ never break or block an agent.
 | --- | --- | --- | --- |
 | Claude Code | `PostToolUse` and `PostToolUseFailure`: a non-zero `exitCode` on the result when one is reported, Claude Code's `Exit code N` at the start of the result or the error, else the shared output rule | `hookSpecificOutput.additionalContext` on every event | Built (M2): the repository is the plugin, with `hooks/hooks.json` and an MCP server declared in `.claude-plugin/plugin.json`. Successful `PostToolUse` calls resolve watched entries; `SessionStart` and `UserPromptSubmit` deliver held fixes and start a turn; `SessionEnd` releases the session's claims. |
 | Codex CLI | `PostToolUse` in `~/.codex/hooks.json`, whose shell result is the output text without the exit code | `hookSpecificOutput.additionalContext`, as Claude Code | Built (M3), checked against the 0.160.1 source: `antibody setup codex` writes the hooks, and Codex runs them once trusted in `/hooks`. A shell failure is inferred from the output's last line by the shared rule; the MCP server is added with `codex mcp add`. |
-| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error, and the shared output rule when it carries no code, or a zero only a pipeline's last stage earned | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
+| Gemini CLI | `AfterTool`, whose shell result carries an `Exit Code: N` line rather than an error, and the shared output rule when it carries none | `hookSpecificOutput.additionalContext`, which Gemini appends to the tool result in `<hook_context>` | Built (M3), checked against the 0.62.0 source: `antibody setup gemini` writes the hooks and the MCP server into `~/.gemini/settings.json`. An extension would need this repository's root `hooks/hooks.json`, which the Claude Code plugin owns. |
 | Cursor, OpenCode, Aider, others | None | None | MCP server only. Agents pull fixes by calling `antibody_lookup`, prompted by one line in `AGENTS.md`. |
 
 Every adapter reads one failure rule, [`src/failure-hints.ts`](../src/failure-hints.ts): a
-shell result that names no exit code at all - or names a zero that only the last stage of a
-pipeline earned, which says nothing about the command (#131) - is a failure when it carries
-a test runner's verdict, or when its last non-empty line reads like an error (`npm ERR!`,
-`error:`/`fatal:`, `EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …), and
-the command is not one that only displays text. The runner's verdict is read as a block, not as the last line:
+shell result that names no exit code at all is a failure when it carries a test runner's
+verdict, or when its last non-empty line reads like an error (`npm ERR!`, `error:`/`fatal:`,
+`EADDRINUSE`, `Cannot find module`, `ERR_PNPM_*`, `ELIFECYCLE`, …), and the command is not
+one that only displays text. The runner's verdict is read as a block, not as the last line:
 a failing `node --test` ends its TAP output with `# fail 7` and then `# duration_ms …`, its
 spec reporter with `ℹ fail 7` and a list of `✖` files, and vitest, jest or mocha print
 `Tests  30 failed | 1028 passed` or `3 failing` above a `Duration` line - so a `# fail 1`,
@@ -239,40 +238,30 @@ Claude Code itself decides a Bash call's outcome from the last segment of the pi
 reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
 and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
 there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
-a call the harness marks `is_interrupt` is not recorded at all. **Known residual false
-positive, in a compound command:** a chain that ends on a `grep`, `diff` or `test` that
-found nothing (`grep -q pattern file; echo done`) exits 1 from that command, because the
-client's bash runs its own code around the command, so the wrapper cannot tell which
-command failed; Claude Code then reports `Exit code 1` and the chain is recorded. A
-failure before such a command is still recorded correctly. Fixing it needs the command
-text split at its separators, which is the next step if this shape matters in practice. What it cannot mirror is
-the shell's own account of a compound command, because a shell reports the *last* command's
-status: a pipeline (`npm test 2>&1 | tail -15`) and a `;` chain (`npm test; echo done`)
-both reach the hooks as successes whatever failed inside them, and the output rule above
-only covers the failures that print something. The rest is closed by a PreToolUse hook
-(`antibody hook claude-code-pretool`, src/pipefail.ts) that wraps a compound command, so the
-shell itself reports the truth:
+a call the harness marks `is_interrupt` is not recorded at all. What it cannot mirror is
+the pipeline's status, because a call whose last segment succeeded reports nothing: the
+output rule above covers the failures that print something. The rest is closed by a
+PreToolUse hook (`antibody hook claude-code-pretool`, src/pipefail.ts) that prefixes a
+piped Bash command with `set -o pipefail 2>/dev/null;`, so the shell reports the failing
+stage's status, and Claude Code's own `Exit code N` path then records it. The prefix
+changes what the agent runs: a pipeline now fails when any stage fails, so `grep pattern
+file | head` with no match reports a failure, and `cmd | head` can report 141 when `head`
+closes early. Set `ANTIBODY_PIPEFAIL=0` to turn it off. Only Claude Code, through the
+plugin's hooks, has the rewrite; Gemini CLI and Codex CLI do not yet. Captured commands
+drop the prefix, so one command keeps one signature.
 
-```sh
-set -o pipefail 2>/dev/null; __antibody_failed=0
-trap '__antibody_failed=$?' ERR 2>/dev/null
-<the command, verbatim>
-__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; exit "$__antibody_last"
-```
-
-`set -o pipefail` makes a pipeline's status its first failing stage's, and the `ERR` trap
-fires for a command that failed **outside a tested context** - the left of `&&` or `||`, the
-condition of `if`/`while`/`until`, and `! cmd` are exempt - so a failure the agent handled
-is not recorded, the agent's own reading of `$?` is untouched, and the epilogue exits with
-the failing command's code, which Claude Code's `Exit code N` path then records. One command,
-whose status speaks for itself, is left alone. The wrapper changes what the agent runs: a
-call now fails when any command in it failed without being handled, so a bare
-`grep -q pattern file` before a passing command is a failure, and `cmd | head` can report 141
-when `head` closes early. Two cases stay unrecorded: a failure inside a tested context that a
-later command masks (`false && b; echo done`), and a background command's (`cmd &`), whose
-status no shell reports. Set `ANTIBODY_PIPEFAIL=0` to turn the rewrite off. Only Claude Code,
-through the plugin's hooks, has the rewrite; Gemini CLI and Codex CLI do not yet. Captured
-commands drop the wrapper, so one command keeps one signature.
+The prefix is as far as the rewrite can go, and that was measured rather than assumed
+(Claude Code 2.1.282, `scripts/step0`): the client runs a Bash call as `… && eval
+'<command>' < /dev/null && pwd -P >| <file>`, so the command is eval'ed inside a `&&` list,
+where `errexit` is suppressed for it, and a subshell inside one inherits that. An ERR trap
+there is not merely suppressed but **shell-dependent**: it does not run in the shell the
+client uses on Windows (Git Bash 5.3.9, the live session) and does run in Ubuntu's bash 5.2
+(the CI here). A wrapper that read a `;` chain's failure out of the shell was live-checked,
+reported nothing on the client's own Windows shell, and was dropped: a rewrite whose effect
+differs per machine leaves one fleet recording what another does not.
+`tests/pipefail.test.ts` pins the shape so it is not rebuilt by accident. A `;` chain whose
+last command succeeds (`npm test | tail -60; echo done`) therefore stays unrecorded unless
+its output names the failure, which #131 keeps open.
 
 ### 5.1 MCP tools
 

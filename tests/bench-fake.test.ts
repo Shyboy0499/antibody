@@ -2,8 +2,9 @@
 // committed bundle: in a fleet with injection off it diagnoses every trap
 // itself; with injection on, and its fixes recorded once they work, a peer's
 // fix reaches it; and it stops waiting for a peer that leaves without one.
-// Piped, it does the same through `npm test 2>&1 | tail -60`, the shape #131 is
-// about, and hands the hook the payload the client would have sent for it.
+// Piped, it does the same through `npm test 2>&1 | tail -60; echo done`, the
+// shape #131 is about, run through the invocation the client itself uses, and
+// hands the hook the payload the client would have sent for it.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -20,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { shellCommands } from "../bench/coverage";
 import {
   BENCH_SHELL_ENV,
+  PIPED_TEST_COMMAND,
+  clientInvocation,
   testRunPayload,
   runFakeAgent,
 } from "../bench/fake-agent";
@@ -30,6 +33,7 @@ import type { Workspace } from "../bench/workspace";
 import { parseHookInput } from "../src/claude-code";
 import { toCapture } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
+import { PIPEFAIL_PREFIX } from "../src/pipefail";
 import { tokensBetween } from "../src/transcript";
 
 const BUNDLE = resolve("dist", "antibody.mjs");
@@ -101,11 +105,11 @@ describe("the payload of a test run", () => {
     );
 
   it("hands a piped failure to the hook as the success the client saw", () => {
-    // The shell reported the tail's status, so the client calls the run a
-    // success and its result carries the output and no exit code (#131). The
+    // The shell reported the last command's status, so the client calls the run
+    // a success and its result carries the output and no exit code (#131). The
     // shared rule is the only thing that can read the failure.
     const payload = testRunPayload(
-      "set -o pipefail; npm test 2>&1 | tail -60",
+      `${PIPEFAIL_PREFIX}${PIPED_TEST_COMMAND}`,
       0,
       PIPED_FAILURE,
     );
@@ -123,7 +127,7 @@ describe("the payload of a test run", () => {
 
   it("hands a rewritten failure to the hook as one the client reported", () => {
     const payload = testRunPayload(
-      "set -o pipefail; npm test 2>&1 | tail -60",
+      `${PIPEFAIL_PREFIX}${PIPED_TEST_COMMAND}`,
       1,
       PIPED_FAILURE,
     );
@@ -132,9 +136,20 @@ describe("the payload of a test run", () => {
     // so a piped and an unpiped run of one command stay one signature.
     expect(toCapture(hookInput(payload) as HookInput)).toMatchObject({
       kind: "command",
-      command: "npm test 2>&1 | tail -60",
+      command: PIPED_TEST_COMMAND,
       text: expect.stringContaining("[exit code: 1]"),
     });
+  });
+
+  it("runs a command the way the client does, quotes and all", () => {
+    // The client eval's the command inside a `&&` list, with a command after
+    // the eval: tests/pipefail.test.ts pins what that shape does to a rewrite.
+    expect(clientInvocation("npm test")).toBe(
+      "eval 'npm test' < /dev/null && pwd -P > /dev/null",
+    );
+    expect(clientInvocation("printf 'x'; echo done")).toBe(
+      "eval 'printf '\\''x'\\''; echo done' < /dev/null && pwd -P > /dev/null",
+    );
   });
 
   it("writes a failure that printed nothing as `Exit code N` alone", () => {
@@ -191,6 +206,30 @@ describe("the scripted agent", () => {
       );
       expect(commands.length).toBeGreaterThan(0);
       expect(commands.every((command) => command.piped)).toBe(true);
+    },
+    120_000,
+  );
+
+  // The shape #131's thread asked to measure rather than replay: the pipeline
+  // with a command after it, so the shell's status is that command's and only
+  // the output can say the tests failed. What the measurement shows is the gap
+  // that is still open: nothing is recorded, and the agent believes the run.
+  it.skipIf(!shellWorks)(
+    "piped with a trailing command, records nothing: the gap #131 keeps open",
+    async () => {
+      mkdirSync(workspace.memory, { recursive: true });
+      writeFileSync(join(workspace.memory, "paused"), "off\n");
+      const reports = await fleet({ pipe: true, chain: true });
+      for (const report of reports) {
+        // The status is the trailing `echo done`'s, and these traps print no
+        // runner verdict, so neither the rewrite nor the output rule sees them.
+        expect(report.runs).toBe(1);
+        expect(report.diagnosed).toEqual([]);
+        expect(report.passed).toBe(true);
+      }
+      expect(readFileSync(join(root, "transcript-1.jsonl"), "utf8")).toContain(
+        "; echo done",
+      );
     },
     120_000,
   );

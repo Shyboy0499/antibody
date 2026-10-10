@@ -679,21 +679,13 @@ function toToolCall(input) {
 	return call;
 }
 /**
-* What the rewrite puts in front of a command. The trailing space keeps the
-* command's own first line readable, and the `2>/dev/null` on both builtins
-* leaves a shell that has neither pipefail nor an ERR trap running the command
-* unchanged rather than printing about it.
+* The prefix the rewrite puts in front of a piped command. The `2>/dev/null`
+* leaves a shell without pipefail (dash, `sh`) running the command unchanged
+* rather than printing an error over the agent's own output.
 */
-const REWRITE_PREFIX = "set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ";
-/**
-* What the rewrite puts after it, on a line of its own: a line of its own
-* because a command may end in a heredoc, whose terminator the epilogue would
-* otherwise swallow.
-*/
-const REWRITE_SUFFIX = "__antibody_last=$?; if [ \"$__antibody_failed\" -ne 0 ]; then exit \"$__antibody_failed\"; fi; if [ \"$__antibody_quiet\" = 1 ] && [ \"$__antibody_last\" -eq 1 ]; then exit 0; fi; exit \"$__antibody_last\"";
-const MARKER = "__antibody_";
+const PIPEFAIL_PREFIX = "set -o pipefail 2>/dev/null; ";
 const PIPELINE = /(^|[^|])\|([^|]|$)/;
-const COMPOUND = /[;\n|]|&(?!\d)/;
+const EARLIER_PREFIX = "set -o pipefail; ";
 /**
 * Whether a command line holds a pipeline, as the rewrite tells one.
 *
@@ -708,41 +700,28 @@ function hasPipeline(command) {
 	return PIPELINE.test(command);
 }
 /**
-* Whether the shell's own status for this command line cannot speak for all of
-* it, because it holds more than one command.
-*
-* @param command - a shell command line.
-*/
-function needsRewrite(command) {
-	return COMPOUND.test(command);
-}
-/**
-* The command as the shell must run it: wrapped, so a failure anywhere in it
-* reaches Claude Code as an `Exit code N`. Undefined when it needs none: one
-* command, already wrapped, or the rewrite is switched off.
+* The command with the pipefail prefix, or undefined when it needs none: not
+* a pipeline, already set, or the rewrite is switched off.
 *
 * @param command - the Bash command the agent wrote.
 * @param env - the environment; ANTIBODY_PIPEFAIL=0 switches the rewrite off.
 */
-function rewriteCommand(command, env = process.env) {
+function pipefailCommand(command, env = process.env) {
 	if (env["ANTIBODY_PIPEFAIL"] === "0") return void 0;
-	if (!needsRewrite(command)) return void 0;
-	if (command.includes(MARKER)) return void 0;
-	return `${REWRITE_PREFIX}${command}\n${REWRITE_SUFFIX}`;
+	if (!hasPipeline(command)) return void 0;
+	if (/\bpipefail\b/.test(command)) return void 0;
+	return `${PIPEFAIL_PREFIX}${command}`;
 }
 /**
 * The command the agent wrote, from the command a PostToolUse payload carries:
-* the rewrite's prefix and epilogue taken off again, so one command keeps one
-* signature whether or not the shell was told to wrap it.
+* a prefix the rewrite added is taken off again, so one command keeps one
+* signature whether or not the shell was told to run it piped.
 *
 * @param command - the command as the harness reports it.
 */
 function unwrapCommand(command) {
-	if (command.startsWith("set -o pipefail; ")) return command.slice(17);
-	if (!command.startsWith("set -o pipefail 2>/dev/null; __antibody_failed=0; __antibody_quiet=0; trap '__antibody_rc=$?; case $BASH_COMMAND in grep\\ *|grep|egrep\\ *|egrep|fgrep\\ *|fgrep|rg\\ *|rg|find\\ *|find|diff\\ *|diff|test\\ *|test|\\[\\ *|\\[) if [ $__antibody_rc -eq 1 ]; then __antibody_quiet=1; else __antibody_failed=$__antibody_rc; __antibody_quiet=0; fi;; *) __antibody_failed=$__antibody_rc; __antibody_quiet=0;; esac' ERR 2>/dev/null; ")) return command;
-	const body = command.slice(416);
-	const epilogue = `\n${REWRITE_SUFFIX}`;
-	return body.endsWith(epilogue) ? body.slice(0, body.length - epilogue.length) : body;
+	for (const prefix of [PIPEFAIL_PREFIX, EARLIER_PREFIX]) if (command.startsWith(prefix)) return command.slice(prefix.length);
+	return command;
 }
 /**
 * The stdout for a PreToolUse hook call: the rewritten Bash input, or nothing
@@ -750,7 +729,7 @@ function unwrapCommand(command) {
 * nothing, so the command runs unchanged.
 *
 * @param text - the JSON Claude Code wrote on stdin.
-* @param env - the environment, passed to rewriteCommand().
+* @param env - the environment, passed to pipefailCommand().
 */
 function pipefailResponse(text, env = process.env) {
 	let value;
@@ -766,7 +745,7 @@ function pipefailResponse(text, env = process.env) {
 	if (typeof input !== "object" || input === null) return "";
 	const command = input.command;
 	if (typeof command !== "string") return "";
-	const rewritten = rewriteCommand(command, env);
+	const rewritten = pipefailCommand(command, env);
 	if (rewritten === void 0) return "";
 	return JSON.stringify({ hookSpecificOutput: {
 		hookEventName: "PreToolUse",

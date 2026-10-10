@@ -1,23 +1,26 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { benignExit } from "../src/failure-hints";
 import {
-  PIPEFAIL_ENV,
-  REWRITE_PREFIX,
-  REWRITE_SUFFIX,
-  needsRewrite,
+  PIPEFAIL_PREFIX,
+  pipefailCommand,
   pipefailResponse,
-  rewriteCommand,
-  unwrapCommand,
 } from "../src/pipefail";
 
-// A shell to test the wrapper against: the rewrite is for a POSIX shell, and
-// `bash` is the one Claude Code's Bash tool runs. A machine without a usable
-// one (Windows, where `bash` on PATH may be a WSL without a distribution)
-// skips the two tests that run a command for real; the string tests above them
-// still run everywhere.
+// A shell to test the rewrite against. A machine without a usable one (Windows,
+// where `bash` on PATH may be a WSL without a distribution) skips the tests that
+// run a command for real; the string tests above them still run everywhere.
 const shellWorks = spawnSync("bash", ["-c", "exit 0"]).status === 0;
-const bash = (command: string) =>
-  spawnSync("bash", ["-c", command], { encoding: "utf8" });
+const shell = (script: string) =>
+  spawnSync("bash", ["-c", script], { encoding: "utf8" });
+
+/**
+ * One Bash call as Claude Code 2.1.282 really runs it, read off the client
+ * itself (scripts/step0): the command is eval'ed inside a `&&` list, and a
+ * command follows the eval. What the rewrite can do depends on this shape.
+ */
+const asClient = (command: string) =>
+  `true && eval '${command.replaceAll("'", "'\\''")}' < /dev/null && pwd -P > /dev/null`;
 
 const payload = (command: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -27,80 +30,40 @@ const payload = (command: string, extra: Record<string, unknown> = {}) =>
     ...extra,
   });
 
-describe("needsRewrite", () => {
+describe("pipefailCommand", () => {
   it.each([
-    ["npm test 2>&1 | tail -15", "a pipeline"],
-    ["npm test; echo done", "a ; chain"],
-    ["a && b", "an && chain"],
-    ["a || b", "an || chain"],
-    ["npm test &", "a background command"],
-    ["npm test\n echo done", "a second line"],
-  ])("wraps %s (%s)", (command) => {
-    expect(needsRewrite(command)).toBe(true);
-  });
-
-  it.each([
-    ["npm test", "one command"],
-    ["npm test 2>&1", "a redirection's & is not a separator"],
-    ["pnpm test -- --reporter=dot", "one command with flags"],
-  ])("leaves %s alone (%s)", (command) => {
-    expect(needsRewrite(command)).toBe(false);
-  });
-});
-
-describe("rewriteCommand", () => {
-  it("wraps a chain, and a pipeline, so the shell reports the whole of it", () => {
-    for (const command of ["npm test; echo done", "npm test 2>&1 | tail -15"]) {
-      expect(rewriteCommand(command, {})).toBe(
-        `${REWRITE_PREFIX}${command}\n${REWRITE_SUFFIX}`,
-      );
-    }
+    ["npm test 2>&1 | tail -15", `${PIPEFAIL_PREFIX}npm test 2>&1 | tail -15`],
+    [
+      'node -e "process.exit(3)" | tail -5',
+      `${PIPEFAIL_PREFIX}node -e "process.exit(3)" | tail -5`,
+    ],
+    ["a | b | c", `${PIPEFAIL_PREFIX}a | b | c`],
+  ])("prefixes the pipeline %s", (command, want) => {
+    expect(pipefailCommand(command, {})).toBe(want);
   });
 
   it.each([
-    ["npm test", "one command's status is its own"],
-    ["npm test 2>&1", "a redirection is not a second command"],
-  ])("leaves %s alone (%s)", (command) => {
-    expect(rewriteCommand(command, {})).toBeUndefined();
-  });
-
-  it("is idempotent: a command that already carries the wrapper is left alone", () => {
-    const once = rewriteCommand("false; echo done", {}) as string;
-    expect(rewriteCommand(once, {})).toBeUndefined();
-  });
-
-  it("is switched off by ANTIBODY_PIPEFAIL=0", () => {
-    expect(rewriteCommand("a; b", { [PIPEFAIL_ENV]: "0" })).toBeUndefined();
-    expect(rewriteCommand("a | b", { [PIPEFAIL_ENV]: "0" })).toBeUndefined();
-  });
-});
-
-describe("unwrapCommand", () => {
-  it.each([
-    "npm test; echo done",
-    "npm test 2>&1 | tail -15",
-    "cat >> notes.md <<'EOF'\ntrap log\nEOF\nfalse; echo done",
-    "false; echo done # a trailing comment",
-  ])("gives back the command the agent wrote: %j", (command) => {
-    const wrapped = rewriteCommand(command, {}) as string;
-    expect(unwrapCommand(wrapped)).toBe(command);
-  });
-
-  it("leaves a command the rewrite never touched as it is", () => {
-    expect(unwrapCommand("npm test")).toBe("npm test");
+    ["npm test", "no pipe"],
+    ["npm test 2>&1", "a redirection is not a pipe"],
+    ["a || b", "|| is a shell or, not a pipe"],
+    ["set -o pipefail; npm test | tail", "already set"],
+    ["npm test | tail -5", "switched off"],
+  ])("leaves %s alone (%s)", (command, reason) => {
+    const env = reason === "switched off" ? { ANTIBODY_PIPEFAIL: "0" } : {};
+    expect(pipefailCommand(command, env)).toBeUndefined();
   });
 });
 
 describe("pipefailResponse", () => {
-  it("answers a chain with the wrapped input, other fields kept", () => {
+  it("answers a piped Bash command with the rewritten input", () => {
     const out = JSON.parse(
-      pipefailResponse(payload("npm test; echo done", { cwd: "/r" }), {}),
+      pipefailResponse(payload("npm test 2>&1 | tail -15", { cwd: "/r" }), {}),
     );
     expect(out).toEqual({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         updatedInput: {
-          command: `${REWRITE_PREFIX}npm test; echo done\n${REWRITE_SUFFIX}`,
+          command: `${PIPEFAIL_PREFIX}npm test 2>&1 | tail -15`,
           description: "probe",
         },
       },
@@ -108,6 +71,7 @@ describe("pipefailResponse", () => {
   });
 
   it("says nothing for other tools, other events and unreadable payloads", () => {
+    expect(pipefailResponse(payload("ls | wc"), {})).not.toBe("");
     expect(
       pipefailResponse(payload("ls | wc").replace('"Bash"', '"Read"'), {}),
     ).toBe("");
@@ -141,87 +105,84 @@ describe("pipefailResponse", () => {
     ).toBe("");
   });
 
-  it("says nothing for one command", () => {
+  it("says nothing for a plain command", () => {
     expect(pipefailResponse(payload("npm test"), {})).toBe("");
   });
 });
 
-describe("the wrapper in a real shell", () => {
+describe("the prefix on a recorded command", () => {
+  it("is taken off the command a PostToolUse payload carries", async () => {
+    const { parseHookInput } = await import("../src/claude-code");
+    const input = parseHookInput(
+      JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: "s",
+        cwd: "/r",
+        tool_name: "Bash",
+        tool_input: { command: `${PIPEFAIL_PREFIX}npm test | tail -5` },
+        tool_response: { stdout: "" },
+      }),
+    );
+    expect(input?.command).toBe("npm test | tail -5");
+  });
+});
+
+// #131's review asked what the rewrite does to commands whose exit 1 is a
+// meaning rather than a failure (`grep`, `diff`, `test`): it leaves them as the
+// agent wrote them, so Claude Code's own table - and antibody's mirror of it
+// (benignExit, src/failure-hints.ts) - reads the command itself, not a rewrite.
+describe("benign commands", () => {
+  it.each([
+    ["grep -q pattern file; echo done", "a chain a passing command ends"],
+    ["diff a b; echo done", "the same, for diff"],
+    ["test -f x; echo done", "the same, for test"],
+    ["grep -q pattern file", "a bare grep"],
+    ["git diff --stat", "git's own benign pair"],
+  ])("leaves %s alone (%s)", (command) => {
+    expect(pipefailCommand(command, {})).toBeUndefined();
+  });
+
+  it("prefixes a pipeline whose last stage is benign, and keeps that stage readable", () => {
+    // The prefix goes in front; the last segment is still the `grep` Claude
+    // Code's table reads, so a 1 stays "no matches" for both readers.
+    expect(pipefailCommand("npm test 2>&1 | grep -q FAIL", {})).toBe(
+      `${PIPEFAIL_PREFIX}npm test 2>&1 | grep -q FAIL`,
+    );
+    expect(benignExit("npm test 2>&1 | grep -q FAIL")).toBe(true);
+  });
+});
+
+// The live check #131's thread asked for (a real Claude Code 2.1.282 session
+// against scripts/step0's mock endpoint, 2026-10-10): inside the client's own
+// invocation the prefix still works, and `errexit` is suppressed, so a wrapper
+// around the command reports nothing there. The ERR trap is worse than
+// suppressed: it does not run in the shell the client uses on Windows (Git
+// Bash 5.3.9, the live session) and does run in Ubuntu's bash 5.2 (CI), so a
+// fleet's rewrite would behave differently per machine. Both are why the
+// rewrite is a prefix and not a wrapper; the ERR half is not asserted here
+// because it is not the same shell everywhere.
+describe("the client's own shell context", () => {
   it.skipIf(!shellWorks)(
-    "makes a failure that is not the last command the shell's status",
+    "keeps pipefail, so a rewritten pipeline still reports the failing stage",
     () => {
-      const command = "echo one; false; echo three";
-      const plain = bash(command);
-      const wrapped = bash(rewriteCommand(command, {}) as string);
-      // What the hooks see today: the last command's 0.
-      expect(plain.status).toBe(0);
-      // What they see wrapped, with the output the agent would have read.
-      expect(wrapped.status).toBe(1);
-      expect(wrapped.stdout).toBe(plain.stdout);
-      expect(wrapped.stderr).toBe("");
+      const rewritten = pipefailCommand("false | tail -1", {}) as string;
+      expect(shell(asClient(rewritten)).status).toBe(1);
     },
   );
 
   it.skipIf(!shellWorks)(
-    "leaves a failure the agent handled, and the agent's own $?, alone",
+    "honours no errexit for a command in it, not even in a subshell",
     () => {
-      const handled = bash(
-        rewriteCommand("false || echo handled", {}) as string,
+      expect(
+        shell(asClient("set -e; cat missing.txt; echo after")).stdout,
+      ).toContain("after");
+      expect(
+        shell(asClient("( set -e; cat missing.txt; echo after )")).stdout,
+      ).toContain("after");
+      // Outside it, errexit stops the command as it would for a plain script.
+      expect(shell("set -e; cat missing.txt; echo after").stdout).not.toContain(
+        "after",
       );
-      expect(handled.status).toBe(0);
-      expect(handled.stdout).toBe("handled\n");
-      const reads = bash(rewriteCommand('false; echo "rc=$?"', {}) as string);
-      expect(reads.status).toBe(1);
-      expect(reads.stdout).toBe("rc=1\n");
-    },
-  );
-
-  it.skipIf(!shellWorks)(
-    "does not count a grep, diff or test that found nothing as a failure",
-    () => {
-      // Claude Code's own table reads exit 1 from these as "no match", not a
-      // failure; the wrapper follows it, so a chain that ends well is not
-      // recorded.
-      for (const command of [
-        "grep -q zzz package.json; echo done",
-        "diff <(echo a) <(echo b); echo done",
-        "test -f no-such-file; echo done",
-      ]) {
-        const run = bash(rewriteCommand(command, {}) as string);
-        expect(run.status, command).toBe(0);
-        expect(run.stdout, command).toMatch(/done\n$/);
-      }
-    },
-  );
-
-  it.skipIf(!shellWorks)(
-    "does not count a chain that ends on a grep that found nothing",
-    () => {
-      // Nothing failed before it, so the chain ends well: the shell reports 0.
-      const run = bash(
-        rewriteCommand("echo a; grep -q zzz package.json", {}) as string,
-      );
-      expect(run.status).toBe(0);
-      expect(run.stdout).toBe("a\n");
-    },
-  );
-
-  it.skipIf(!shellWorks)(
-    "still counts a real failure beside a grep that found nothing",
-    () => {
-      const beside = bash(
-        rewriteCommand(
-          "grep -q zzz package.json; false; echo done",
-          {},
-        ) as string,
-      );
-      expect(beside.status).toBe(1);
-      const last = bash(
-        rewriteCommand("false; grep -q zzz package.json", {}) as string,
-      );
-      // The shell still reports the earlier failure; which command the
-      // recorder reads it against is a separate question, kept open.
-      expect(last.status).toBe(1);
     },
   );
 });

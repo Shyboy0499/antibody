@@ -86,12 +86,15 @@ hooks and MCP server.
 - With `--record fixed`, it records a fix as soon as the fix works.
 - By default it records only when antibody asks.
 - With `--pipe`, it runs the tests the way real agents do - `npm test 2>&1 | tail -60`,
-  in a shell - and asks the plugin's PreToolUse hook what to run before each call, as the
-  client does. A pipeline reports its last command's status, so this is the shape #131 is
-  about: unless the rewrite made the shell report a failure, the hook has only the output to
-  go on. `ANTIBODY_BENCH_SHELL` names the shell, for a machine whose `bash` is not the one
-  that can run the project (Windows, and a `bash` on PATH that is a WSL without a
-  distribution).
+  through the invocation the client itself uses (`eval` inside a `&&` list) - and asks the
+  plugin's PreToolUse hook what to run before each call, as the client does. The shell
+  reports its last command's status, so this is the shape #131 is about: unless the rewrite
+  made the shell report a failure, the hook has only the output to go on. `--chain` adds a
+  command after the pipeline (`npm test 2>&1 | tail -60; echo done`), the shape whose
+  status is that command's: there the rewrite cannot report anything at all, and a failure
+  only the middle of the command printed stays unrecorded (measured, #131).
+  `ANTIBODY_BENCH_SHELL` names the shell, for a machine whose `bash` is not the one that can
+  run the project (Windows, and a `bash` on PATH that is a WSL without a distribution).
 
 Its numbers check the runner and show antibody's protocol at work. **They are not a
 result about real agents.**
@@ -135,6 +138,7 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
 | `--record asked\|fixed` | `asked` | scripted: when it records a fix |
 | `--patience-ms N` | 30000 × speed | scripted: how long it waits for a peer's fix |
 | `--pipe` | | scripted: run the tests through a pipe, as real agents do (#131) |
+| `--chain` | | scripted: with `--pipe`, add a command after the pipeline (#131) |
 | `--max-budget-usd X` | required | Claude Code: each agent's cap in dollars |
 | `--model NAME` | claude's default | Claude Code: the model |
 | `--claude-bin PATH` | `claude` | Claude Code: the command |

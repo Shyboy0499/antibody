@@ -114,12 +114,18 @@ Each milestone ends with something that can be checked, not just written.
 - **The scripted agent can pipe (added after the first runs).** The numbers below are
   from agents that ran `npm test` on its own, so the piped shape real agents use does not
   appear in them (#131). `--pipe` runs the tests as real agents do -
-  `npm test 2>&1 | tail -60`, in a shell - asks the plugin's PreToolUse hook what to run
-  first, and hands the hook the payload the client would send for the status the shell
-  reported: a failure when the rewrite made the shell report one, and a success whose
-  result is only the output otherwise. The coverage report reads the agent's own transcript
-  for the commands its traps came through, so a scripted run says `0 piped` until it is
-  rerun with `--pipe`. Rerunning the numbers piped is what measures the fix.
+  `npm test 2>&1 | tail -60`, in a shell, through the invocation the client itself uses
+  (`eval` inside a `&&` list, [bench/fake-agent.ts](../bench/fake-agent.ts)) - asks the
+  plugin's PreToolUse hook what to run first, and hands the hook the payload the client
+  would send for the status the shell reported: a failure when the rewrite made the shell
+  report one, and a success whose result is only the output otherwise. `--chain` adds the
+  trailing command real agents often write (`…; echo done`). The coverage report reads the
+  agent's own transcript for the commands its traps came through, so a scripted run says
+  `0 piped` until it is rerun with `--pipe`. Rerunning the numbers piped is what measures
+  the fix. **Checked:** run both shapes; the pipeline is recorded, and the chained shape is
+  not - the rewrite cannot report a status the trailing command owns, and these traps
+  print nothing the shared output rule reads (see design §5). The gap `--chain` measures
+  is what #131 still holds open.
 - **A run says what it measured, and can be published (done).** `--publish DIR`
   ([`bench/publish.ts`](../bench/publish.ts)) writes the directory a commit can hold: the
   table and the record as they are, each run's summary, an `environment.md` with the

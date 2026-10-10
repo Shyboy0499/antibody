@@ -395,8 +395,11 @@ const USAGE = `usage: pnpm run bench -- [options]
   --record asked|fixed  record fixes when asked, or once they work (default asked)
   --patience-ms N       how long it waits for a peer's fix
   --pipe                run the tests through a pipe, as real agents do
-                        (\`npm test 2>&1 | tail -60\`), so the shell reports the
-                        tail's status and the hook has only the output (#131)
+                        (\`npm test 2>&1 | tail -60\`), the way the client runs a
+                        call, so the hook has only the output (#131)
+  --chain               with --pipe, add a command after the pipeline
+                        (\`… ; echo done\`), the shape whose status is the
+                        trailing command's
  Claude Code (--agent claude), which costs money:
   --max-budget-usd X    each agent's spending cap in dollars (required)
   --model NAME          the model, by claude's own name for it
@@ -412,7 +415,12 @@ export function parseArgs(
   const switches = new Set<string>();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
-    if (arg === "--keep" || arg === "--keep-going" || arg === "--pipe")
+    if (
+      arg === "--keep" ||
+      arg === "--keep-going" ||
+      arg === "--pipe" ||
+      arg === "--chain"
+    )
       switches.add(arg);
     else if (arg.startsWith("--") && argv[i + 1] !== undefined)
       flags.set(arg, argv[++i] as string);
@@ -483,6 +491,7 @@ export function parseArgs(
       record,
       ...(patience === undefined ? {} : { patienceMs: Number(patience) }),
       ...(switches.has("--pipe") ? { pipe: true } : {}),
+      ...(switches.has("--chain") ? { chain: true } : {}),
     });
   } else if (agent === "claude") {
     const cap = Number(flags.get("--max-budget-usd"));
@@ -491,8 +500,10 @@ export function parseArgs(
         error:
           "--agent claude needs --max-budget-usd, each agent's cap in dollars",
       };
-    if (switches.has("--pipe"))
-      return { error: "--pipe is for the scripted agent (--agent fake)" };
+    if (switches.has("--pipe") || switches.has("--chain"))
+      return {
+        error: "--pipe and --chain are for the scripted agent (--agent fake)",
+      };
     const model = flags.get("--model");
     driver = claudeDriver({
       bin: flags.get("--claude-bin") ?? "claude",
