@@ -394,6 +394,9 @@ const USAGE = `usage: pnpm run bench -- [options]
   --speed X             multiply its pretend durations (default 1)
   --record asked|fixed  record fixes when asked, or once they work (default asked)
   --patience-ms N       how long it waits for a peer's fix
+  --pipe                run the tests through a pipe, as real agents do
+                        (\`npm test 2>&1 | tail -60\`), so the shell reports the
+                        tail's status and the hook has only the output (#131)
  Claude Code (--agent claude), which costs money:
   --max-budget-usd X    each agent's spending cap in dollars (required)
   --model NAME          the model, by claude's own name for it
@@ -409,7 +412,8 @@ export function parseArgs(
   const switches = new Set<string>();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
-    if (arg === "--keep" || arg === "--keep-going") switches.add(arg);
+    if (arg === "--keep" || arg === "--keep-going" || arg === "--pipe")
+      switches.add(arg);
     else if (arg.startsWith("--") && argv[i + 1] !== undefined)
       flags.set(arg, argv[++i] as string);
     else return { error: `unknown or incomplete option: ${arg}` };
@@ -478,6 +482,7 @@ export function parseArgs(
       speed,
       record,
       ...(patience === undefined ? {} : { patienceMs: Number(patience) }),
+      ...(switches.has("--pipe") ? { pipe: true } : {}),
     });
   } else if (agent === "claude") {
     const cap = Number(flags.get("--max-budget-usd"));
@@ -486,6 +491,8 @@ export function parseArgs(
         error:
           "--agent claude needs --max-budget-usd, each agent's cap in dollars",
       };
+    if (switches.has("--pipe"))
+      return { error: "--pipe is for the scripted agent (--agent fake)" };
     const model = flags.get("--model");
     driver = claudeDriver({
       bin: flags.get("--claude-bin") ?? "claude",

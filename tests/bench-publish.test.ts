@@ -455,15 +455,18 @@ describe("main", () => {
     expect(lines).toContain(`Published 5 files to ${published}`);
     expect(existsSync(join(published, "results.md"))).toBe(true);
     expect(existsSync(join(published, "environment.md"))).toBe(true);
-    // The scripted agent writes no tool call, so the run cannot say what its
-    // traps came through - and the report says that instead of claiming zero.
-    expect(readFileSync(join(published, "coverage.md"), "utf8")).toContain(
-      "hold no Bash command in their transcripts",
-    );
+    // The scripted agent writes the Bash call it made, so this run can say what
+    // its traps came through: none of them through a pipe, because it ran
+    // unpiped. Nothing is unknown here, so the report says nothing about runs
+    // that hold no command.
+    const report = readFileSync(join(published, "coverage.md"), "utf8");
+    expect(report).toContain("| run-1-off | 1 | ");
+    expect(report).not.toContain("hold no Bash command");
     const summary = JSON.parse(
       readFileSync(join(out, "run-1-off", "summary.json"), "utf8"),
     ) as { coverage?: RunCoverage };
     expect(summary.coverage?.sessions).toBe(1);
-    expect(summary.coverage?.bash).toBe(0);
+    expect(summary.coverage?.bash).toBeGreaterThan(0);
+    expect(summary.coverage?.piped).toBe(0);
   }, 120_000);
 });

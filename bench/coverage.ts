@@ -4,9 +4,10 @@
 // The table counts a trap as met when the memory says an agent hit it. What the
 // memory does not say is which command produced the error: a trap met by
 // `npm test 2>&1 | tail -15` and one met by `npm test` land in it the same way.
-// The run's transcripts do say - every `Bash` tool call the client made is in
-// them - so the two together can answer the one question the real-agent numbers
-// rest on: did this run measure piped commands, or something else?
+// The run's transcripts do say - every `Bash` tool call the session made is in
+// them, a scripted agent's included (bench/fake-agent.ts) - so the two together
+// can answer the one question the real-agent numbers rest on: did this run
+// measure piped commands, or something else?
 //
 // A trap counts as `piped` when a session that met it had run a command
 // containing a pipe at or before the meeting. Reading a pipe out of a command
@@ -225,8 +226,8 @@ export function renderCoverage(rows: readonly CoverageRow[]): string {
     lines.push(
       "",
       `${unread.length} of ${rows.length} runs hold no Bash command in their transcripts, so`,
-      "their coverage is unknown rather than empty: the scripted agents run `npm test`",
-      "themselves, without the client, and write no tool call.",
+      "their coverage is unknown rather than empty: nothing kept with the run says which",
+      "command a trap came through.",
     );
   const missing = rows.filter((row) => row.coverage === undefined);
   if (missing.length > 0)

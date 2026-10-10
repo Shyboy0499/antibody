@@ -111,11 +111,15 @@ Each milestone ends with something that can be checked, not just written.
   agents run through the committed bundle end to end, and the Claude Code driver
   against a stand-in for `claude` that runs the hooks it was given. It lives in this
   repository; a separate public benchmark repo is still open.
-- **The scripted runs are unpiped (recorded).** Their agents run `npm test` on its own, so
-  the four traps reach a hook as failures and the piped shape real agents use does not
-  appear in the numbers (#131). Rerunning them piped is what measures the fix; the
-  scripted agent has no switch for it yet. The coverage report below marks those runs
-  `unknown` rather than `0 piped`, so a published table cannot claim them as piped.
+- **The scripted agent can pipe (added after the first runs).** The numbers below are
+  from agents that ran `npm test` on its own, so the piped shape real agents use does not
+  appear in them (#131). `--pipe` runs the tests as real agents do -
+  `npm test 2>&1 | tail -60`, in a shell - asks the plugin's PreToolUse hook what to run
+  first, and hands the hook the payload the client would send for the status the shell
+  reported: a failure when the rewrite made the shell report one, and a success whose
+  result is only the output otherwise. The coverage report reads the agent's own transcript
+  for the commands its traps came through, so a scripted run says `0 piped` until it is
+  rerun with `--pipe`. Rerunning the numbers piped is what measures the fix.
 - **A run says what it measured, and can be published (done).** `--publish DIR`
   ([`bench/publish.ts`](../bench/publish.ts)) writes the directory a commit can hold: the
   table and the record as they are, each run's summary, an `environment.md` with the
