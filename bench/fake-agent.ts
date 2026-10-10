@@ -17,9 +17,19 @@
 // Its knowledge of each trap's fix (bench/traps.ts) stands in for reasoning;
 // the costs stand in for what reasoning takes. Its numbers check the runner
 // and show the protocol at work - they are not a result about real agents.
+//
+// With `pipe: true` it runs the tests the way real Claude Code agents do, in a
+// shell: `npm test 2>&1 | tail -60` (#131). A pipeline reports its last
+// command's status, so the client calls a failing run a success and its result
+// carries no exit code at all. The agent asks the plugin's PreToolUse hook what
+// to run before each call, as the client does, and hands the hook the payload
+// the client would send for the status the shell reported: a failure when the
+// hook's rewrite made the shell report one, and a success whose result is only
+// the output otherwise. What the hook makes of that is what the run measures.
 import { spawn } from "node:child_process";
 import { appendFileSync, cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { looksFailed } from "../src/failure-hints";
 import { memoryDir, filesIn } from "../src/paths";
 import { parseDocument } from "../src/store";
 import { solutionDir } from "./tasks";
@@ -28,6 +38,31 @@ import { TRAPS, trapOf } from "./traps";
 import type { Trap } from "./traps";
 
 type TrapId = Trap["id"];
+
+/**
+ * The piped test command: the shape real Claude Code agents use (#131), and the
+ * one the `pipe` option below runs.
+ *
+ * Sixty lines, not the fifteen the issue's evidence quotes, because `node
+ * --test` prints each failing file's crash block before its summary: with
+ * `tail -15` two of the four traps' own words are cut away, and while such a run
+ * is still recorded (the runner's verdict is in the window) neither the agent
+ * nor the memory entry can name the trap it met. Sixty is the narrowest window
+ * that names all four.
+ */
+export const PIPED_TEST_COMMAND = "npm test 2>&1 | tail -60";
+
+/**
+ * The shell a piped run uses, when the environment does not name one: `bash`,
+ * which is what Claude Code's Bash tool runs. `ANTIBODY_BENCH_SHELL` names
+ * another one, for a machine whose `bash` is not the one that can run the
+ * project (Windows, where `bash` on `PATH` may be a WSL without a distribution),
+ * and `sh` is the fallback when the named shell cannot be started at all.
+ */
+export const BENCH_SHELL_ENV = "ANTIBODY_BENCH_SHELL";
+
+/** The harness name of the plugin's PreToolUse hook (src/pipefail.ts). */
+const PRE_TOOL = "claude-code-pretool";
 
 /** What each thing it pretends to think about costs, in tokens. */
 export interface FakeCosts {
@@ -71,6 +106,11 @@ export interface FakeAgentOptions {
   patienceMs?: number;
   /** The most test runs before it gives up. */
   maxRuns?: number;
+  /**
+   * Run the tests through a pipe, as real agents do (#131), and hand the hook
+   * the payload the client would send for the status the shell reported.
+   */
+  pipe?: boolean;
 }
 
 /** What it did. */
@@ -86,12 +126,21 @@ export interface FakeAgentReport {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** What one command left behind. */
+interface CommandResult {
+  code: number;
+  out: string;
+  err: string;
+  /** Set when the command itself could not be started. */
+  missing?: boolean;
+}
+
 /** Run a command; resolves with its exit code and output, never rejects. */
 function run(
   command: string,
   args: string[],
   options: { cwd: string; input?: string; env?: NodeJS.ProcessEnv },
-): Promise<{ code: number; out: string; err: string }> {
+): Promise<CommandResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -101,10 +150,73 @@ function run(
     let err = "";
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.stderr.on("data", (d: Buffer) => (err += d.toString()));
-    child.on("error", () => resolve({ code: 1, out, err }));
+    child.on("error", () => resolve({ code: 1, out, err, missing: true }));
     child.on("close", (code) => resolve({ code: code ?? 1, out, err }));
     child.stdin.end(options.input ?? "");
   });
+}
+
+/**
+ * Run a command line in a shell, which is how the client's Bash tool runs one.
+ *
+ * The shell is `ANTIBODY_BENCH_SHELL` when the environment names one, `bash`
+ * otherwise, and `sh` when the named shell cannot be started at all - a
+ * pipeline needs a POSIX shell, and `sh` is the one every machine has.
+ *
+ * @param command - the command line, a pipeline included.
+ * @param options - the working directory and environment.
+ */
+function shellRun(
+  command: string,
+  options: { cwd: string; env?: NodeJS.ProcessEnv },
+): Promise<CommandResult> {
+  const shell = options.env?.[BENCH_SHELL_ENV] ?? "bash";
+  return run(shell, ["-c", command], options).then((result) =>
+    result.missing === true && shell !== "sh"
+      ? run("sh", ["-c", command], options)
+      : result,
+  );
+}
+
+/**
+ * The hook call a client makes for one Bash run, as Claude Code 2.1.282 words
+ * it: a success arrives on `PostToolUse` with the result object, which carries
+ * no exit code at all, and a failure arrives on `PostToolUseFailure` with `Exit
+ * code N` leading the error (#131).
+ *
+ * @param command - the command the client ran, prefix and all, as its
+ *   `tool_input` carries it.
+ * @param code - the status the shell reported for that command.
+ * @param output - everything the command printed.
+ */
+export function testRunPayload(
+  command: string,
+  code: number,
+  output: string,
+): Record<string, unknown> {
+  const base = { tool_name: "Bash", tool_input: { command } };
+  if (code !== 0)
+    return {
+      ...base,
+      hook_event_name: "PostToolUseFailure",
+      // A one-line wording carries no output of its own; a failure that printed
+      // something carries it after the wording.
+      error:
+        output.trim() === ""
+          ? `Exit code ${code}`
+          : `Exit code ${code}\n${output}`,
+    };
+  return {
+    ...base,
+    hook_event_name: "PostToolUse",
+    tool_response: {
+      stdout: output,
+      stderr: "",
+      interrupted: false,
+      isImage: false,
+      noOutputExpected: false,
+    },
+  };
 }
 
 /**
@@ -162,6 +274,55 @@ export async function runFakeAgent(
       );
     } catch {
       return "";
+    }
+  };
+
+  // Every Bash call is in the transcript, as the client writes it, so the
+  // coverage report (bench/coverage.ts) can say which commands the traps came
+  // through - and, with `pipe`, that the command had a pipe in it.
+  const toolCall = (command: string) => {
+    appendFileSync(
+      o.transcript,
+      `${JSON.stringify({
+        type: "assistant",
+        timestamp: new Date().toISOString(),
+        sessionId: o.session,
+        message: {
+          id: `msg_${o.session}_${call++}`,
+          role: "assistant",
+          content: [{ type: "tool_use", name: "Bash", input: { command } }],
+        },
+      })}\n`,
+    );
+  };
+
+  // The plugin's PreToolUse hook, asked before a Bash call, as the client asks
+  // it: its answer may carry the command the shell will really run, with the
+  // pipefail prefix (src/pipefail.ts). A payload it cannot read, or no answer
+  // at all, leaves the command as the agent wrote it.
+  const preTool = async (command: string): Promise<string> => {
+    const { out } = await run(process.execPath, [o.bundle, "hook", PRE_TOOL], {
+      cwd: o.worktree,
+      input: JSON.stringify({
+        session_id: o.session,
+        transcript_path: o.transcript,
+        cwd: o.worktree,
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command },
+      }),
+    });
+    try {
+      const rewritten = (
+        JSON.parse(out) as {
+          hookSpecificOutput?: { updatedInput?: { command?: unknown } };
+        }
+      ).hookSpecificOutput?.updatedInput?.command;
+      return typeof rewritten === "string" && rewritten.trim() !== ""
+        ? rewritten
+        : command;
+    } catch {
+      return command;
     }
   };
 
@@ -240,12 +401,30 @@ export async function runFakeAgent(
   let held: { trap: TrapId; since: number } | undefined;
   for (let n = 0; n < (o.maxRuns ?? 40); n++) {
     report.runs++;
-    const test = await run("npm", ["test"], {
-      cwd: o.worktree,
-      env: { ...process.env, npm_config_loglevel: "silent" },
-    });
+    // What the agent asked for, and what the client runs: with `pipe`, the tests
+    // go through a shell as a pipeline, and the plugin's PreToolUse hook may
+    // have put `set -o pipefail` in front of it.
+    const command =
+      o.pipe === true ? await preTool(PIPED_TEST_COMMAND) : "npm test";
+    toolCall(command);
+    const test =
+      o.pipe === true
+        ? await shellRun(command, {
+            cwd: o.worktree,
+            env: { ...process.env, npm_config_loglevel: "silent" },
+          })
+        : await run("npm", ["test"], {
+            cwd: o.worktree,
+            env: { ...process.env, npm_config_loglevel: "silent" },
+          });
     const output = `${test.out}${test.err}`;
     const trap = trapOf(output);
+    // A pipeline reports its last command's status, so an un-rewritten
+    // `npm test | tail` that failed exits 0: the client calls the call a
+    // success, and only the output says otherwise. The agent reads the output
+    // either way, which is what a real one does.
+    const failed =
+      test.code !== 0 || (o.pipe === true && looksFailed(command, output));
 
     // A fix it found has worked once its error is gone.
     if (o.record === "fixed")
@@ -256,24 +435,16 @@ export async function runFakeAgent(
           if (id !== undefined) await recordFix(id, done);
         }
 
-    if (test.code === 0) {
-      const context = await hook({
-        hook_event_name: "PostToolUse",
-        tool_name: "Bash",
-        tool_input: { command: "npm test" },
-        tool_response: { stdout: output, stderr: "", exit_code: 0 },
-      });
+    if (!failed) {
+      // The status the shell reported, and no other: a 0 goes as the client's
+      // success, whose result is the output and nothing else.
+      const context = await hook(testRunPayload(command, test.code, output));
       await answer(context);
       report.passed = true;
       break;
     }
 
-    const context = await hook({
-      hook_event_name: "PostToolUseFailure",
-      tool_name: "Bash",
-      tool_input: { command: "npm test" },
-      error: `Exit code ${test.code}\n${output}`,
-    });
+    const context = await hook(testRunPayload(command, test.code, output));
     await answer(context);
     if (trap === undefined) break;
 

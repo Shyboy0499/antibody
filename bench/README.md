@@ -85,6 +85,13 @@ hooks and MCP server.
 - Fixed costs per step stand in for what reasoning takes.
 - With `--record fixed`, it records a fix as soon as the fix works.
 - By default it records only when antibody asks.
+- With `--pipe`, it runs the tests the way real agents do - `npm test 2>&1 | tail -60`,
+  in a shell - and asks the plugin's PreToolUse hook what to run before each call, as the
+  client does. A pipeline reports its last command's status, so this is the shape #131 is
+  about: unless the rewrite made the shell report a failure, the hook has only the output to
+  go on. `ANTIBODY_BENCH_SHELL` names the shell, for a machine whose `bash` is not the one
+  that can run the project (Windows, and a `bash` on PATH that is a WSL without a
+  distribution).
 
 Its numbers check the runner and show antibody's protocol at work. **They are not a
 result about real agents.**
@@ -127,6 +134,7 @@ pnpm run bench -- --agent claude --max-budget-usd 2 --agents 8 --runs 3
 | `--speed X` | 1 | scripted: multiplies its pretend durations |
 | `--record asked\|fixed` | `asked` | scripted: when it records a fix |
 | `--patience-ms N` | 30000 × speed | scripted: how long it waits for a peer's fix |
+| `--pipe` | | scripted: run the tests through a pipe, as real agents do (#131) |
 | `--max-budget-usd X` | required | Claude Code: each agent's cap in dollars |
 | `--model NAME` | claude's default | Claude Code: the model |
 | `--claude-bin PATH` | `claude` | Claude Code: the command |
@@ -157,9 +165,9 @@ pnpm run bench -- --agent claude --max-budget-usd 1 --agents 8 --runs 3 \
 
 The transcripts, the client's output files and the kept workspaces are **never** published:
 they name paths on this machine, and the repository's privacy guard rejects those. The
-coverage report says "unknown" for a run whose transcripts hold no command at all - the
-scripted agents run `npm test` themselves, without the client - rather than claiming it met
-nothing through a pipe.
+coverage report says "unknown" for a run whose transcripts hold no command at all, rather
+than claiming it met nothing through a pipe. A scripted run holds the calls its agent made,
+so it reports `0 piped` until it is run with `--pipe`.
 
 ## Adding a kind of agent
 
