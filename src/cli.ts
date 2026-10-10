@@ -31,7 +31,7 @@ import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
-import { PRE_TOOL_HARNESS, pipefailResponse } from "./pipefail";
+import { PRE_TOOL_HARNESS, pipefailResponse, readStatus } from "./pipefail";
 import { autoImportText, importOnFirstSession } from "./auto-import";
 import { runRelay } from "./relay-cli";
 import { startRelaySync } from "./relay-client";
@@ -156,6 +156,19 @@ export async function runHook(
     if (adapter === undefined) throw new Error(`unknown harness: ${harness}`);
     const input = adapter.parse(await io.readStdin());
     if (input === undefined) return "";
+    // A wrapped command's failure, recorded by the shell (src/pipefail.ts). The
+    // file is removed whatever the call's outcome.
+    if (input.wrapped === true && input.toolUseId !== undefined) {
+      const status = readStatus(input.toolUseId);
+      // A `||` may have handled the failure the shell recorded, which the
+      // record cannot tell, so such a command reports only what the client does.
+      if (
+        input.event === "PostToolUse" &&
+        input.command !== undefined &&
+        !input.command.includes("||")
+      )
+        input.maskedStatus = status;
+    }
     let memory: string;
     try {
       memory = memoryDir(input.cwd, deps.git, io.env);
