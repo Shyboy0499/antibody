@@ -239,7 +239,13 @@ Claude Code itself decides a Bash call's outcome from the last segment of the pi
 reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
 and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
 there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
-a call the harness marks `is_interrupt` is not recorded at all. What it cannot mirror is
+a call the harness marks `is_interrupt` is not recorded at all. **Known residual false
+positive, in a compound command:** a chain that ends on a `grep`, `diff` or `test` that
+found nothing (`grep -q pattern file; echo done`) exits 1 from that command, because the
+client's bash runs its own code around the command, so the wrapper cannot tell which
+command failed; Claude Code then reports `Exit code 1` and the chain is recorded. A
+failure before such a command is still recorded correctly. Fixing it needs the command
+text split at its separators, which is the next step if this shape matters in practice. What it cannot mirror is
 the shell's own account of a compound command, because a shell reports the *last* command's
 status: a pipeline (`npm test 2>&1 | tail -15`) and a `;` chain (`npm test; echo done`)
 both reach the hooks as successes whatever failed inside them, and the output rule above

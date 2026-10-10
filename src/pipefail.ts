@@ -46,6 +46,9 @@ export const REWRITE_PREFIX =
 export const REWRITE_SUFFIX =
   '__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; if [ "$__antibody_quiet" = 1 ] && [ "$__antibody_last" -eq 1 ]; then exit 0; fi; exit "$__antibody_last"';
 
+/** The prefix the rewrite used before the wrapper (#143). */
+export const LEGACY_PREFIX = "set -o pipefail; ";
+
 // The names the rewrite uses. A command that already carries one is left alone:
 // the rewrite is then idempotent, and unwrapCommand() has nothing to guess.
 const MARKER = "__antibody_";
@@ -113,6 +116,10 @@ export function rewriteCommand(
  * @param command - the command as the harness reports it.
  */
 export function unwrapCommand(command: string): string {
+  // The `set -o pipefail; ` prefix of the earlier rewrite (#143) is still taken
+  // off: a payload from that version must keep the signature of its command.
+  if (command.startsWith(LEGACY_PREFIX))
+    return command.slice(LEGACY_PREFIX.length);
   if (!command.startsWith(REWRITE_PREFIX)) return command;
   const body = command.slice(REWRITE_PREFIX.length);
   const epilogue = `\n${REWRITE_SUFFIX}`;
