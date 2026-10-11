@@ -175,6 +175,21 @@ describe("antibody watch", () => {
     await done;
   });
 
+  it("opens the selected antibody on enter, and closes it on enter again", async () => {
+    const { keys, out, done } = watch({});
+    await until(() => out.length > 1);
+    // The arrows move the selection, which the screen marks.
+    keys.write("\u001b[B");
+    await until(() => (out.at(-1) ?? "").includes("›E-0001"));
+    keys.write("\r");
+    await until(() => (out.at(-1) ?? "").includes("Antibody E-0001"));
+    expect(out.at(-1)).not.toContain("Events");
+    keys.write("\r");
+    await until(() => (out.at(-1) ?? "").includes("Events"));
+    keys.write("q");
+    expect(await done).toBe(0);
+  });
+
   it("cycles the events filter on f", async () => {
     const { keys, out, done } = watch({});
     await until(() => out.length > 1);

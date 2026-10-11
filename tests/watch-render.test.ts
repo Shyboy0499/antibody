@@ -102,6 +102,7 @@ const view: FleetView = {
       text: "fix pushed (60 tokens)",
     },
   ],
+  saved: Array.from({ length: 24 }, () => 0).map((_, i) => (i < 23 ? 0 : 800)),
 };
 const options = (o: Partial<RenderOptions> = {}): RenderOptions => ({
   width: 80,

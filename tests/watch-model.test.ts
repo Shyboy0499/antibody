@@ -295,6 +295,7 @@ describe("fleetView: memory and antibodies", () => {
       },
       antibodies: [],
       events: [],
+      saved: Array.from({ length: 24 }, () => 0),
     });
   });
 

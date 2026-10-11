@@ -30,6 +30,9 @@ export const IMMUNE_MS = 2 * 60 * 1000;
 /** The events pane keeps this many of the latest events. */
 export const EVENT_LINES = 200;
 
+/** The sparkline of tokens saved over time has this many points. */
+export const SERIES_POINTS = 24;
+
 /** What an agent is doing, as the fleet pane shows it. */
 export type AgentState = "diagnosing" | "holding" | "immune" | "working";
 
@@ -117,6 +120,49 @@ export interface FleetView {
   memory: MemoryFigures;
   antibodies: AntibodyRow[];
   events: EventLine[];
+  /**
+   * Tokens saved at SERIES_POINTS evenly spaced times, from the first event to
+   * now. The last point is the memory pane's figure.
+   */
+  saved: number[];
+}
+
+/**
+ * Tokens saved over time, for the sparkline. Each point is the running total
+ * the memory pane reports - what each fix notice saved, less every notice's
+ * tokens, clamped at 0 - as it stood at the end of that point's span.
+ *
+ * @param events - events.jsonl, oldest first.
+ * @param costs - the measured diagnosis costs, from measuredCosts().
+ * @param now - the current time, where the last point ends.
+ */
+export function savedSeries(
+  events: readonly MemoryEvent[],
+  costs: ReadonlyMap<string, number>,
+  now: Date,
+): number[] {
+  const series = Array.from({ length: SERIES_POINTS }, () => 0);
+  if (events.length === 0) return series;
+  const start = Date.parse(events[0]!.t);
+  const span = Math.max(1, now.getTime() - start);
+  let running = 0;
+  let next = 0;
+  const apply = (event: MemoryEvent) => {
+    if (fixNotice(event)) running += diagnosisCost(costs, event.id);
+    if (event.kind === "notice") running -= event.tokens ?? 0;
+  };
+  for (let point = 0; point < SERIES_POINTS; point++) {
+    const end = start + ((point + 1) / SERIES_POINTS) * span;
+    while (next < events.length && Date.parse(events[next]!.t) <= end) {
+      apply(events[next]!);
+      next++;
+    }
+    series[point] = Math.max(0, running);
+  }
+  // Events after now, if any, still count toward the figure.
+  for (; next < events.length; next++) apply(events[next]!);
+  series[SERIES_POINTS - 1] = Math.max(0, running);
+  return series;
 }
 
 const fixNotice = (e: MemoryEvent) =>
@@ -303,5 +349,6 @@ export function fleetView(
     },
     antibodies,
     events: events.slice(-EVENT_LINES).map(eventLine),
+    saved: savedSeries(events, costs, now),
   };
 }
