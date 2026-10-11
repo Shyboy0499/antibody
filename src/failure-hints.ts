@@ -145,6 +145,11 @@ export function benignExit(command: string | undefined): boolean {
 const TOOL_ERROR =
   /^(?:cat|head|tail|grep|egrep|rg|sed|awk|ls|find|diff|wc|jq|less|more|echo|printf|tree|ag):\s/;
 
+/** Whether a line is a display command's own error: `cat: x: No such file or directory`. */
+export function isToolError(line: string): boolean {
+  return TOOL_ERROR.test(line) && FAILURE_LINES.some((re) => re.test(line));
+}
+
 /** Whether a display-only command printed an error of its own. */
 function ownError(output: string): boolean {
   return output

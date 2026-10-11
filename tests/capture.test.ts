@@ -183,6 +183,10 @@ describe("extractHeadline", () => {
     expect(
       extractHeadline("npm ERR! code ENOENT\nnpm ERR! syscall open"),
     ).toEqual({ line: "npm ERR! code ENOENT", code: "ENOENT" });
+    // A command's own error is the headline, not the `done` after it (#131).
+    expect(
+      extractHeadline("cat: missing.txt: No such file or directory\ndone"),
+    ).toEqual({ line: "cat: missing.txt: No such file or directory" });
     expect(extractHeadline("ERROR: build broke\nExit status 2")).toEqual({
       line: "Exit status 2",
     });
