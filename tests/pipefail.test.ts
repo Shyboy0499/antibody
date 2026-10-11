@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -17,6 +18,7 @@ import {
   needsRewrite,
   pipefailResponse,
   readStatus,
+  STATUS_DIR,
   rewriteCommand,
   statusPathFor,
   unwrapCommand,
@@ -136,6 +138,7 @@ describe("statusPathFor and readStatus", () => {
   it("reads a recorded failure once, then removes the file", () => {
     const id = `test-${process.pid}-${Date.now()}`;
     const path = statusPathFor(id) as string;
+    mkdirSync(STATUS_DIR, { recursive: true });
     writeFileSync(path, "3", { flag: "w" });
     expect(readStatus(id)).toBe(3);
     expect(existsSync(path)).toBe(false);
@@ -145,6 +148,7 @@ describe("statusPathFor and readStatus", () => {
   it("reads nothing from a record of success", () => {
     const id = `test-zero-${process.pid}-${Date.now()}`;
     const path = statusPathFor(id) as string;
+    mkdirSync(STATUS_DIR, { recursive: true });
     writeFileSync(path, "0", { flag: "w" });
     expect(readStatus(id)).toBeUndefined();
   });
