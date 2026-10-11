@@ -23,6 +23,7 @@
 //
 // Everything here is pure apart from TransientCounter, whose state is a Map the
 // caller owns and can inject.
+import { isToolError } from "./failure-hints";
 import { ANSI, signature } from "./signature";
 
 /** The capture sources, as named by the `capture` setting. */
@@ -293,7 +294,12 @@ export function extractHeadline(raw: string): Headline {
     return { line: cap(line), ...(code === undefined ? {} : { code }) };
   };
   if (raw.includes(TRACEBACK)) return pick(last);
-  return pick(lines.find((line) => codeIn(line) !== undefined) ?? last);
+  // A command's own error beats the last line, which is often a trailing
+  // `done` after it: `cat missing.txt; echo done`.
+  const failure = [...lines].reverse().find(isToolError);
+  return pick(
+    lines.find((line) => codeIn(line) !== undefined) ?? failure ?? last,
+  );
 }
 
 // ---------------------------------------------------------------------------

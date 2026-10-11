@@ -546,6 +546,10 @@ function benignExit(command) {
 	return BENIGN_EXITS.has(first);
 }
 const TOOL_ERROR = /^(?:cat|head|tail|grep|egrep|rg|sed|awk|ls|find|diff|wc|jq|less|more|echo|printf|tree|ag):\s/;
+/** Whether a line is a display command's own error: `cat: x: No such file or directory`. */
+function isToolError(line) {
+	return TOOL_ERROR.test(line) && FAILURE_LINES.some((re) => re.test(line));
+}
 /** Whether a display-only command printed an error of its own. */
 function ownError(output) {
 	return output.split(/\r?\n/).map((line) => line.trim()).some((line) => TOOL_ERROR.test(line) && FAILURE_LINES.some((re) => re.test(line)));
@@ -2731,7 +2735,8 @@ function extractHeadline(raw) {
 		};
 	};
 	if (raw.includes(TRACEBACK)) return pick(last);
-	return pick(lines.find((line) => codeIn(line) !== void 0) ?? last);
+	const failure = [...lines].reverse().find(isToolError);
+	return pick(lines.find((line) => codeIn(line) !== void 0) ?? failure ?? last);
 }
 const EXIT_MARKER = /\[exit code: (\d+)\]/g;
 /**
