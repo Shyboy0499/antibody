@@ -356,3 +356,82 @@ describe("geminiResponse", () => {
     expect(Array.from(long)).toHaveLength(GEMINI_CONTEXT_MAX_CHARS);
   });
 });
+
+// The live check #135 tracks, and the evidence #149's review asked for: a real
+// Gemini CLI session (0.63.0, on Windows, 2026-10-10) against the mock endpoint
+// in scripts/step0, with a hook capturing every payload it sent. The
+// `llmContent` strings below are that session's own, verbatim.
+describe("the live payloads", () => {
+  const live = (llmContent: string, command: string) =>
+    parse({
+      hook_event_name: "AfterTool",
+      tool_name: "run_shell_command",
+      tool_input: { command },
+      tool_response: { llmContent, returnDisplay: "" },
+    });
+
+  it("reads a failing call: `Output: …`, then `Exit Code: N`", () => {
+    const input = live(
+      [
+        "<untrusted_context>",
+        "Output: 2",
+        "Exit Code: 1",
+        "Process Group PGID: 14012",
+        "</untrusted_context>",
+      ].join("\n"),
+      'node -e "console.log(2); process.exit(3)"',
+    );
+    expect(input?.exitCode).toBe(1);
+    expect(input?.output).toBe("2");
+    expect(input?.inferredFailure).toBeUndefined();
+    expect(toCapture(input as HookInput)).toEqual({
+      kind: "command",
+      toolName: "run_shell_command",
+      command: 'node -e "console.log(2); process.exit(3)"',
+      text: "2\n[exit code: 1]",
+    });
+  });
+
+  it("reads a call that printed error-looking text and succeeded as a success", () => {
+    // Display-only: what it printed is what the agent asked for, and the text
+    // names an error all the same.
+    const input = live(
+      [
+        "<untrusted_context>",
+        'Output:     "test": "node -e \\"console.error(\'boom\'); process.exit(1)\\""',
+        "Process Group PGID: 6508",
+        "</untrusted_context>",
+      ].join("\n"),
+      "Get-Content package.json | Select-String -Pattern error",
+    );
+    expect(input?.exitCode).toBeUndefined();
+    expect(input?.inferredFailure).toBeUndefined();
+    expect(toCapture(input as HookInput)).toBeUndefined();
+  });
+
+  it("infers a piped failure the harness reported no code for at all", () => {
+    // The shape a POSIX shell leaves when the pipeline's last stage earns the
+    // zero. There is no `Exit Code` line for it - the shell tool pushes that
+    // line only when `result.exitCode !== 0` (0.62.0, live-confirmed on
+    // 0.63.0) - so the shared output rule is its only reader.
+    const input = live(
+      [
+        "<untrusted_context>",
+        "Output: > repo@1.0.0 test",
+        "> node --test",
+        "",
+        "✖ test/validate.test.js (72.3ms)",
+        "ℹ fail 7",
+        "</untrusted_context>",
+      ].join("\n"),
+      "npm test 2>&1 | tail -15",
+    );
+    expect(input?.exitCode).toBeUndefined();
+    expect(input?.inferredFailure).toBe(true);
+    expect(toCapture(input as HookInput)).toMatchObject({
+      kind: "command",
+      toolName: "run_shell_command",
+      text: expect.stringContaining("[exit code: 1]"),
+    });
+  });
+});
