@@ -54,8 +54,10 @@ export function shellQuote(
   platform: NodeJS.Platform = process.platform,
 ): string {
   if (platform === "win32") {
-    // cmd.exe splits on spaces and reads ^ & | < > ( ) % as syntax, but \ and
-    // / are literal, so a clean Windows path stands as it is.
+    // cmd.exe splits on spaces and reads ^ & | < > ( ) as syntax, but \ and /
+    // are literal, so a clean Windows path stands as it is. Anything else -
+    // % included - takes the quoted branch, which keeps the path one word but
+    // cannot stop cmd.exe expanding %name% inside quotes: a known limit.
     return /^[\w.@+:\\/-]+$/.test(path) ? path : `"${path}"`;
   }
   return /^[\w@%+=:,./-]+$/.test(path)

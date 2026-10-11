@@ -131,6 +131,9 @@ describe("geminiSettings", () => {
     expect(shellQuote("C:\\Program Files\\nodejs\\node.exe", "win32")).toBe(
       '"C:\\Program Files\\nodejs\\node.exe"',
     );
+    // % takes the quoted branch like anything else cmd.exe treats specially.
+    // Quotes keep a path in one word; they do not stop cmd.exe expanding
+    // %name%, so a path shaped like one stays a known limit.
     expect(shellQuote("C:\\100%\\a.mjs", "win32")).toBe('"C:\\100%\\a.mjs"');
     // Single quotes are literal characters to cmd.exe, so it never sees them.
     expect(shellQuote("C:\\it's\\a.mjs", "win32")).toBe(`"C:\\it's\\a.mjs"`);
