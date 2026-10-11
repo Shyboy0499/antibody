@@ -1812,6 +1812,8 @@ function uniqueSuffix() {
 	uniqueCounter++;
 	return `${process.pid}-${uniqueCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+/** How long a release keeps trying to delete a lock a third party is holding. */
+const RELEASE_MS = 250;
 /**
 * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
 * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -1844,6 +1846,27 @@ async function withFileLock(lock, o, fs, clock, fn) {
 	async function removeIfUnchanged(held) {
 		if (await answerHeld(() => fs.readFile(lock), void 0) === held) await answerHeld(() => fs.remove(lock), void 0);
 	}
+	/**
+	* Give the lock back, waiting out a refusal that only lasts a moment. A third
+	* party that holds the file open for longer - an editor, a virus scanner -
+	* defeats any delete, and then the stale takeover is the only way past it;
+	* insisting longer here would delay this hook by more than that costs.
+	*/
+	async function release() {
+		const until = clock.now().getTime() + RELEASE_MS;
+		for (;;) {
+			if (await answerHeld(() => fs.readFile(lock), void 0) !== token) return;
+			try {
+				await fs.remove(lock);
+				return;
+			} catch (error) {
+				const code = errorCode$1(error);
+				if (code !== "EPERM" && code !== "EBUSY") throw error;
+			}
+			if (clock.now().getTime() >= until) return;
+			await clock.sleep(o.lockRetryMs * (.5 + clock.random()));
+		}
+	}
 	await fs.mkdir(dirname(lock));
 	const token = uniqueSuffix();
 	const deadline = clock.now().getTime() + o.lockTimeoutMs;
@@ -1852,17 +1875,14 @@ async function withFileLock(lock, o, fs, clock, fn) {
 		const held = await answerHeld(() => fs.readFile(lock), void 0);
 		const mtime = await answerHeld(() => fs.mtimeMs(lock), void 0);
 		const now = clock.now().getTime();
-		if (mtime !== void 0 && now - mtime > o.lockStaleMs) {
-			await removeIfUnchanged(held);
-			continue;
-		}
+		if (mtime !== void 0 && now - mtime > o.lockStaleMs) await removeIfUnchanged(held);
 		if (now >= deadline) throw new LockTimeoutError(lock);
 		await clock.sleep(o.lockRetryMs * (.5 + clock.random()));
 	}
 	try {
 		return await fn();
 	} finally {
-		if (await answerHeld(() => fs.readFile(lock), void 0) === token) await answerHeld(() => fs.remove(lock), void 0);
+		await release();
 	}
 }
 /** Write `data` to a temp file beside `path`, then rename it over `path`. */

@@ -635,6 +635,9 @@ function uniqueSuffix(): string {
   return `${process.pid}-${uniqueCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** How long a release keeps trying to delete a lock a third party is holding. */
+const RELEASE_MS = 250;
+
 /**
  * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
  * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -690,6 +693,32 @@ export async function withFileLock<T>(
     }
   }
 
+  /**
+   * Give the lock back, waiting out a refusal that only lasts a moment. A third
+   * party that holds the file open for longer - an editor, a virus scanner -
+   * defeats any delete, and then the stale takeover is the only way past it;
+   * insisting longer here would delay this hook by more than that costs.
+   */
+  async function release(): Promise<void> {
+    const until = clock.now().getTime() + RELEASE_MS;
+    for (;;) {
+      // Only release our own lock: if this write outlived lockStaleMs and
+      // someone took over, the lock on disk is theirs now.
+      if ((await answerHeld(() => fs.readFile(lock), undefined)) !== token) {
+        return;
+      }
+      try {
+        await fs.remove(lock);
+        return;
+      } catch (error) {
+        const code = errorCode(error);
+        if (code !== "EPERM" && code !== "EBUSY") throw error;
+      }
+      if (clock.now().getTime() >= until) return;
+      await clock.sleep(o.lockRetryMs * (0.5 + clock.random()));
+    }
+  }
+
   await fs.mkdir(dirname(lock));
   const token = uniqueSuffix();
   const deadline = clock.now().getTime() + o.lockTimeoutMs;
@@ -700,19 +729,16 @@ export async function withFileLock<T>(
     const now = clock.now().getTime();
     if (mtime !== undefined && now - mtime > o.lockStaleMs) {
       await removeIfUnchanged(held);
-      continue;
     }
+    // A stale lock that could not be removed - a third party holds the file -
+    // still has to reach the deadline, and must not spin while it waits.
     if (now >= deadline) throw new LockTimeoutError(lock);
     await clock.sleep(o.lockRetryMs * (0.5 + clock.random()));
   }
   try {
     return await fn();
   } finally {
-    // Only release our own lock: if this write outlived lockStaleMs and
-    // someone took over, the lock on disk is theirs now.
-    if ((await answerHeld(() => fs.readFile(lock), undefined)) === token) {
-      await answerHeld(() => fs.remove(lock), undefined);
-    }
+    await release();
   }
 }
 
