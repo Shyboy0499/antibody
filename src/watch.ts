@@ -140,19 +140,42 @@ export async function runWatch(
   const read = memoryReader(memory);
   let frozen = false;
   let filter: EventFilter = "all";
+  // The branch is read once: a checkout while watching shows on the next start.
+  const branch = (() => {
+    try {
+      const name = deps.git?.(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+      return name === undefined || name === "" ? undefined : name;
+    } catch {
+      return undefined;
+    }
+  })();
+  // The antibody the selection is on, and whether its detail is open.
+  let selected: number | undefined;
+  let detailOpen = false;
   let last = await read();
   const frame = (colours: boolean) => {
     const { columns, rows } = size();
     const view = fleetView(last.events, last.entries, last.claims, now());
+    if (selected !== undefined && view.antibodies.length === 0) {
+      selected = undefined;
+      detailOpen = false;
+    }
+    if (selected !== undefined)
+      selected = Math.min(selected, view.antibodies.length - 1);
     return renderView(view, {
       width: columns,
       height: rows,
       color: colours,
       now: now(),
       repo,
+      ...(branch === undefined ? {} : { branch }),
       frozen,
       paused: last.paused,
       filter,
+      ...(selected === undefined ? {} : { selected }),
+      ...(detailOpen && selected !== undefined
+        ? { detail: view.antibodies[selected] }
+        : {}),
     });
   };
 
@@ -207,6 +230,29 @@ export async function runWatch(
         setInjectionPaused(memory, !last.paused);
         last = { ...last, paused: !last.paused };
         draw();
+      } else if (text === "\r" || text === "\n") {
+        // Enter opens the selected antibody, or closes its detail.
+        if (detailOpen) {
+          detailOpen = false;
+        } else if (last.entries.length > 0) {
+          selected = Math.min(
+            selected ?? last.entries.length - 1,
+            last.entries.length - 1,
+          );
+          detailOpen = true;
+        }
+        draw();
+      } else if (text === "\u001b[A" || text === "\u001b[B") {
+        // Up and down move the selection through the antibodies, from the newest.
+        const count = last.entries.length;
+        if (count > 0) {
+          const from = selected ?? count - 1;
+          selected =
+            text === "\u001b[A"
+              ? Math.max(0, from - 1)
+              : Math.min(count - 1, from + 1);
+          draw();
+        }
       } else if (text.includes("f")) {
         filter =
           EVENT_FILTERS[

@@ -6094,6 +6094,38 @@ function createTools(context) {
 		})
 	];
 }
+/**
+* Tokens saved over time, for the sparkline. Each point is the running total
+* the memory pane reports - what each fix notice saved, less every notice's
+* tokens, clamped at 0 - as it stood at the end of that point's span.
+*
+* @param events - events.jsonl, oldest first.
+* @param costs - the measured diagnosis costs, from measuredCosts().
+* @param now - the current time, where the last point ends.
+*/
+function savedSeries(events, costs, now) {
+	const series = Array.from({ length: 24 }, () => 0);
+	if (events.length === 0) return series;
+	const start = Date.parse(events[0].t);
+	const span = Math.max(1, now.getTime() - start);
+	let running = 0;
+	let next = 0;
+	const apply = (event) => {
+		if (fixNotice(event)) running += diagnosisCost(costs, event.id);
+		if (event.kind === "notice") running -= event.tokens ?? 0;
+	};
+	for (let point = 0; point < 24; point++) {
+		const end = start + (point + 1) / 24 * span;
+		while (next < events.length && Date.parse(events[next].t) <= end) {
+			apply(events[next]);
+			next++;
+		}
+		series[point] = Math.max(0, running);
+	}
+	for (; next < events.length; next++) apply(events[next]);
+	series[23] = Math.max(0, running);
+	return series;
+}
 const fixNotice = (e) => e.kind === "notice" && FIX_NOTICE_KINDS.includes(e.notice);
 /** How one event reads in the events pane. */
 function eventLine(event) {
@@ -6229,7 +6261,8 @@ function fleetView(events, entries, claims, now) {
 			held: entries.filter(pendingReview).length
 		},
 		antibodies,
-		events: events.slice(-200).map(eventLine)
+		events: events.slice(-200).map(eventLine),
+		saved: savedSeries(events, costs, now)
 	};
 }
 //#endregion
@@ -6289,6 +6322,12 @@ function fit(text, width) {
 	return `${out}…${" ".repeat(width - 1 - used)}`;
 }
 const thousands = (n) => Math.round(n).toLocaleString("en-US");
+const BLOCKS = "▁▂▃▄▅▆▇█";
+/** A series drawn as one block per point, scaled to its own highest value. */
+function sparkline(values) {
+	const top = Math.max(0, ...values);
+	return values.map((v) => top === 0 ? BLOCKS[0] : BLOCKS[Math.round(Math.max(0, v) / top * 7)]).join("");
+}
 /** One screen of the fleet view. */
 function renderView(view, o) {
 	const width = Math.max(20, o.width);
@@ -6337,7 +6376,7 @@ function renderView(view, o) {
 		10,
 		"bold",
 		"inverse"
-	], [` ${o.repo}`, -1], [
+	], [` ${o.repo}${o.branch === void 0 ? "" : ` · ${o.branch}`}`, -1], [
 		`  ${view.agents.length} agents · ${diagnosing} diagnosing · ${thousands(view.memory.tokensSaved)} tokens saved  `,
 		Math.min(64, width - 10 - cells(right) - 10),
 		"dim"
@@ -6377,16 +6416,18 @@ function renderView(view, o) {
 		`fleet immunity ${Math.round(m.immunity * 100)}%`,
 		...m.held > 0 ? [`${m.held} waiting for review`] : []
 	];
-	const memoryLines = cells(memoryParts.join(" · ")) + 2 <= width ? [memoryParts.join(" · ")] : [memoryParts.slice(0, 2).join(" · "), memoryParts.slice(2).join(" · ")];
+	const sparkLabel = "tokens saved over time  ";
+	const memoryLines = [...cells(memoryParts.join(" · ")) + 2 <= width ? [memoryParts.join(" · ")] : [memoryParts.slice(0, 2).join(" · "), memoryParts.slice(2).join(" · ")], ...view.saved.length > 0 && cells(sparkLabel) + view.saved.length <= width - 2 ? [`${sparkLabel}${sparkline(view.saved)}`] : []];
 	const byWidth = Math.min(22, Math.floor(width * .18));
 	const flexible = width - 9 - byWidth - 8 - 9;
 	const titleWidth = Math.floor(flexible * .45);
-	const antibodyRow = (a) => {
+	const antibodyRow = (a, picked) => {
 		const [fix, style] = a.held ? ["waiting for review", "yellow"] : a.fix !== "" ? [a.fix, "green"] : a.diagnosing !== void 0 ? [`diagnosing (${a.diagnosing})`, "yellow"] : [a.status === "wontfix" ? "wontfix" : "open", "red"];
 		return row([
-			` ${a.id}`,
+			`${picked ? "›" : " "}${a.id}`,
 			9,
-			"cyan"
+			"cyan",
+			...picked ? ["inverse"] : []
 		], [a.title.replace(/^\[[^\]]*\]\s*/, ""), titleWidth], [
 			` ${fix}`,
 			flexible - titleWidth,
@@ -6423,7 +6464,7 @@ function renderView(view, o) {
 		tagStyle[e.tag]
 	], [` ${e.text}`, -1]);
 	const keys = row([
-		" q quit · space freeze · p pause injection · f filter events · e edit antibodies",
+		o.detail !== void 0 ? " enter close · q quit" : " q quit · space freeze · p pause injection · f filter events · e edit antibodies · ↑↓ select · enter open",
 		-1,
 		"dim"
 	]);
@@ -6439,16 +6480,36 @@ function renderView(view, o) {
 		-1,
 		"dim"
 	]);
+	const newestStart = Math.max(0, view.antibodies.length - antibodyRows);
+	const windowStart = o.selected === void 0 ? newestStart : Math.min(o.selected, newestStart);
+	const visibleAntibodies = view.antibodies.slice(windowStart, windowStart + antibodyRows);
+	const detailSection = (a, rowsFor) => {
+		const fix = a.held ? "waiting for review" : a.fix !== "" ? a.fix : a.diagnosing !== void 0 ? `diagnosing (${a.diagnosing})` : "none yet";
+		const fields = [
+			["title", a.title],
+			["category", a.category],
+			["fingerprint", a.fingerprint],
+			["status", a.status],
+			["fix", fix],
+			["found by", a.beatenBy ?? "-"],
+			["reused", `${a.reused} times`],
+			["tokens saved", thousands(a.saved)]
+		];
+		return [heading(`Antibody ${a.id}`), ...fields.map(([name, value]) => row([
+			`  ${name}`,
+			14,
+			"dim"
+		], [value, -1]))].slice(0, Math.max(1, rowsFor));
+	};
 	const lines = [
 		status,
 		heading("Fleet", `${counts.working} working · ${counts.diagnosing} diagnosing · ${counts.holding} holding · ${counts.immune} immune`),
 		...view.agents.length === 0 ? [empty("no agent has been seen in the last 30 minutes")] : view.agents.slice(0, fleetRows).map(agentRow),
 		heading("Memory"),
 		...memoryLines.map((text) => row([` ${text}`, -1])),
-		heading("Antibodies", view.antibodies.length > antibodyRows ? `${antibodyRows} of ${view.antibodies.length}, newest last` : ""),
-		...view.antibodies.length === 0 ? [empty("no errors yet")] : view.antibodies.slice(-antibodyRows).map(antibodyRow),
-		heading("Events", filter === "all" ? "" : `${filter} only`),
-		...events.length === 0 ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)] : events.slice(events.length - eventRows).map(eventRow)
+		heading("Antibodies", view.antibodies.length > antibodyRows ? `${antibodyRows} of ${view.antibodies.length}, ${o.selected === void 0 ? "newest last" : `selected ${o.selected + 1}`}` : ""),
+		...view.antibodies.length === 0 ? [empty("no errors yet")] : visibleAntibodies.map((a, i) => antibodyRow(a, o.selected === windowStart + i)),
+		...o.detail !== void 0 ? detailSection(o.detail, 1 + eventRows) : [heading("Events", filter === "all" ? "" : `${filter} only`), ...events.length === 0 ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)] : events.slice(events.length - eventRows).map(eventRow)]
 	];
 	const blank = " ".repeat(width);
 	const body = lines.slice(0, Math.max(0, o.height - 1));
@@ -6526,18 +6587,41 @@ async function runWatch(args, io, deps = {}) {
 	const read = memoryReader(memory);
 	let frozen = false;
 	let filter = "all";
+	const branch = (() => {
+		try {
+			const name = deps.git?.([
+				"rev-parse",
+				"--abbrev-ref",
+				"HEAD"
+			], cwd);
+			return name === void 0 || name === "" ? void 0 : name;
+		} catch {
+			return;
+		}
+	})();
+	let selected;
+	let detailOpen = false;
 	let last = await read();
 	const frame = (colours) => {
 		const { columns, rows } = size();
-		return renderView(fleetView(last.events, last.entries, last.claims, now()), {
+		const view = fleetView(last.events, last.entries, last.claims, now());
+		if (selected !== void 0 && view.antibodies.length === 0) {
+			selected = void 0;
+			detailOpen = false;
+		}
+		if (selected !== void 0) selected = Math.min(selected, view.antibodies.length - 1);
+		return renderView(view, {
 			width: columns,
 			height: rows,
 			color: colours,
 			now: now(),
 			repo,
+			...branch === void 0 ? {} : { branch },
 			frozen,
 			paused: last.paused,
-			filter
+			filter,
+			...selected === void 0 ? {} : { selected },
+			...detailOpen && selected !== void 0 ? { detail: view.antibodies[selected] } : {}
 		});
 	};
 	if (once) {
@@ -6587,6 +6671,20 @@ async function runWatch(args, io, deps = {}) {
 					paused: !last.paused
 				};
 				draw();
+			} else if (text === "\r" || text === "\n") {
+				if (detailOpen) detailOpen = false;
+				else if (last.entries.length > 0) {
+					selected = Math.min(selected ?? last.entries.length - 1, last.entries.length - 1);
+					detailOpen = true;
+				}
+				draw();
+			} else if (text === "\x1B[A" || text === "\x1B[B") {
+				const count = last.entries.length;
+				if (count > 0) {
+					const from = selected ?? count - 1;
+					selected = text === "\x1B[A" ? Math.max(0, from - 1) : Math.min(count - 1, from + 1);
+					draw();
+				}
 			} else if (text.includes("f")) {
 				filter = EVENT_FILTERS[(EVENT_FILTERS.indexOf(filter) + 1) % EVENT_FILTERS.length] ?? "all";
 				draw();

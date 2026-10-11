@@ -35,6 +35,12 @@ export interface RenderOptions {
   now: Date;
   /** The repository the memory belongs to, as the status line names it. */
   repo: string;
+  /** The branch checked out, when the repository has one. */
+  branch?: string;
+  /** The antibody the selection is on, as an index into view.antibodies. */
+  selected?: number;
+  /** The selected antibody's detail, shown in place of the events pane. */
+  detail?: AntibodyRow;
   /** The view is frozen: the status line says so. */
   frozen?: boolean;
   /** Injection is paused: the status line says so. */
@@ -96,6 +102,21 @@ export function fit(text: string, width: number): string {
 
 const thousands = (n: number) => Math.round(n).toLocaleString("en-US");
 
+// One block per point, from the lowest to the highest value of the series.
+const BLOCKS = "▁▂▃▄▅▆▇█";
+
+/** A series drawn as one block per point, scaled to its own highest value. */
+export function sparkline(values: readonly number[]): string {
+  const top = Math.max(0, ...values);
+  return values
+    .map((v) =>
+      top === 0
+        ? BLOCKS[0]!
+        : BLOCKS[Math.round((Math.max(0, v) / top) * (BLOCKS.length - 1))]!,
+    )
+    .join("");
+}
+
 /** One screen of the fleet view. */
 export function renderView(view: FleetView, o: RenderOptions): string[] {
   const width = Math.max(20, o.width);
@@ -144,7 +165,7 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
   const right = `${o.paused === true ? "injection paused  " : ""}${o.frozen === true ? "frozen  " : ""}${clock(o.now)} `;
   const status = row(
     [" antibody ", 10, "bold", "inverse"],
-    [` ${o.repo}`, -1],
+    [` ${o.repo}${o.branch === undefined ? "" : ` · ${o.branch}`}`, -1],
     [
       `  ${view.agents.length} agents · ${diagnosing} diagnosing · ${thousands(view.memory.tokensSaved)} tokens saved  `,
       Math.min(64, width - 10 - cells(right) - 10),
@@ -192,16 +213,25 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     `fleet immunity ${Math.round(m.immunity * 100)}%`,
     ...(m.held > 0 ? [`${m.held} waiting for review`] : []),
   ];
-  const memoryLines =
-    cells(memoryParts.join(" · ")) + 2 <= width
+  const sparkLabel = "tokens saved over time  ";
+  const memoryLines = [
+    ...(cells(memoryParts.join(" · ")) + 2 <= width
       ? [memoryParts.join(" · ")]
-      : [memoryParts.slice(0, 2).join(" · "), memoryParts.slice(2).join(" · ")];
+      : [
+          memoryParts.slice(0, 2).join(" · "),
+          memoryParts.slice(2).join(" · "),
+        ]),
+    ...(view.saved.length > 0 &&
+    cells(sparkLabel) + view.saved.length <= width - 2
+      ? [`${sparkLabel}${sparkline(view.saved)}`]
+      : []),
+  ];
 
   // Antibodies.
   const byWidth = Math.min(22, Math.floor(width * 0.18));
   const flexible = width - 9 - byWidth - 8 - 9;
   const titleWidth = Math.floor(flexible * 0.45);
-  const antibodyRow = (a: AntibodyRow) => {
+  const antibodyRow = (a: AntibodyRow, picked: boolean) => {
     const [fix, style]: [string, Style] = a.held
       ? ["waiting for review", "yellow"]
       : a.fix !== ""
@@ -210,7 +240,12 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
           ? [`diagnosing (${a.diagnosing})`, "yellow"]
           : [a.status === "wontfix" ? "wontfix" : "open", "red"];
     return row(
-      [` ${a.id}`, 9, "cyan"],
+      [
+        `${picked ? "›" : " "}${a.id}`,
+        9,
+        "cyan",
+        ...(picked ? (["inverse"] as Style[]) : []),
+      ],
       // The tag (`[command-exit:Bash]`) costs columns the error needs more.
       [a.title.replace(/^\[[^\]]*\]\s*/, ""), titleWidth],
       [` ${fix}`, flexible - titleWidth, style],
@@ -243,7 +278,9 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     );
 
   const keys = row([
-    " q quit · space freeze · p pause injection · f filter events · e edit antibodies",
+    o.detail !== undefined
+      ? " enter close · q quit"
+      : " q quit · space freeze · p pause injection · f filter events · e edit antibodies · ↑↓ select · enter open",
     -1,
     "dim",
   ]);
@@ -268,6 +305,43 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
   const eventRows = Math.max(0, room - fleetRows - antibodyRows);
 
   const empty = (text: string) => row([` ${text}`, -1, "dim"]);
+
+  // The antibodies window follows the selection, and holds the newest rows
+  // when nothing is selected. A selected row is always inside it.
+  const newestStart = Math.max(0, view.antibodies.length - antibodyRows);
+  const windowStart =
+    o.selected === undefined ? newestStart : Math.min(o.selected, newestStart);
+  const visibleAntibodies = view.antibodies.slice(
+    windowStart,
+    windowStart + antibodyRows,
+  );
+
+  // The selected antibody's detail takes the events pane's rows.
+  const detailSection = (a: AntibodyRow, rowsFor: number): string[] => {
+    const fix = a.held
+      ? "waiting for review"
+      : a.fix !== ""
+        ? a.fix
+        : a.diagnosing !== undefined
+          ? `diagnosing (${a.diagnosing})`
+          : "none yet";
+    const fields: [string, string][] = [
+      ["title", a.title],
+      ["category", a.category],
+      ["fingerprint", a.fingerprint],
+      ["status", a.status],
+      ["fix", fix],
+      ["found by", a.beatenBy ?? "-"],
+      ["reused", `${a.reused} times`],
+      ["tokens saved", thousands(a.saved)],
+    ];
+    return [
+      heading(`Antibody ${a.id}`),
+      ...fields.map(([name, value]) =>
+        row([`  ${name}`, 14, "dim"], [value, -1]),
+      ),
+    ].slice(0, Math.max(1, rowsFor));
+  };
   const lines = [
     status,
     heading(
@@ -282,17 +356,23 @@ export function renderView(view: FleetView, o: RenderOptions): string[] {
     heading(
       "Antibodies",
       view.antibodies.length > antibodyRows
-        ? `${antibodyRows} of ${view.antibodies.length}, newest last`
+        ? `${antibodyRows} of ${view.antibodies.length}, ${o.selected === undefined ? "newest last" : `selected ${o.selected + 1}`}`
         : "",
     ),
     ...(view.antibodies.length === 0
       ? [empty("no errors yet")]
-      : view.antibodies.slice(-antibodyRows).map(antibodyRow)),
-    heading("Events", filter === "all" ? "" : `${filter} only`),
-    ...(events.length === 0
-      ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)]
-      : // slice(-0) would be every event.
-        events.slice(events.length - eventRows).map(eventRow)),
+      : visibleAntibodies.map((a, i) =>
+          antibodyRow(a, o.selected === windowStart + i),
+        )),
+    ...(o.detail !== undefined
+      ? detailSection(o.detail, 1 + eventRows)
+      : [
+          heading("Events", filter === "all" ? "" : `${filter} only`),
+          ...(events.length === 0
+            ? [empty(filter === "all" ? "no events yet" : `no ${filter} yet`)]
+            : // slice(-0) would be every event.
+              events.slice(events.length - eventRows).map(eventRow)),
+        ]),
   ];
   const blank = " ".repeat(width);
   const body = lines.slice(0, Math.max(0, o.height - 1));

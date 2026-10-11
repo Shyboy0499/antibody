@@ -333,9 +333,11 @@ Implementation (M4): a hand-written renderer instead of Ink, so the committed bu
 keeps no dependencies. It draws every frame at exactly the terminal's size, in place
 on the alternate screen. Pausing writes a `paused` file to the memory directory,
 which every hook checks: the fleet loop runs with injection off, and fixes held
-meanwhile are delivered when it resumes. Not built yet: the task column and progress
-bar in the fleet pane, the sparkline, the branch in the status bar, and opening a
-single entry. `antibody stats` prints the ledger once, without the screen, for scripts
+meanwhile are delivered when it resumes. The sparkline of tokens saved over time, the
+branch in the status bar, and opening one antibody (up and down select, enter opens its
+detail, enter again closes it) are built. Not built yet: the task column and progress
+bar in the fleet pane (the task column needs the prompt text stored, which needs a privacy
+decision; the progress bar needs a measure of how far a diagnosis has got). `antibody stats` prints the ledger once, without the screen, for scripts
 and CI.
 
 ## 7. What carries over from dsh-errkb
