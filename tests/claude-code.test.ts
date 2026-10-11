@@ -8,7 +8,7 @@ import {
 } from "../src/claude-code";
 import { HOOK_EVENTS, toCapture, toToolCall } from "../src/hook-input";
 import type { HookInput } from "../src/hook-input";
-import { REWRITE_PREFIX, REWRITE_SUFFIX } from "../src/pipefail";
+import { REWRITE_PREFIX } from "../src/pipefail";
 import { callOutcome } from "../src/resolve-detect";
 import { TAP_FAILED, VITEST_FAILED } from "./fixtures/test-output";
 
@@ -44,6 +44,7 @@ describe("parseHookInput", () => {
       transcriptPath: "/t.jsonl",
       toolName: "Bash",
       command: "pnpm test",
+      toolUseId: "toolu_1",
       error:
         "Exit code 1\nError: Environment variable not found: DATABASE_URL.",
     });
@@ -515,7 +516,7 @@ describe("issue #131: a call whose pipeline reported success", () => {
   });
 
   it("records the command the agent wrote, from the wrapper the shell ran", () => {
-    const wrapped = `${REWRITE_PREFIX}make test; echo done\n${REWRITE_SUFFIX}`;
+    const wrapped = `${REWRITE_PREFIX}make test; echo done\n__antibody_last=$?; trap - DEBUG; ( exit "$__antibody_last" )`;
     // A plain PostToolUse the wrapper made fail: the aggregate status arrives as
     // the failure the client reports, and the command keeps its own text.
     const failed = parseHookInput(

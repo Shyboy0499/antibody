@@ -43,6 +43,15 @@ export interface HookInput {
   toolName?: string;
   /** The Bash command line, when the tool ran one. */
   command?: string;
+  /** The tool call's id, which names its status file (src/pipefail.ts). */
+  toolUseId?: string;
+  /** Set when the command carried the shell wrapper (src/pipefail.ts). */
+  wrapped?: boolean;
+  /**
+   * PostToolUse of a wrapped command: the first failure the shell recorded, when
+   * the reported status said success (src/pipefail.ts).
+   */
+  maskedStatus?: number;
   /** PostToolUse: the tool's output as text. */
   output?: string;
   /**
@@ -111,6 +120,9 @@ function commandFailure(
 ): { code: number; body: string } | undefined {
   const failed = input.event === "PostToolUseFailure";
   if (!failed && input.event !== "PostToolUse") return undefined;
+  // The shell's own record of a failure it did not report (src/pipefail.ts).
+  if (!failed && input.maskedStatus !== undefined)
+    return { code: input.maskedStatus, body: input.output ?? "" };
   if (input.exitCode !== undefined) {
     // A code the harness reports is believed as it stands, with one exception:
     // a zero does not settle a call an adapter read as a failure, because the

@@ -239,40 +239,49 @@ Claude Code itself decides a Bash call's outcome from the last segment of the pi
 reads an exit of 1 as a meaning for `grep`, `rg`, `egrep`, `fgrep`, `find`, `diff`, `test`
 and `[` (its own table, `git diff` and `git grep` included) - only 2 or more is an error
 there. antibody mirrors both: a reported 1 for one of those commands is not a failure, and
-a call the harness marks `is_interrupt` is not recorded at all. **Known residual false
-positive, in a compound command:** a chain that ends on a `grep`, `diff` or `test` that
-found nothing (`grep -q pattern file; echo done`) exits 1 from that command, because the
-client's bash runs its own code around the command, so the wrapper cannot tell which
-command failed; Claude Code then reports `Exit code 1` and the chain is recorded. A
-failure before such a command is still recorded correctly. Fixing it needs the command
-text split at its separators, which is the next step if this shape matters in practice. What it cannot mirror is
-the shell's own account of a compound command, because a shell reports the *last* command's
-status: a pipeline (`npm test 2>&1 | tail -15`) and a `;` chain (`npm test; echo done`)
-both reach the hooks as successes whatever failed inside them, and the output rule above
-only covers the failures that print something. The rest is closed by a PreToolUse hook
-(`antibody hook claude-code-pretool`, src/pipefail.ts) that wraps a compound command, so the
-shell itself reports the truth:
+a call the harness marks `is_interrupt` is not recorded at all. **Compound commands.** A pipeline (`npm test 2>&1 | tail -15`) and a `;` chain
+(`npm test; echo done`) both reach the hooks with the status of their last command, so a
+failure earlier in them is invisible to the shell and to Claude Code, and the output rule
+above only covers the failures that print something. The PreToolUse hook
+(`antibody hook claude-code-pretool`, src/pipefail.ts) therefore wraps a compound command
+in a DEBUG trap, and the PostToolUse hook reads what the trap recorded:
 
 ```sh
-set -o pipefail 2>/dev/null; __antibody_failed=0
-trap '__antibody_failed=$?' ERR 2>/dev/null
+set -o pipefail 2>/dev/null; __antibody_f=0; __antibody_lb=0; __antibody_p=
+trap '<record the status of the previous command, unless it is a [[ check or a
+      benign grep/diff/test/find/rg/[ exit 1>' DEBUG 2>/dev/null
 <the command, verbatim>
-__antibody_last=$?; if [ "$__antibody_failed" -ne 0 ]; then exit "$__antibody_failed"; fi; exit "$__antibody_last"
+__antibody_last=$?; trap - DEBUG; <exit 0 for a chain ending on a benign no-match>
+mkdir -p <status dir>; printf '%s' "$__antibody_f" > <status file>; ( exit "$__antibody_last" )
 ```
 
-`set -o pipefail` makes a pipeline's status its first failing stage's, and the `ERR` trap
-fires for a command that failed **outside a tested context** - the left of `&&` or `||`, the
-condition of `if`/`while`/`until`, and `! cmd` are exempt - so a failure the agent handled
-is not recorded, the agent's own reading of `$?` is untouched, and the epilogue exits with
-the failing command's code, which Claude Code's `Exit code N` path then records. One command,
-whose status speaks for itself, is left alone. The wrapper changes what the agent runs: a
-call now fails when any command in it failed without being handled, so a bare
-`grep -q pattern file` before a passing command is a failure, and `cmd | head` can report 141
-when `head` closes early. Two cases stay unrecorded: a failure inside a tested context that a
-later command masks (`false && b; echo done`), and a background command's (`cmd &`), whose
-status no shell reports. Set `ANTIBODY_PIPEFAIL=0` to turn the rewrite off. Only Claude Code,
-through the plugin's hooks, has the rewrite; Gemini CLI and Codex CLI do not yet. Captured
-commands drop the wrapper, so one command keeps one signature.
+A DEBUG trap runs before every simple command and sees the status of the one before it, so
+each command's failure is noticed whatever the shell does with the command's own status.
+Claude Code's client runs its own `[[ "$OSTYPE" == "win32" ]]` checks between commands, which
+exit 1 on Linux, so they are left out; a grep, diff or test that exited 1 for "no match" is
+left out too, as Claude Code's own table does. The first failure's status goes to a file
+named after the tool call (`tool_use_id`) in the temporary directory. The PostToolUse hook
+reads it and removes it, and records the failure even when the client reported success. The
+command's own status is passed on unchanged, except for a chain whose last command was a
+benign no-match with no other failure, which exits 0.
+
+The rewrite does not use the ERR trap. Claude Code runs a command inside its own `&&` list,
+where the ERR trap does not behave the same on every shell: on Linux bash 5.2 it fires for
+the client's own `[[` check, on Git Bash it does not fire for the same chain (#151's live
+check). A status recorded by a DEBUG trap and read back from a file does not depend on how
+the client's shell treats the command's own status.
+
+Known limits: a `||` chain is not read from the file, because a `||` may have handled the
+failure the shell recorded and the record cannot tell which, so the hook reports only what
+the client reports for it; a failure inside a tested context that a later command masks
+(`false && b; echo done`) is not recorded; a background command (`cmd &`) is not recorded;
+a status file stays in the temporary directory if the hook never reads it. The wrapper
+changes what the agent runs: a call now fails when any command in it failed without being
+handled, so a bare `grep -q pattern file` before a passing command is a failure in a chain
+that does not end on it, and `cmd | head` can report 141 when `head` closes early. Set
+`ANTIBODY_PIPEFAIL=0` to turn the rewrite off. Only Claude Code, through the plugin's hooks,
+has the rewrite; Gemini CLI and Codex CLI do not yet. Captured commands drop the wrapper, so
+one command keeps one signature.
 
 ### 5.1 MCP tools
 
