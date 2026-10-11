@@ -5329,8 +5329,20 @@ const SETUP_NAME = "antibody";
 /** A Gemini CLI hook's time limit, in milliseconds. */
 const GEMINI_HOOK_TIMEOUT_MS = 1e4;
 const isRecord$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-/** A path as one shell word, for a command string a shell will run. */
-function shellQuote(path) {
+/**
+* A path as one shell word, for a command string a shell will run.
+*
+* The quoting belongs to the shell that runs the command, not to the path:
+* cmd.exe has no single-quote syntax, so Windows paths take `"`, where POSIX
+* shells take `'`.
+*
+* @param path - the path to write as one word.
+* @param platform - the platform of the shell that will run the command;
+*   injected so the Windows form is covered from any host.
+* @returns the path, quoted only when the shell would otherwise split it.
+*/
+function shellQuote(path, platform = process.platform) {
+	if (platform === "win32") return /^[\w.@+:\\/-]+$/.test(path) ? path : `"${path}"`;
 	return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'"'"'`)}'`;
 }
 /** Whether a hook definition holds only hooks that pass `isOurs`. */

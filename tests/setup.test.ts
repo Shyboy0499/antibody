@@ -106,17 +106,37 @@ describe("geminiSettings", () => {
   });
 
   it("quotes paths a shell would split", () => {
-    expect(shellQuote("/opt/antibody/dist/antibody.mjs")).toBe(
+    expect(shellQuote("/opt/antibody/dist/antibody.mjs", "linux")).toBe(
       "/opt/antibody/dist/antibody.mjs",
     );
-    expect(shellQuote("/opt/My Tools/antibody.mjs")).toBe(
+    expect(shellQuote("/opt/My Tools/antibody.mjs", "linux")).toBe(
       "'/opt/My Tools/antibody.mjs'",
     );
-    expect(shellQuote("/tmp/it's")).toBe(`'/tmp/it'"'"'s'`);
+    expect(shellQuote("/tmp/it's", "linux")).toBe(`'/tmp/it'"'"'s'`);
     const { hooks } = geminiSettings({}, "/a b/antibody.mjs", "node");
     expect(
       (hooks as { AfterTool: (typeof ours)[] }).AfterTool[0]!.hooks[0]!.command,
-    ).toBe("node '/a b/antibody.mjs' hook gemini");
+    ).toBe(`node ${shellQuote("/a b/antibody.mjs")} hook gemini`);
+  });
+
+  it("quotes a Windows path the way cmd.exe reads it", () => {
+    // A backslash is not an escape to cmd.exe, so a clean path needs nothing.
+    expect(shellQuote("C:\\opt\\antibody\\dist\\antibody.mjs", "win32")).toBe(
+      "C:\\opt\\antibody\\dist\\antibody.mjs",
+    );
+    // A space, or anything cmd.exe reads as syntax, takes double quotes.
+    expect(shellQuote("C:\\My Tools\\antibody.mjs", "win32")).toBe(
+      '"C:\\My Tools\\antibody.mjs"',
+    );
+    expect(shellQuote("C:\\Program Files\\nodejs\\node.exe", "win32")).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe"',
+    );
+    // % takes the quoted branch like anything else cmd.exe treats specially.
+    // Quotes keep a path in one word; they do not stop cmd.exe expanding
+    // %name%, so a path shaped like one stays a known limit.
+    expect(shellQuote("C:\\100%\\a.mjs", "win32")).toBe('"C:\\100%\\a.mjs"');
+    // Single quotes are literal characters to cmd.exe, so it never sees them.
+    expect(shellQuote("C:\\it's\\a.mjs", "win32")).toBe(`"C:\\it's\\a.mjs"`);
   });
 });
 

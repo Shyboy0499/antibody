@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { VERSION } from "../src/cli";
+import { shellQuote } from "../src/setup";
 
 // dist/antibody.mjs is what the Claude Code plugin runs, straight from git.
 // These tests run the committed file in a real process.
@@ -126,7 +127,7 @@ describe("the committed bundle's setup", () => {
       "gemini",
     ]);
     expect(settings.hooks.AfterTool[0].hooks[0].command).toBe(
-      `node ${bundle} hook gemini`,
+      `node ${shellQuote(bundle)} hook gemini`,
     );
   });
 });

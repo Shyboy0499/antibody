@@ -37,8 +37,29 @@ export const CODEX_HOOK_TIMEOUT_SEC = 10;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** A path as one shell word, for a command string a shell will run. */
-export function shellQuote(path: string): string {
+/**
+ * A path as one shell word, for a command string a shell will run.
+ *
+ * The quoting belongs to the shell that runs the command, not to the path:
+ * cmd.exe has no single-quote syntax, so Windows paths take `"`, where POSIX
+ * shells take `'`.
+ *
+ * @param path - the path to write as one word.
+ * @param platform - the platform of the shell that will run the command;
+ *   injected so the Windows form is covered from any host.
+ * @returns the path, quoted only when the shell would otherwise split it.
+ */
+export function shellQuote(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    // cmd.exe splits on spaces and reads ^ & | < > ( ) as syntax, but \ and /
+    // are literal, so a clean Windows path stands as it is. Anything else -
+    // % included - takes the quoted branch, which keeps the path one word but
+    // cannot stop cmd.exe expanding %name% inside quotes: a known limit.
+    return /^[\w.@+:\\/-]+$/.test(path) ? path : `"${path}"`;
+  }
   return /^[\w@%+=:,./-]+$/.test(path)
     ? path
     : `'${path.replaceAll("'", `'"'"'`)}'`;
