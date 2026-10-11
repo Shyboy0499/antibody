@@ -139,6 +139,23 @@ export function benignExit(command: string | undefined): boolean {
   return BENIGN_EXITS.has(first);
 }
 
+// A display command that fails prints its own error, prefixed with its name:
+// `cat: missing.txt: No such file or directory`. A line of file content never
+// starts that way, so only these lines are read from a display-only command.
+const TOOL_ERROR =
+  /^(?:cat|head|tail|grep|egrep|rg|sed|awk|ls|find|diff|wc|jq|less|more|echo|printf|tree|ag):\s/;
+
+/** Whether a display-only command printed an error of its own. */
+function ownError(output: string): boolean {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .some(
+      (line) =>
+        TOOL_ERROR.test(line) && FAILURE_LINES.some((re) => re.test(line)),
+    );
+}
+
 /**
  * Whether a shell command's output reads like a failure, for a harness that
  * does not report the exit code: it carries a test runner's verdict, or its
@@ -148,6 +165,8 @@ export function benignExit(command: string | undefined): boolean {
  * Every segment of a chained command has to display text for that exemption,
  * since what the chain does is only as harmless as its parts: `tail -5
  * build.log && node --test` can fail, `cat build.log | grep -i error` cannot.
+ * A chain that only displays text is still a failure when one of its commands
+ * printed its own error, `cat missing.txt; echo done` among them.
  *
  * @param command - the command line, when known.
  * @param output - everything the command printed.
@@ -157,7 +176,8 @@ export function looksFailed(
   output: string,
 ): boolean {
   const segments = segmentsOf(command);
-  if (segments.length > 0 && segments.every(displayOnly)) return false;
+  if (segments.length > 0 && segments.every(displayOnly))
+    return ownError(output);
   if (RUNNER_FAILURE.test(output)) return true;
   const last = output
     .split(/\r?\n/)

@@ -224,7 +224,9 @@ spec reporter with `ℹ fail 7` and a list of `✖` files, and vitest, jest or m
 it appears in the output, while a passing run ends on `# fail 0`, `ℹ fail 0`, or a summary
 with nothing failed. Every segment of a chained command has to display for that
 exemption, since a chain is only as harmless as its parts: `tail -5 build.log && node --test`
-can fail, `cat build.log | grep -i error` cannot. It is
+can fail, `cat build.log | grep -i error` cannot. A chain that only displays is still a
+failure when one of its commands printed its own error (`cat: missing.txt: No such file or
+directory`, prefixed with the command's name), since file content never starts that way. It is
 the last resort, checked only after a reported code and after the exit code Claude Code
 leads a failure's text with - `Exit code N`, the `Command failed with exit code N` its own
 Bash classifier words, or the `Command exited with non-zero status code N` of its hooks

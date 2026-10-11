@@ -35,6 +35,12 @@ describe("failure-hints", () => {
     // Only one segment of a chain has to do real work for the chain to fail.
     ["tail -15 build.log && node --test", "# fail 1"],
     ["cat errors.log; node app.js", "Cannot find module 'express'"],
+    // #131: a display-only chain still fails when a command printed its own error.
+    [
+      "cat missing.txt; echo done",
+      "cat: missing.txt: No such file or directory\ndone",
+    ],
+    ["ls nope && echo ok", "ls: nope: No such file or directory"],
   ])("%s ending in %j reads as a failure", (command, output) => {
     expect(looksFailed(command, output)).toBe(true);
   });
@@ -55,6 +61,8 @@ describe("failure-hints", () => {
       "cat package.json 2>&1 | grep -i error",
       `"error": "Cannot find module x"`,
     ],
+    // File content that reads like an error is not a tool's own error.
+    ["cat errors.txt; echo done", "Error: boom\ndone"],
   ])("%s ending in %j reads as a success", (command, output) => {
     expect(looksFailed(command, output)).toBe(false);
   });
