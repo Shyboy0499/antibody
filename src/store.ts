@@ -635,11 +635,22 @@ function uniqueSuffix(): string {
   return `${process.pid}-${uniqueCounter.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** How long a release keeps trying to delete a lock a third party is holding. */
+const RELEASE_MS = 250;
+
+/** What a refused read of the lock answers: never equal to a lock's contents. */
+const REFUSED = Symbol("refused");
+
 /**
  * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
  * older than `lockStaleMs` is taken over, and waiting gives up after
  * `lockTimeoutMs` with a LockTimeoutError. The store and state.json take the
  * same lock, so one process never writes either while another is mid-write.
+ *
+ * `.lock` is the one file here another process may be creating or deleting at
+ * the same moment. Windows refuses a create, a read or a delete of a name in
+ * that state with `EPERM` or `EBUSY`, where POSIX answers `EEXIST` or `ENOENT`.
+ * Both clear on their own, so this waits them out instead of failing a write.
  *
  * @param lock - the `.lock` path; its directory is created first.
  */
@@ -650,6 +661,25 @@ export async function withFileLock<T>(
   clock: StoreClock,
   fn: () => Promise<T>,
 ): Promise<T> {
+  /**
+   * The answer POSIX would have given, for the codes Windows raises instead: a
+   * create that lands while another process deletes the same name is refused
+   * rather than answered `EEXIST`, and a read or a delete beside a live handle
+   * is refused too. Both clear on their own, so the wait below still decides.
+   */
+  async function answerHeld<T, F>(
+    call: () => Promise<T>,
+    fallback: F,
+  ): Promise<T | F> {
+    try {
+      return await call();
+    } catch (error) {
+      const code = errorCode(error);
+      if (code !== "EPERM" && code !== "EBUSY") throw error;
+      return fallback;
+    }
+  }
+
   // Take over the stale lock whose token was `held`, and nothing else. Two
   // waiters can judge the same lock stale; the first removes it and creates its
   // own, and without this re-check the second would then remove that fresh
@@ -661,30 +691,60 @@ export async function withFileLock<T>(
   // fully would need an atomic compare-and-delete the filesystem does not
   // offer.
   async function removeIfUnchanged(held: string | undefined): Promise<void> {
-    if ((await fs.readFile(lock)) === held) await fs.remove(lock);
+    // A read that is refused is not a match, even when `held` was refused too:
+    // undefined would equal undefined, and the lock could be another writer's.
+    const current = await answerHeld(() => fs.readFile(lock), REFUSED);
+    if (current !== REFUSED && current === held) {
+      await answerHeld(() => fs.remove(lock), undefined);
+    }
+  }
+
+  /**
+   * Give the lock back, waiting out a refusal that only lasts a moment. A third
+   * party that holds the file open for longer - an editor, a virus scanner -
+   * defeats any delete, and then the stale takeover is the only way past it;
+   * insisting longer here would delay this hook by more than that costs.
+   */
+  async function release(): Promise<void> {
+    const until = clock.now().getTime() + RELEASE_MS;
+    for (;;) {
+      // Only release our own lock: if this write outlived lockStaleMs and
+      // someone took over, the lock on disk is theirs now.
+      if ((await answerHeld(() => fs.readFile(lock), undefined)) !== token) {
+        return;
+      }
+      try {
+        await fs.remove(lock);
+        return;
+      } catch (error) {
+        const code = errorCode(error);
+        if (code !== "EPERM" && code !== "EBUSY") throw error;
+      }
+      if (clock.now().getTime() >= until) return;
+      await clock.sleep(o.lockRetryMs * (0.5 + clock.random()));
+    }
   }
 
   await fs.mkdir(dirname(lock));
   const token = uniqueSuffix();
   const deadline = clock.now().getTime() + o.lockTimeoutMs;
   for (;;) {
-    if (await fs.createExclusive(lock, token)) break;
-    const held = await fs.readFile(lock);
-    const mtime = await fs.mtimeMs(lock);
+    if (await answerHeld(() => fs.createExclusive(lock, token), false)) break;
+    const held = await answerHeld(() => fs.readFile(lock), undefined);
+    const mtime = await answerHeld(() => fs.mtimeMs(lock), undefined);
     const now = clock.now().getTime();
     if (mtime !== undefined && now - mtime > o.lockStaleMs) {
       await removeIfUnchanged(held);
-      continue;
     }
+    // A stale lock that could not be removed - a third party holds the file -
+    // still has to reach the deadline, and must not spin while it waits.
     if (now >= deadline) throw new LockTimeoutError(lock);
     await clock.sleep(o.lockRetryMs * (0.5 + clock.random()));
   }
   try {
     return await fn();
   } finally {
-    // Only release our own lock: if this write outlived lockStaleMs and
-    // someone took over, the lock on disk is theirs now.
-    if ((await fs.readFile(lock)) === token) await fs.remove(lock);
+    await release();
   }
 }
 

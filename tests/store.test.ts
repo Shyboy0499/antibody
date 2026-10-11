@@ -821,6 +821,117 @@ describe("store: lock and atomic write", () => {
     expect(fs.files.has(files.lock)).toBe(false);
   });
 
+  it("waits out the codes Windows gives for a lock being created or deleted", async () => {
+    const { store, fs, clock } = memoryStore();
+    // A create that lands while another process deletes the same name comes
+    // back as EPERM on Windows, and a read beside it as EPERM too. POSIX
+    // answers EEXIST and ENOENT, which the wait already handles.
+    const refused = (code: string) => Object.assign(new Error(code), { code });
+    const create = fs.createExclusive.bind(fs);
+    let creates = 0;
+    fs.createExclusive = async (path, data) => {
+      if (path === files.lock && creates++ === 0) throw refused("EPERM");
+      return create(path, data);
+    };
+    const read = fs.readFile.bind(fs);
+    let reads = 0;
+    fs.readFile = async (path) => {
+      if (path === files.lock && reads++ === 0) throw refused("EPERM");
+      return read(path);
+    };
+    clock.sleep = async (ms) => {
+      clock.t += ms;
+    };
+
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    expect(fs.files.has(files.lock)).toBe(false);
+  });
+
+  it("leaves the lock rather than failing a write Windows refused to remove", async () => {
+    const { store, fs } = memoryStore();
+    const remove = fs.remove.bind(fs);
+    fs.remove = async (path) => {
+      if (path === files.lock) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return remove(path);
+    };
+
+    // The write still lands; the lock waits for the stale takeover instead.
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    expect(fs.files.has(files.lock)).toBe(true);
+  });
+
+  it("two writes in a row when the first release's remove is refused once", async () => {
+    const { store, fs, clock } = memoryStore();
+    const started = clock.t;
+    const remove = fs.remove.bind(fs);
+    let refused = false;
+    fs.remove = async (path) => {
+      if (path === files.lock && !refused) {
+        refused = true;
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return remove(path);
+    };
+
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    // The release insisted and took its own lock with it, so the second write
+    // never waits the stale limit out.
+    expect(fs.files.has(files.lock)).toBe(false);
+    expect((await store.append(input(2))).id).toBe("E-0002");
+    expect(clock.t - started).toBeLessThan(1_000);
+  });
+
+  it("ends the next write in a timeout when a third party keeps the lock open", async () => {
+    const { store, fs } = memoryStore({
+      lockStaleMs: 100,
+      lockTimeoutMs: 400,
+      lockRetryMs: 10,
+    });
+    const remove = fs.remove.bind(fs);
+    fs.remove = async (path) => {
+      if (path === files.lock) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return remove(path);
+    };
+
+    // The write lands, and its lock stays on disk: nothing can delete a file a
+    // third party holds open.
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    expect(fs.files.has(files.lock)).toBe(true);
+    // The next writer cannot take that lock over either, so it reports the
+    // timeout instead of the EPERM the delete raised, and never spins.
+    await expect(store.append(input(2))).rejects.toThrow(LockTimeoutError);
+  });
+
+  it("does not take over a stale lock it could not read back", async () => {
+    const { store, fs, clock } = memoryStore({
+      lockStaleMs: 100,
+      lockTimeoutMs: 400,
+      lockRetryMs: 10,
+    });
+    await fs.writeFile(files.lock, "another writer's fresh lock");
+    clock.t += 10_001;
+    // Every read of the lock is refused, so the writer never learns whose lock
+    // it is. Comparing the refused read with the refused first read would match
+    // (undefined === undefined) and delete a lock another writer may hold now.
+    const read = fs.readFile.bind(fs);
+    fs.readFile = async (path) => {
+      if (path === files.lock) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return read(path);
+    };
+    clock.sleep = async (ms) => {
+      clock.t += ms;
+    };
+
+    await expect(store.append(input(1))).rejects.toThrow(LockTimeoutError);
+    expect(fs.files.has(files.lock)).toBe(true);
+  });
+
   it("takes over a lock older than the stale limit", async () => {
     const { store, fs, clock } = memoryStore();
     await fs.writeFile(files.lock, "crashed writer");
