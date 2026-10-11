@@ -1814,6 +1814,8 @@ function uniqueSuffix() {
 }
 /** How long a release keeps trying to delete a lock a third party is holding. */
 const RELEASE_MS = 250;
+/** What a refused read of the lock answers: never equal to a lock's contents. */
+const REFUSED = Symbol("refused");
 /**
 * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
 * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -1844,7 +1846,8 @@ async function withFileLock(lock, o, fs, clock, fn) {
 		}
 	}
 	async function removeIfUnchanged(held) {
-		if (await answerHeld(() => fs.readFile(lock), void 0) === held) await answerHeld(() => fs.remove(lock), void 0);
+		const current = await answerHeld(() => fs.readFile(lock), REFUSED);
+		if (current !== REFUSED && current === held) await answerHeld(() => fs.remove(lock), void 0);
 	}
 	/**
 	* Give the lock back, waiting out a refusal that only lasts a moment. A third

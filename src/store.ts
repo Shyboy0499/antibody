@@ -638,6 +638,9 @@ function uniqueSuffix(): string {
 /** How long a release keeps trying to delete a lock a third party is holding. */
 const RELEASE_MS = 250;
 
+/** What a refused read of the lock answers: never equal to a lock's contents. */
+const REFUSED = Symbol("refused");
+
 /**
  * Run `fn` holding the knowledge base's `.lock` (§13): created with `wx`, one
  * older than `lockStaleMs` is taken over, and waiting gives up after
@@ -664,10 +667,10 @@ export async function withFileLock<T>(
    * rather than answered `EEXIST`, and a read or a delete beside a live handle
    * is refused too. Both clear on their own, so the wait below still decides.
    */
-  async function answerHeld<T>(
+  async function answerHeld<T, F>(
     call: () => Promise<T>,
-    fallback: T,
-  ): Promise<T> {
+    fallback: F,
+  ): Promise<T | F> {
     try {
       return await call();
     } catch (error) {
@@ -688,7 +691,10 @@ export async function withFileLock<T>(
   // fully would need an atomic compare-and-delete the filesystem does not
   // offer.
   async function removeIfUnchanged(held: string | undefined): Promise<void> {
-    if ((await answerHeld(() => fs.readFile(lock), undefined)) === held) {
+    // A read that is refused is not a match, even when `held` was refused too:
+    // undefined would equal undefined, and the lock could be another writer's.
+    const current = await answerHeld(() => fs.readFile(lock), REFUSED);
+    if (current !== REFUSED && current === held) {
       await answerHeld(() => fs.remove(lock), undefined);
     }
   }

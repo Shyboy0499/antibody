@@ -906,6 +906,32 @@ describe("store: lock and atomic write", () => {
     await expect(store.append(input(2))).rejects.toThrow(LockTimeoutError);
   });
 
+  it("does not take over a stale lock it could not read back", async () => {
+    const { store, fs, clock } = memoryStore({
+      lockStaleMs: 100,
+      lockTimeoutMs: 400,
+      lockRetryMs: 10,
+    });
+    await fs.writeFile(files.lock, "another writer's fresh lock");
+    clock.t += 10_001;
+    // Every read of the lock is refused, so the writer never learns whose lock
+    // it is. Comparing the refused read with the refused first read would match
+    // (undefined === undefined) and delete a lock another writer may hold now.
+    const read = fs.readFile.bind(fs);
+    fs.readFile = async (path) => {
+      if (path === files.lock) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return read(path);
+    };
+    clock.sleep = async (ms) => {
+      clock.t += ms;
+    };
+
+    await expect(store.append(input(1))).rejects.toThrow(LockTimeoutError);
+    expect(fs.files.has(files.lock)).toBe(true);
+  });
+
   it("takes over a lock older than the stale limit", async () => {
     const { store, fs, clock } = memoryStore();
     await fs.writeFile(files.lock, "crashed writer");
