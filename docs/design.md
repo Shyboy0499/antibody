@@ -273,10 +273,14 @@ the client's own `[[` check, on Git Bash it does not fire for the same chain (#1
 check). A status recorded by a DEBUG trap and read back from a file does not depend on how
 the client's shell treats the command's own status.
 
-Known limits: a `||` chain is not read from the file, because a `||` may have handled the
-failure the shell recorded and the record cannot tell which, so the hook reports only what
-the client reports for it; a failure inside a tested context that a later command masks
-(`false && b; echo done`) is not recorded; a background command (`cmd &`) is not recorded;
+Known limits: a `||` chain is not read from the file, on purpose. The shell records a failure
+that a `||` handles just as it records one that nothing handles, and the handled kind is mostly
+probes (`which tool || echo none`, `npm ls pkg || echo missing`), which are routine and not
+errors the agent hit; reading them would flood the memory with false records. So the hook
+reports only what the client reports for such a chain: a chain that ends in failure still
+shows through the client's own status. A failure that a later command masks inside a
+`;` chain is recorded (`false && b; echo done` records 1, pinned by a real-shell test). A
+background command (`cmd &`) is not recorded: its status arrives after the call has returned;
 a status file stays in the temporary directory if the hook never reads it. The wrapper
 changes what the agent runs: a call now fails when any command in it failed without being
 handled, so a bare `grep -q pattern file` before a passing command is a failure in a chain

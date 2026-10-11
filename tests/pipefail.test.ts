@@ -260,6 +260,25 @@ describe("the wrapper in a real shell", () => {
     },
   );
 
+  it.skipIf(!shellWorks)(
+    "records a failure a later command masks, and a probe a || handles",
+    () => {
+      // `false && echo b` skips b, so the trailing echo's status hides the
+      // failure: the file keeps it (#131).
+      const masked = join(dir, "masked.status");
+      const run = runWrapped("false && echo b; echo done", masked);
+      expect(run.status).toBe(0);
+      expect(readFileSync(masked, "utf8")).toBe("1");
+      // A probe a || handles is still recorded in the file; the hook ignores
+      // a `||` command's file, so it is not a record (see design.md).
+      const probe = join(dir, "probe.status");
+      const handled = runWrapped("which no-such-tool-xyz || echo none", probe);
+      expect(handled.status).toBe(0);
+      expect(handled.stdout).toBe("none\n");
+      expect(readFileSync(probe, "utf8")).toBe("1");
+    },
+  );
+
   it.skipIf(!shellWorks)("keeps a heredoc's terminator intact", () => {
     const run = runWrapped(
       "cat <<'EOF'\nhi\nEOF\nfalse",
