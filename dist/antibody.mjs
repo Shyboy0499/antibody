@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 //#region src/lazy.ts
 /** node:child_process, loaded on first use. */
 const lazyChildProcess = () => process.getBuiltinModule("node:child_process");
@@ -267,7 +267,7 @@ var CapTracker = class CapTracker {
 };
 //#endregion
 //#region src/paths.ts
-const { readFileSync: readFileSync$3, realpathSync, statSync: statSync$1 } = nodeFs;
+const { readFileSync: readFileSync$3, realpathSync, statSync: statSync$2 } = nodeFs;
 /** The file names the memory directory holds. */
 const KB_FILE = {
 	errors: "ANTIBODIES.md",
@@ -368,7 +368,7 @@ function findGitDirs(cwd) {
 	let previous;
 	while (dir !== previous) {
 		const dotGit = join(dir, ".git");
-		const stat = statSync$1(dotGit, { throwIfNoEntry: false });
+		const stat = statSync$2(dotGit, { throwIfNoEntry: false });
 		if (stat?.isDirectory()) return {
 			worktree: dir,
 			commonDir: realpathSync(dotGit)
@@ -757,6 +757,28 @@ function unwrapCommand(command) {
 	const body = command.slice(REWRITE_PREFIX.length);
 	const at = body.lastIndexOf(EPILOGUE_MARK);
 	return at === -1 ? body : body.slice(0, at);
+}
+/**
+* Remove the status files a hook never read, so a call that ended without its
+* PostToolUse does not leave one behind. Never throws.
+*
+* @param dir - the status directory.
+* @param now - the time to measure age from.
+*/
+function sweepStatus(dir = STATUS_DIR, now = Date.now()) {
+	let names;
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		if (!name.endsWith(".status")) continue;
+		const file = join(dir, name);
+		try {
+			if (now - statSync(file).mtimeMs > 864e5) rmSync(file, { force: true });
+		} catch {}
+	}
 }
 /**
 * The first failure a wrapped command recorded, read back and removed. Undefined
@@ -1473,7 +1495,7 @@ function afterOwnFix(meta) {
 }
 //#endregion
 //#region src/store.ts
-const { appendFileSync: appendFileSync$1, mkdirSync: mkdirSync$1, readFileSync: readFileSync$2, readdirSync, renameSync, rmSync: rmSync$1, statSync, writeFileSync } = nodeFs;
+const { appendFileSync: appendFileSync$1, mkdirSync: mkdirSync$1, readFileSync: readFileSync$2, readdirSync: readdirSync$1, renameSync, rmSync: rmSync$1, statSync: statSync$1, writeFileSync } = nodeFs;
 /** Entry status values (§8). */
 const ENTRY_STATUSES = [
 	"open",
@@ -2106,7 +2128,7 @@ function nodeStoreFs() {
 		},
 		async mtimeMs(path) {
 			try {
-				return statSync(path).mtimeMs;
+				return statSync$1(path).mtimeMs;
 			} catch (error) {
 				if (errorCode$1(error) === "ENOENT") return void 0;
 				throw error;
@@ -2117,7 +2139,7 @@ function nodeStoreFs() {
 		},
 		async list(dir) {
 			try {
-				return readdirSync(dir);
+				return readdirSync$1(dir);
 			} catch (error) {
 				if (errorCode$1(error) === "ENOENT") return [];
 				throw error;
@@ -6579,6 +6601,7 @@ const TIMEOUT = Symbol("timeout");
 async function runHook(harness, io, deps = {}) {
 	const debug = io.env.ANTIBODY_DEBUG === "1";
 	if (harness === "claude-code-pretool") {
+		sweepStatus();
 		io.stdout(pipefailResponse(await io.readStdin(), io.env));
 		return 0;
 	}

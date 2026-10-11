@@ -31,7 +31,12 @@ import { GEMINI, geminiResponse, parseGeminiInput } from "./gemini";
 import type { Fleet } from "./fleet";
 import { createMcpServer, serveLines } from "./mcp";
 import { injectionPaused, memoryDir } from "./paths";
-import { PRE_TOOL_HARNESS, pipefailResponse, readStatus } from "./pipefail";
+import {
+  PRE_TOOL_HARNESS,
+  pipefailResponse,
+  readStatus,
+  sweepStatus,
+} from "./pipefail";
 import { autoImportText, importOnFirstSession } from "./auto-import";
 import { runRelay } from "./relay-cli";
 import { startRelaySync } from "./relay-client";
@@ -145,6 +150,7 @@ export async function runHook(
   const debug = io.env.ANTIBODY_DEBUG === "1";
   // The PreToolUse rewrite needs no memory or fleet (src/pipefail.ts).
   if (harness === PRE_TOOL_HARNESS) {
+    sweepStatus();
     io.stdout(pipefailResponse(await io.readStdin(), io.env));
     return 0;
   }

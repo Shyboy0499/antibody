@@ -22,7 +22,7 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 
 /** The environment variable that turns the rewrite off when set to 0. */
 export const PIPEFAIL_ENV = "ANTIBODY_PIPEFAIL";
@@ -135,6 +135,38 @@ export function unwrapCommand(command: string): string {
   const body = command.slice(REWRITE_PREFIX.length);
   const at = body.lastIndexOf(EPILOGUE_MARK);
   return at === -1 ? body : body.slice(0, at);
+}
+
+/** A status file this old was never read, so its tool call is over. */
+export const STATUS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Remove the status files a hook never read, so a call that ended without its
+ * PostToolUse does not leave one behind. Never throws.
+ *
+ * @param dir - the status directory.
+ * @param now - the time to measure age from.
+ */
+export function sweepStatus(
+  dir: string = STATUS_DIR,
+  now: number = Date.now(),
+): void {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.endsWith(".status")) continue;
+    const file = join(dir, name);
+    try {
+      if (now - statSync(file).mtimeMs > STATUS_MAX_AGE_MS)
+        rmSync(file, { force: true });
+    } catch {
+      // A file that cannot be read or removed is left for the next sweep.
+    }
+  }
 }
 
 /**

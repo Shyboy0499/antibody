@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +22,7 @@ import {
   STATUS_DIR,
   rewriteCommand,
   statusPathFor,
+  sweepStatus,
   unwrapCommand,
 } from "../src/pipefail";
 
@@ -265,5 +267,30 @@ describe("the wrapper in a real shell", () => {
     );
     expect(run.status).toBe(1);
     expect(run.stdout).toBe("hi\n");
+  });
+});
+
+describe("sweepStatus", () => {
+  it("removes status files left over a day, and keeps the rest", () => {
+    const old = join(dir, "old.status");
+    const fresh = join(dir, "fresh.status");
+    const other = join(dir, "notes.txt");
+    writeFileSync(old, "1");
+    writeFileSync(fresh, "1");
+    writeFileSync(other, "keep");
+    const day = 24 * 60 * 60 * 1000;
+    utimesSync(
+      old,
+      (Date.now() - 2 * day) / 1000,
+      (Date.now() - 2 * day) / 1000,
+    );
+    sweepStatus(dir, Date.now());
+    expect(existsSync(old)).toBe(false);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(other)).toBe(true);
+  });
+
+  it("does nothing for a folder that does not exist", () => {
+    expect(() => sweepStatus(join(dir, "missing"))).not.toThrow();
   });
 });
