@@ -821,6 +821,47 @@ describe("store: lock and atomic write", () => {
     expect(fs.files.has(files.lock)).toBe(false);
   });
 
+  it("waits out the codes Windows gives for a lock being created or deleted", async () => {
+    const { store, fs, clock } = memoryStore();
+    // A create that lands while another process deletes the same name comes
+    // back as EPERM on Windows, and a read beside it as EPERM too. POSIX
+    // answers EEXIST and ENOENT, which the wait already handles.
+    const refused = (code: string) => Object.assign(new Error(code), { code });
+    const create = fs.createExclusive.bind(fs);
+    let creates = 0;
+    fs.createExclusive = async (path, data) => {
+      if (path === files.lock && creates++ === 0) throw refused("EPERM");
+      return create(path, data);
+    };
+    const read = fs.readFile.bind(fs);
+    let reads = 0;
+    fs.readFile = async (path) => {
+      if (path === files.lock && reads++ === 0) throw refused("EPERM");
+      return read(path);
+    };
+    clock.sleep = async (ms) => {
+      clock.t += ms;
+    };
+
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    expect(fs.files.has(files.lock)).toBe(false);
+  });
+
+  it("leaves the lock rather than failing a write Windows refused to remove", async () => {
+    const { store, fs } = memoryStore();
+    const remove = fs.remove.bind(fs);
+    fs.remove = async (path) => {
+      if (path === files.lock) {
+        throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      }
+      return remove(path);
+    };
+
+    // The write still lands; the lock waits for the stale takeover instead.
+    expect((await store.append(input(1))).id).toBe("E-0001");
+    expect(fs.files.has(files.lock)).toBe(true);
+  });
+
   it("takes over a lock older than the stale limit", async () => {
     const { store, fs, clock } = memoryStore();
     await fs.writeFile(files.lock, "crashed writer");

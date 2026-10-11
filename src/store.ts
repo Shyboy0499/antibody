@@ -641,6 +641,11 @@ function uniqueSuffix(): string {
  * `lockTimeoutMs` with a LockTimeoutError. The store and state.json take the
  * same lock, so one process never writes either while another is mid-write.
  *
+ * `.lock` is the one file here another process may be creating or deleting at
+ * the same moment. Windows refuses a create, a read or a delete of a name in
+ * that state with `EPERM` or `EBUSY`, where POSIX answers `EEXIST` or `ENOENT`.
+ * Both clear on their own, so this waits them out instead of failing a write.
+ *
  * @param lock - the `.lock` path; its directory is created first.
  */
 export async function withFileLock<T>(
@@ -650,6 +655,25 @@ export async function withFileLock<T>(
   clock: StoreClock,
   fn: () => Promise<T>,
 ): Promise<T> {
+  /**
+   * The answer POSIX would have given, for the codes Windows raises instead: a
+   * create that lands while another process deletes the same name is refused
+   * rather than answered `EEXIST`, and a read or a delete beside a live handle
+   * is refused too. Both clear on their own, so the wait below still decides.
+   */
+  async function answerHeld<T>(
+    call: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    try {
+      return await call();
+    } catch (error) {
+      const code = errorCode(error);
+      if (code !== "EPERM" && code !== "EBUSY") throw error;
+      return fallback;
+    }
+  }
+
   // Take over the stale lock whose token was `held`, and nothing else. Two
   // waiters can judge the same lock stale; the first removes it and creates its
   // own, and without this re-check the second would then remove that fresh
@@ -661,16 +685,18 @@ export async function withFileLock<T>(
   // fully would need an atomic compare-and-delete the filesystem does not
   // offer.
   async function removeIfUnchanged(held: string | undefined): Promise<void> {
-    if ((await fs.readFile(lock)) === held) await fs.remove(lock);
+    if ((await answerHeld(() => fs.readFile(lock), undefined)) === held) {
+      await answerHeld(() => fs.remove(lock), undefined);
+    }
   }
 
   await fs.mkdir(dirname(lock));
   const token = uniqueSuffix();
   const deadline = clock.now().getTime() + o.lockTimeoutMs;
   for (;;) {
-    if (await fs.createExclusive(lock, token)) break;
-    const held = await fs.readFile(lock);
-    const mtime = await fs.mtimeMs(lock);
+    if (await answerHeld(() => fs.createExclusive(lock, token), false)) break;
+    const held = await answerHeld(() => fs.readFile(lock), undefined);
+    const mtime = await answerHeld(() => fs.mtimeMs(lock), undefined);
     const now = clock.now().getTime();
     if (mtime !== undefined && now - mtime > o.lockStaleMs) {
       await removeIfUnchanged(held);
@@ -684,7 +710,9 @@ export async function withFileLock<T>(
   } finally {
     // Only release our own lock: if this write outlived lockStaleMs and
     // someone took over, the lock on disk is theirs now.
-    if ((await fs.readFile(lock)) === token) await fs.remove(lock);
+    if ((await answerHeld(() => fs.readFile(lock), undefined)) === token) {
+      await answerHeld(() => fs.remove(lock), undefined);
+    }
   }
 }
 
