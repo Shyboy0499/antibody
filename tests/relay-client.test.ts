@@ -91,7 +91,7 @@ beforeEach(async () => {
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   }
   relay = await startRelay({
-    token: TOKEN,
+    tokens: [TOKEN],
     dataFile: join(root, "relay.json"),
     port: 0,
     host: "127.0.0.1",

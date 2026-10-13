@@ -5026,6 +5026,7 @@ function fixesSince(state, since) {
 		count: changed.length
 	};
 }
+const MINUTE_MS = 6e4;
 /** Why a saved state could not be loaded. */
 var RelayStateError = class extends Error {};
 /**
@@ -5067,10 +5068,24 @@ function readBody(req, max) {
 * @param o - the token, the state file, and where to listen.
 */
 async function startRelay(o) {
-	if (o.token.length < 16) throw new RangeError(`the relay's token must be at least 16 characters`);
+	if (o.tokens.length === 0) throw new RangeError("the relay needs a token");
+	for (const token of o.tokens) if (token.length < 16) throw new RangeError(`each of the relay's tokens must be at least 16 characters`);
 	const fs = o.fs ?? nodeStoreFs();
 	let state = await loadRelayState(o.dataFile, fs);
-	const want = sha256Hex(`Bearer ${o.token}`);
+	const known = new Set(o.tokens.map((t) => sha256Hex(`Bearer ${t}`)));
+	const limit = o.pushesPerMinute ?? 60;
+	const clock = o.now ?? (() => Date.now());
+	const pushes = /* @__PURE__ */ new Map();
+	const mayPush = (key) => {
+		const now = clock();
+		const recent = (pushes.get(key) ?? []).filter((t) => now - t < MINUTE_MS);
+		if (recent.length >= limit) {
+			pushes.set(key, recent);
+			return recent[0] + MINUTE_MS - now;
+		}
+		recent.push(now);
+		pushes.set(key, recent);
+	};
 	let saving = Promise.resolve();
 	const save = (next) => {
 		saving = saving.then(() => writeFileAtomic(fs, o.dataFile, `${JSON.stringify(next)}\n`));
@@ -5080,7 +5095,8 @@ async function startRelay(o) {
 		const url = new URL(req.url ?? "/", "http://relay");
 		if (url.pathname === "/health" && req.method === "GET") return send(res, 200, "ok\n", "text/plain");
 		if (url.pathname !== "/v1/fixes") return send(res, 404, { error: "not found" });
-		if (sha256Hex(req.headers.authorization ?? "") !== want) return send(res, 401, { error: "a missing or wrong token" });
+		const key = sha256Hex(req.headers.authorization ?? "");
+		if (!known.has(key)) return send(res, 401, { error: "a missing or wrong token" });
 		if (req.method === "GET") {
 			const since = Number(url.searchParams.get("since") ?? 0);
 			if (!Number.isInteger(since) || since < 0) return send(res, 400, { error: "since takes a whole number" });
@@ -5092,6 +5108,11 @@ async function startRelay(o) {
 			});
 		}
 		if (req.method !== "POST") return send(res, 405, { error: "GET or POST" });
+		const wait = mayPush(key);
+		if (wait !== void 0) {
+			res.setHeader("retry-after", String(Math.ceil(wait / 1e3)));
+			return send(res, 429, { error: "too many pushes; wait and try again" });
+		}
 		const body = await readBody(req, RELAY_MAX_BYTES * 2);
 		if (body === void 0) return send(res, 413, { error: "too large" });
 		let document;
@@ -5192,9 +5213,9 @@ async function serve(args, io, deps) {
 		io.stderr(`antibody: --port takes a port number\n${RELAY_USAGE}`);
 		return 2;
 	}
-	const token = io.env["ANTIBODY_RELAY_TOKEN"] ?? "";
-	if (token.length < 16) {
-		io.stderr(`antibody: set ${RELAY_TOKEN_ENV} to a secret of at least 16 characters; every machine sends it\n`);
+	const tokens = (io.env["ANTIBODY_RELAY_TOKEN"] ?? "").split(",").map((token) => token.trim()).filter((token) => token !== "");
+	if (tokens.length === 0 || tokens.some((token) => token.length < 16)) {
+		io.stderr(`antibody: set ${RELAY_TOKEN_ENV} to one secret of at least 16 characters per machine, separated by commas\n`);
 		return 1;
 	}
 	const host = flags.get("--host") ?? "127.0.0.1";
@@ -5203,7 +5224,7 @@ async function serve(args, io, deps) {
 	let server;
 	try {
 		server = await startRelay({
-			token,
+			tokens,
 			dataFile,
 			port,
 			host

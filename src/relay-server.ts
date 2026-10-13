@@ -4,9 +4,10 @@
 //   POST /v1/fixes           { document }: take in a machine's fixes; { seq, accepted }
 //   GET  /health             "ok", without a token, for a load balancer
 //
-// Every /v1 request carries `Authorization: Bearer <token>`; the token is
-// compared by its SHA-256, so the comparison says nothing about the token. The
-// state is saved to one JSON file after every change, by atomic rename.
+// Every /v1 request carries `Authorization: Bearer <token>`, one of the relay's
+// tokens, compared by its SHA-256 so the comparison says nothing about the
+// token. Each token may push a limited number of times a minute; a push past it
+// gets a 429 with Retry-After. The state is saved to one JSON file after every change, by atomic rename.
 //
 // It speaks plain HTTP. Run it behind a reverse proxy that terminates TLS when
 // machines reach it over a network.
@@ -26,14 +27,26 @@ import type { StoreFs } from "./store";
 /** The shortest token the relay accepts. */
 export const RELAY_MIN_TOKEN = 16;
 
+/** The pushes one token may make in a minute, unless the relay says otherwise. */
+export const RELAY_PUSHES_PER_MINUTE = 60;
+
+const MINUTE_MS = 60_000;
+
 export interface RelayServerOptions {
-  /** The shared secret every machine sends. */
-  token: string;
+  /**
+   * The secrets the machines send, one per machine. Removing one and restarting
+   * the relay revokes it.
+   */
+  tokens: readonly string[];
   /** The JSON file the state is kept in. */
   dataFile: string;
   port: number;
   host: string;
   fs?: StoreFs;
+  /** The most pushes one token may make in a minute; more get a 429. */
+  pushesPerMinute?: number;
+  /** The clock the push limit reads, in milliseconds; the real one by default. */
+  now?: () => number;
 }
 
 /** A running relay. */
@@ -105,13 +118,31 @@ function readBody(
  * @param o - the token, the state file, and where to listen.
  */
 export async function startRelay(o: RelayServerOptions): Promise<RelayServer> {
-  if (o.token.length < RELAY_MIN_TOKEN)
-    throw new RangeError(
-      `the relay's token must be at least ${RELAY_MIN_TOKEN} characters`,
-    );
+  if (o.tokens.length === 0) throw new RangeError("the relay needs a token");
+  for (const token of o.tokens)
+    if (token.length < RELAY_MIN_TOKEN)
+      throw new RangeError(
+        `each of the relay's tokens must be at least ${RELAY_MIN_TOKEN} characters`,
+      );
   const fs = o.fs ?? nodeStoreFs();
   let state = await loadRelayState(o.dataFile, fs);
-  const want = sha256Hex(`Bearer ${o.token}`);
+  // Each token is compared by its hash, and counted for its own push limit.
+  const known = new Set(o.tokens.map((t) => sha256Hex(`Bearer ${t}`)));
+  const limit = o.pushesPerMinute ?? RELAY_PUSHES_PER_MINUTE;
+  const clock = o.now ?? (() => Date.now());
+  const pushes = new Map<string, number[]>();
+  // Whether this token may push now, and the time it recorded the push.
+  const mayPush = (key: string): number | undefined => {
+    const now = clock();
+    const recent = (pushes.get(key) ?? []).filter((t) => now - t < MINUTE_MS);
+    if (recent.length >= limit) {
+      pushes.set(key, recent);
+      return recent[0]! + MINUTE_MS - now;
+    }
+    recent.push(now);
+    pushes.set(key, recent);
+    return undefined;
+  };
   // Changes are saved one at a time, in the order they were made.
   let saving: Promise<void> = Promise.resolve();
   const save = (next: RelayState) => {
@@ -127,7 +158,8 @@ export async function startRelay(o: RelayServerOptions): Promise<RelayServer> {
       return send(res, 200, "ok\n", "text/plain");
     if (url.pathname !== "/v1/fixes")
       return send(res, 404, { error: "not found" });
-    if (sha256Hex(req.headers.authorization ?? "") !== want)
+    const key = sha256Hex(req.headers.authorization ?? "");
+    if (!known.has(key))
       return send(res, 401, { error: "a missing or wrong token" });
     if (req.method === "GET") {
       const since = Number(url.searchParams.get("since") ?? 0);
@@ -137,6 +169,11 @@ export async function startRelay(o: RelayServerOptions): Promise<RelayServer> {
       return send(res, 200, { seq, count, document: text });
     }
     if (req.method !== "POST") return send(res, 405, { error: "GET or POST" });
+    const wait = mayPush(key);
+    if (wait !== undefined) {
+      res.setHeader("retry-after", String(Math.ceil(wait / 1000)));
+      return send(res, 429, { error: "too many pushes; wait and try again" });
+    }
     const body = await readBody(req, RELAY_MAX_BYTES * 2);
     if (body === undefined) return send(res, 413, { error: "too large" });
     let document: unknown;
