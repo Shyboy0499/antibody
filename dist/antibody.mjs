@@ -4834,12 +4834,27 @@ async function syncRelay(memory, config, deps = {}) {
 				const came = new Map(parseDocument$1(document).blocks.map((b) => [keyOf$1(b.entry), fixSig(b.entry.fix)]));
 				for (const e of (await store.read()).blocks.map((b) => b.entry)) if (came.get(keyOf$1(e)) === fixSig(e.fix)) state.known[keyOf$1(e)] = fixSig(e.fix);
 			}
+			const gone = Array.isArray(since.removed) ? since.removed.filter((k) => typeof k === "string") : [];
+			let removed = 0;
+			for (const key of gone) {
+				for (const e of (await store.read()).blocks.map((b) => b.entry)) {
+					if (keyOf$1(e) !== key || e.fix === "" || state.known[key] !== fixSig(e.fix)) continue;
+					await store.update(e.id, {
+						fix: "",
+						status: "open",
+						meta: { review: null }
+					});
+					removed++;
+				}
+				delete state.known[key];
+			}
 			if (typeof since.seq === "number") state.seq = since.seq;
 			await writeFileAtomic(fs, stateFile, `${JSON.stringify(state)}\n`);
 			return {
 				pushed: changed.length,
 				pulled,
-				held: config.trust !== "fleet"
+				held: config.trust !== "fleet",
+				removed
 			};
 		});
 	} catch (error) {

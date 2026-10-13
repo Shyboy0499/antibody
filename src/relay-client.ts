@@ -115,6 +115,8 @@ export interface SyncResult {
   pulled: number;
   /** Whether what was taken in waits for a person's review. */
   held: boolean;
+  /** Fixes cleared here because the owner removed them from the relay. */
+  removed: number;
 }
 
 /** What syncRelay() takes from its caller; injected in tests. */
@@ -222,12 +224,38 @@ export async function syncRelay(
             if (came.get(keyOf(e)) === fixSig(e.fix))
               state.known[keyOf(e)] = fixSig(e.fix);
         }
+        // The owner removed some fixes from the relay: clear the copy held here,
+        // whether it was applied or waits for review. Only a fix still as the
+        // relay last saw it is cleared, so a fix this machine changed since stays.
+        const gone = Array.isArray(since.removed)
+          ? since.removed.filter((k): k is string => typeof k === "string")
+          : [];
+        let removed = 0;
+        for (const key of gone) {
+          for (const e of (await store.read()).blocks.map((b) => b.entry)) {
+            if (
+              keyOf(e) !== key ||
+              e.fix === "" ||
+              state.known[key] !== fixSig(e.fix)
+            )
+              continue;
+            await store.update(e.id, {
+              fix: "",
+              status: "open",
+              meta: { review: null },
+            });
+            removed++;
+          }
+          delete state.known[key];
+        }
+
         if (typeof since.seq === "number") state.seq = since.seq;
         await writeFileAtomic(fs, stateFile, `${JSON.stringify(state)}\n`);
         return {
           pushed: changed.length,
           pulled,
           held: config.trust !== "fleet",
+          removed,
         };
       },
     );
