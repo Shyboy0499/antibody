@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,26 +24,44 @@ const WRITERS = 8;
 const ROUNDS = 5;
 const agents = Array.from({ length: WRITERS }, (_, n) => `agent-${n + 1}`);
 
-let dir: string;
-let summaries: { agent: string; granted: number }[];
+type Summary = { agent: string; granted: number };
+type Outcome = PromiseSettledResult<{ stdout: string }>;
 
-beforeAll(async () => {
-  dir = join(await mkdtemp(join(tmpdir(), "antibody-eight-")), "memory");
-  const results = await Promise.all(
-    agents.map((agent) =>
+// Every writer runs to its end, even when one fails: the others keep writing
+// into the directory, so the suite must not tear it down under them. A failed
+// writer is reported once all of them have finished, not as soon as it fails.
+const runWriters = (
+  names: string[],
+  memoryOf: (agent: string) => string,
+): Promise<Outcome[]> =>
+  Promise.allSettled(
+    names.map((agent) =>
       run(process.execPath, [viteNode, writer], {
         cwd: root,
         env: {
           ...process.env,
-          ANTIBODY_TEST_MEMORY: dir,
+          ANTIBODY_TEST_MEMORY: memoryOf(agent),
           ANTIBODY_TEST_AGENT: agent,
           ANTIBODY_TEST_ROUNDS: String(ROUNDS),
         },
       }),
     ),
   );
-  summaries = results.map(({ stdout }) =>
-    JSON.parse(stdout.trim().split("\n").at(-1)!),
+
+const summaryOf = ({ stdout }: { stdout: string }): Summary =>
+  JSON.parse(stdout.trim().split("\n").at(-1)!);
+
+let dir: string;
+let summaries: Summary[];
+
+beforeAll(async () => {
+  dir = join(await mkdtemp(join(tmpdir(), "antibody-eight-")), "memory");
+  const outcomes = await runWriters(agents, () => dir);
+  const failed = outcomes.filter((o) => o.status === "rejected");
+  if (failed.length > 0)
+    throw new Error(`${failed.length} writer(s) failed: ${failed[0]!.reason}`);
+  summaries = outcomes.map((o) =>
+    summaryOf((o as PromiseFulfilledResult<{ stdout: string }>).value),
   );
 }, 120_000);
 
@@ -92,5 +110,43 @@ describe("eight writer processes on one memory directory", () => {
         (n) => n === ".lock" || n.endsWith(".tmp") || n.includes("corrupt"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("a writer that fails to start", () => {
+  // The crashed writer's memory is under a plain file, so its first write
+  // fails with ENOTDIR. The other writers must still run to the end, and their
+  // events must still land: tearing the directory down early would lose them.
+  let root2: string;
+  let outcomes: Outcome[];
+  let memory: string;
+  const names = ["steady-1", "steady-2", "crashed"];
+
+  beforeAll(async () => {
+    root2 = await mkdtemp(join(tmpdir(), "antibody-crash-"));
+    memory = join(root2, "memory");
+    await writeFile(join(root2, "blocker"), "a file, not a directory\n");
+    const blocked = join(root2, "blocker", "memory");
+    outcomes = await runWriters(names, (agent) =>
+      agent === "crashed" ? blocked : memory,
+    );
+  }, 120_000);
+
+  afterAll(async () => {
+    await rm(root2, { recursive: true, force: true });
+  });
+
+  it("reports the crashed writer, after the others have finished", () => {
+    expect(outcomes.map((o) => o.status)).toEqual([
+      "fulfilled",
+      "fulfilled",
+      "rejected",
+    ]);
+  });
+
+  it("keeps every event the writers that did not crash appended", async () => {
+    const { events } = await readEventsFrom(filesIn(memory).events);
+    for (const agent of names.slice(0, 2))
+      expect(events.filter((e) => e.agent === agent)).toHaveLength(ROUNDS);
   });
 });
