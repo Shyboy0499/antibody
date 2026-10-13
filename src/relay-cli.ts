@@ -3,8 +3,9 @@
 //   antibody relay serve [--port N] [--host H] [--data FILE]
 //   antibody relay sync
 //
-// The token every machine sends is read from ANTIBODY_RELAY_TOKEN; a machine
-// that syncs names the relay in ANTIBODY_RELAY (src/relay-client.ts). The relay
+// The relay reads one secret per machine from ANTIBODY_RELAY_TOKEN, separated by
+// commas; a machine that syncs sends its own and names the relay in
+// ANTIBODY_RELAY (src/relay-client.ts). The relay
 // runs until it is interrupted, and exits 0 then. Both exit 1 when they cannot
 // do their work, and 2 on usage.
 import { resolve } from "node:path";
@@ -104,10 +105,17 @@ async function serve(
     io.stderr(`antibody: --port takes a port number\n${RELAY_USAGE}`);
     return 2;
   }
-  const token = io.env[RELAY_TOKEN_ENV] ?? "";
-  if (token.length < RELAY_MIN_TOKEN) {
+  // One secret per machine, separated by commas; each machine sends its own.
+  const tokens = (io.env[RELAY_TOKEN_ENV] ?? "")
+    .split(",")
+    .map((token) => token.trim())
+    .filter((token) => token !== "");
+  if (
+    tokens.length === 0 ||
+    tokens.some((token) => token.length < RELAY_MIN_TOKEN)
+  ) {
     io.stderr(
-      `antibody: set ${RELAY_TOKEN_ENV} to a secret of at least ${RELAY_MIN_TOKEN} characters; every machine sends it\n`,
+      `antibody: set ${RELAY_TOKEN_ENV} to one secret of at least ${RELAY_MIN_TOKEN} characters per machine, separated by commas\n`,
     );
     return 1;
   }
@@ -116,7 +124,7 @@ async function serve(
   const dataFile = resolve(cwd, flags.get("--data") ?? "antibody-relay.json");
   let server: RelayServer;
   try {
-    server = await startRelay({ token, dataFile, port, host });
+    server = await startRelay({ tokens, dataFile, port, host });
   } catch (error) {
     io.stderr(
       `antibody: the relay could not start: ${(error as Error).message}\n`,

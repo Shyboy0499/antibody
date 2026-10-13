@@ -66,7 +66,7 @@ afterEach(async () => {
 
 const start = async (fs = nodeStoreFs()) => {
   relay = await startRelay({
-    token: TOKEN,
+    tokens: [TOKEN],
     dataFile: data,
     port: 0,
     host: "127.0.0.1",
@@ -192,7 +192,7 @@ describe("the relay over HTTP", () => {
     rmSync(data);
     await expect(
       startRelay({
-        token: "short",
+        tokens: ["short"],
         dataFile: data,
         port: 0,
         host: "127.0.0.1",
@@ -201,12 +201,74 @@ describe("the relay over HTTP", () => {
     const busy = await start();
     await expect(
       startRelay({
-        token: TOKEN,
+        tokens: [TOKEN],
         dataFile: data,
         port: busy.port,
         host: "127.0.0.1",
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("one token per machine, each with its own pushes", () => {
+  const OTHER = "a-second-machines-token";
+
+  it("accepts any listed token, and refuses one that is not listed", async () => {
+    relay = await startRelay({
+      tokens: [TOKEN, OTHER],
+      dataFile: data,
+      port: 0,
+      host: "127.0.0.1",
+    });
+    expect((await call("/v1/fixes?since=0", { token: OTHER })).status).toBe(
+      200,
+    );
+    expect(
+      (await call("/v1/fixes?since=0", { token: "not-a-listed-token-1" }))
+        .status,
+    ).toBe(401);
+  });
+
+  it("limits each token's pushes in a minute, and frees them as the minute passes", async () => {
+    let now = 0;
+    relay = await startRelay({
+      tokens: [TOKEN, OTHER],
+      dataFile: data,
+      port: 0,
+      host: "127.0.0.1",
+      pushesPerMinute: 2,
+      now: () => now,
+    });
+    const pushAs = (token: string) =>
+      call("/v1/fixes", {
+        method: "POST",
+        body: JSON.stringify({ document: "" }),
+        token,
+      });
+    expect((await pushAs(TOKEN)).status).not.toBe(429);
+    expect((await pushAs(TOKEN)).status).not.toBe(429);
+    const refused = await pushAs(TOKEN);
+    expect(refused.status).toBe(429);
+    expect(refused.body.error).toContain("too many pushes");
+    // The other machine has its own allowance.
+    expect((await pushAs(OTHER)).status).not.toBe(429);
+    // A minute on, the first machine may push again.
+    now += 60_000;
+    expect((await pushAs(TOKEN)).status).not.toBe(429);
+  });
+
+  it("will not start without a token, or with one that is too short", async () => {
+    await expect(
+      startRelay({ tokens: [], dataFile: data, port: 0, host: "127.0.0.1" }),
+    ).rejects.toThrow("needs a token");
+    await expect(
+      startRelay({
+        tokens: [TOKEN, "short"],
+        dataFile: data,
+        port: 0,
+        host: "127.0.0.1",
+      }),
+    ).rejects.toThrow("each of the relay's tokens");
   });
 });
 

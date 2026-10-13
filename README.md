@@ -279,12 +279,13 @@ commits it. A relay moves fixes as they are found: a small HTTP service that eve
 machine's memory syncs through.
 
 ```sh
-# Somewhere every agent can reach, behind a proxy that terminates TLS:
-ANTIBODY_RELAY_TOKEN=<a long secret> antibody relay serve --host 0.0.0.0
+# Somewhere every agent can reach, behind a proxy that terminates TLS. One secret
+# per machine, separated by commas; to revoke one, remove it and restart:
+ANTIBODY_RELAY_TOKEN=<a long secret>,<another long secret> antibody relay serve --host 0.0.0.0
 
-# In each agent's environment:
+# In each agent's environment, with that machine's own secret:
 ANTIBODY_RELAY=https://relay.example.com
-ANTIBODY_RELAY_TOKEN=<the same secret>
+ANTIBODY_RELAY_TOKEN=<this machine's secret>
 ANTIBODY_RELAY_TRUST=fleet       # only when every machine with the token is yours
 ```
 
