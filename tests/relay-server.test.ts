@@ -120,6 +120,7 @@ describe("the relay over HTTP", () => {
       seq: 2,
       count: 0,
       document: "",
+      removed: [],
     });
     expect((await call("/v1/fixes")).body.count).toBe(2);
   });

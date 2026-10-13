@@ -2,6 +2,7 @@
 //
 //   GET  /v1/fixes?since=N   the fixes changed after N: { seq, document }
 //   POST /v1/fixes           { document }: take in a machine's fixes; { seq, accepted }
+//   DELETE /v1/fixes/<key>   remove a fix and block its fingerprint; the owner's token only
 //   GET  /health             "ok", without a token, for a load balancer
 //
 // Every /v1 request carries `Authorization: Bearer <token>`, one of the relay's
@@ -18,6 +19,7 @@ import {
   fixesSince,
   parseRelayState,
   RELAY_MAX_BYTES,
+  removeFix,
 } from "./relay";
 import type { RelayState } from "./relay";
 import { sha256Hex } from "./sha256";
@@ -26,6 +28,8 @@ import type { StoreFs } from "./store";
 
 /** The shortest token the relay accepts. */
 export const RELAY_MIN_TOKEN = 16;
+
+const FINGERPRINT_PATH = /^[0-9a-f]{12}$/;
 
 /** The pushes one token may make in a minute, unless the relay says otherwise. */
 export const RELAY_PUSHES_PER_MINUTE = 60;
@@ -47,6 +51,11 @@ export interface RelayServerOptions {
   pushesPerMinute?: number;
   /** The clock the push limit reads, in milliseconds; the real one by default. */
   now?: () => number;
+  /**
+   * The owner's secret, which alone may remove a fix. Optional: without it a
+   * relay cannot remove fixes.
+   */
+  adminToken?: string;
 }
 
 /** A running relay. */
@@ -124,10 +133,18 @@ export async function startRelay(o: RelayServerOptions): Promise<RelayServer> {
       throw new RangeError(
         `each of the relay's tokens must be at least ${RELAY_MIN_TOKEN} characters`,
       );
+  if (o.adminToken !== undefined && o.adminToken.length < RELAY_MIN_TOKEN)
+    throw new RangeError(
+      `the relay's admin token must be at least ${RELAY_MIN_TOKEN} characters`,
+    );
   const fs = o.fs ?? nodeStoreFs();
   let state = await loadRelayState(o.dataFile, fs);
   // Each token is compared by its hash, and counted for its own push limit.
   const known = new Set(o.tokens.map((t) => sha256Hex(`Bearer ${t}`)));
+  const admin =
+    o.adminToken === undefined
+      ? undefined
+      : sha256Hex(`Bearer ${o.adminToken}`);
   const limit = o.pushesPerMinute ?? RELAY_PUSHES_PER_MINUTE;
   const clock = o.now ?? (() => Date.now());
   const pushes = new Map<string, number[]>();
@@ -156,17 +173,37 @@ export async function startRelay(o: RelayServerOptions): Promise<RelayServer> {
     const url = new URL(req.url ?? "/", "http://relay");
     if (url.pathname === "/health" && req.method === "GET")
       return send(res, 200, "ok\n", "text/plain");
-    if (url.pathname !== "/v1/fixes")
+    const removal = /^\/v1\/fixes\/([^/]+)$/.exec(url.pathname);
+    if (url.pathname !== "/v1/fixes" && removal === null)
       return send(res, 404, { error: "not found" });
     const key = sha256Hex(req.headers.authorization ?? "");
+    if (removal !== null) {
+      // Only the owner removes a fix: a machine's token is refused, not just
+      // unknown, so the owner's error is not mistaken for a typo.
+      if (admin === undefined || key !== admin) {
+        if (known.has(key))
+          return send(res, 403, {
+            error: "removing a fix takes the owner's token",
+          });
+        return send(res, 401, { error: "a missing or wrong token" });
+      }
+      if (req.method !== "DELETE") return send(res, 405, { error: "DELETE" });
+      const fingerprint = decodeURIComponent(removal[1] ?? "");
+      if (!FINGERPRINT_PATH.test(fingerprint))
+        return send(res, 400, { error: "a fingerprint of twelve hex digits" });
+      const result = removeFix(state, fingerprint);
+      state = result.state;
+      await save(state);
+      return send(res, 200, { seq: state.seq, removed: result.removed });
+    }
     if (!known.has(key))
       return send(res, 401, { error: "a missing or wrong token" });
     if (req.method === "GET") {
       const since = Number(url.searchParams.get("since") ?? 0);
       if (!Number.isInteger(since) || since < 0)
         return send(res, 400, { error: "since takes a whole number" });
-      const { seq, text, count } = fixesSince(state, since);
-      return send(res, 200, { seq, count, document: text });
+      const { seq, text, count, removed } = fixesSince(state, since);
+      return send(res, 200, { seq, count, document: text, removed });
     }
     if (req.method !== "POST") return send(res, 405, { error: "GET or POST" });
     const wait = mayPush(key);

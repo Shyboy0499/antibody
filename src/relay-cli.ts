@@ -28,6 +28,9 @@ export const RELAY_DEFAULT_PORT = 4880;
 /** The environment variable that holds the relay's token. */
 export const RELAY_TOKEN_ENV = "ANTIBODY_RELAY_TOKEN";
 
+/** The environment variable that holds the owner's token, which removes fixes. */
+export const RELAY_ADMIN_TOKEN_ENV = "ANTIBODY_RELAY_ADMIN_TOKEN";
+
 const RELAY_USAGE = `usage: antibody relay serve [--port N] [--host H] [--data FILE]
        antibody relay sync
   --port N     the port to listen on (default ${RELAY_DEFAULT_PORT})
@@ -122,9 +125,11 @@ async function serve(
   const host = flags.get("--host") ?? "127.0.0.1";
   const cwd = deps.cwd ?? process.cwd();
   const dataFile = resolve(cwd, flags.get("--data") ?? "antibody-relay.json");
+  // The owner's secret, which alone may remove a fix; optional.
+  const adminToken = io.env[RELAY_ADMIN_TOKEN_ENV] || undefined;
   let server: RelayServer;
   try {
-    server = await startRelay({ tokens, dataFile, port, host });
+    server = await startRelay({ tokens, dataFile, port, host, adminToken });
   } catch (error) {
     io.stderr(
       `antibody: the relay could not start: ${(error as Error).message}\n`,

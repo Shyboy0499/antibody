@@ -158,8 +158,18 @@ describe("fixesSince", () => {
   });
 
   it("sends nothing when nothing changed", () => {
-    expect(fixesSince(state, 3)).toEqual({ seq: 3, text: "", count: 0 });
-    expect(fixesSince(emptyRelay(), 0)).toEqual({ seq: 0, text: "", count: 0 });
+    expect(fixesSince(state, 3)).toEqual({
+      seq: 3,
+      text: "",
+      count: 0,
+      removed: [],
+    });
+    expect(fixesSince(emptyRelay(), 0)).toEqual({
+      seq: 0,
+      text: "",
+      count: 0,
+      removed: [],
+    });
   });
 });
 
