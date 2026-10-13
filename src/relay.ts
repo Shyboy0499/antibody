@@ -44,17 +44,37 @@ export interface RelayFix {
   entry: Entry;
 }
 
+/** A fix the owner removed, and the sequence number the removal happened at. */
+export interface RelayRemoval {
+  seq: number;
+  /** The fingerprint the fix was held under. */
+  key: string;
+}
+
 /** Everything a relay holds. */
 export interface RelayState {
   version: typeof RELAY_VERSION;
   /** The last sequence number given out; 0 before the first fix. */
   seq: number;
   fixes: RelayFix[];
+  /** Fixes the owner removed, in the order they were removed. */
+  removed: RelayRemoval[];
+  /**
+   * Fingerprints the owner removed: a push of one is ignored, so a removed fix
+   * does not come back from a machine that still has it.
+   */
+  blocked: string[];
 }
 
 /** A relay with nothing yet. */
 export function emptyRelay(): RelayState {
-  return { version: RELAY_VERSION, seq: 0, fixes: [] };
+  return {
+    version: RELAY_VERSION,
+    seq: 0,
+    fixes: [],
+    removed: [],
+    blocked: [],
+  };
 }
 
 const keyOf = (entry: Entry) => entry.meta.sig ?? entry.fingerprint;
@@ -94,7 +114,28 @@ export function parseRelayState(text: string): RelayState | undefined {
       return undefined;
     fixes.push({ seq: f.seq, entry: f.entry });
   }
-  return { version: RELAY_VERSION, seq: raw.seq as number, fixes };
+  // Files saved before removals existed have neither list: they start empty.
+  const removed: RelayRemoval[] = [];
+  for (const r of (raw.removed ?? []) as unknown[]) {
+    const item = r as Partial<RelayRemoval> | null;
+    if (
+      typeof item?.seq !== "number" ||
+      typeof item.key !== "string" ||
+      !FINGERPRINT.test(item.key)
+    )
+      return undefined;
+    removed.push({ seq: item.seq, key: item.key });
+  }
+  const blocked = (raw.blocked ?? []) as unknown[];
+  if (!blocked.every((k) => typeof k === "string" && FINGERPRINT.test(k)))
+    return undefined;
+  return {
+    version: RELAY_VERSION,
+    seq: raw.seq as number,
+    fixes,
+    removed,
+    blocked: blocked as string[],
+  };
 }
 
 /** What taking in a pushed document came to. */
@@ -130,11 +171,12 @@ export function acceptFixes(
   }
   const next: RelayState = { ...state, fixes: [...state.fixes] };
   const at = new Map(next.fixes.map((f, i) => [keyOf(f.entry), i]));
+  const blocked = new Set(state.blocked);
   let accepted = 0;
   let ignored = 0;
   for (const incoming of entries) {
     const key = keyOf(incoming);
-    if (!exportable(incoming) || !FINGERPRINT.test(key)) {
+    if (!exportable(incoming) || !FINGERPRINT.test(key) || blocked.has(key)) {
       ignored++;
       continue;
     }
@@ -156,6 +198,36 @@ export function acceptFixes(
   return { state: next, accepted, ignored };
 }
 
+/**
+ * Remove the fix held under `key`, and block the key so a push of it is
+ * ignored from now on. A key the relay does not hold is still blocked.
+ *
+ * @param state - the relay's state; not changed.
+ * @param key - the fingerprint, twelve lowercase hex digits.
+ * @returns the new state, and whether a fix was removed.
+ */
+export function removeFix(
+  state: RelayState,
+  key: string,
+): { state: RelayState; removed: boolean } {
+  const blocked = state.blocked.includes(key)
+    ? state.blocked
+    : [...state.blocked, key];
+  const i = state.fixes.findIndex((f) => keyOf(f.entry) === key);
+  if (i < 0) return { state: { ...state, blocked }, removed: false };
+  const seq = state.seq + 1;
+  return {
+    state: {
+      ...state,
+      seq,
+      fixes: state.fixes.filter((_, j) => j !== i),
+      removed: [...state.removed, { seq, key }],
+      blocked,
+    },
+    removed: true,
+  };
+}
+
 /** What a machine is sent when it asks what changed. */
 export interface Since {
   /** The relay's latest sequence number, to ask from next time. */
@@ -163,6 +235,8 @@ export interface Since {
   /** The changed fixes as a document; "" when nothing changed. */
   text: string;
   count: number;
+  /** The fingerprints removed after `since`, oldest removal first. */
+  removed: string[];
 }
 
 /**
@@ -174,10 +248,15 @@ export interface Since {
  * @param since - the sequence number the machine last saw.
  */
 export function fixesSince(state: RelayState, since: number): Since {
+  const removed = state.removed
+    .filter((r) => r.seq > since)
+    .sort((a, b) => a.seq - b.seq)
+    .map((r) => r.key);
   const changed = state.fixes
     .filter((f) => f.seq > since)
     .sort((a, b) => a.seq - b.seq);
-  if (changed.length === 0) return { seq: state.seq, text: "", count: 0 };
+  if (changed.length === 0)
+    return { seq: state.seq, text: "", count: 0, removed };
   const blocks = changed
     .map((f, i) =>
       renderEntry({ ...f.entry, id: `E-${String(i + 1).padStart(4, "0")}` }),
@@ -187,5 +266,6 @@ export function fixesSince(state: RelayState, since: number): Since {
     seq: state.seq,
     text: `${DOCUMENT_HEADER}\n${RELAY_PREAMBLE}\n${blocks}`,
     count: changed.length,
+    removed,
   };
 }

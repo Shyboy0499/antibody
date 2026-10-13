@@ -4908,7 +4908,9 @@ function emptyRelay() {
 	return {
 		version: 1,
 		seq: 0,
-		fixes: []
+		fixes: [],
+		removed: [],
+		blocked: []
 	};
 }
 const keyOf = (entry) => entry.meta.sig ?? entry.fingerprint;
@@ -4937,10 +4939,23 @@ function parseRelayState(text) {
 			entry: f.entry
 		});
 	}
+	const removed = [];
+	for (const r of raw.removed ?? []) {
+		const item = r;
+		if (typeof item?.seq !== "number" || typeof item.key !== "string" || !FINGERPRINT.test(item.key)) return void 0;
+		removed.push({
+			seq: item.seq,
+			key: item.key
+		});
+	}
+	const blocked = raw.blocked ?? [];
+	if (!blocked.every((k) => typeof k === "string" && FINGERPRINT.test(k))) return void 0;
 	return {
 		version: 1,
 		seq: raw.seq,
-		fixes
+		fixes,
+		removed,
+		blocked
 	};
 }
 /**
@@ -4966,11 +4981,12 @@ function acceptFixes(state, text) {
 		fixes: [...state.fixes]
 	};
 	const at = new Map(next.fixes.map((f, i) => [keyOf(f.entry), i]));
+	const blocked = new Set(state.blocked);
 	let accepted = 0;
 	let ignored = 0;
 	for (const incoming of entries) {
 		const key = keyOf(incoming);
-		if (!exportable(incoming) || !FINGERPRINT.test(key)) {
+		if (!exportable(incoming) || !FINGERPRINT.test(key) || blocked.has(key)) {
 			ignored++;
 			continue;
 		}
@@ -5002,6 +5018,39 @@ function acceptFixes(state, text) {
 	};
 }
 /**
+* Remove the fix held under `key`, and block the key so a push of it is
+* ignored from now on. A key the relay does not hold is still blocked.
+*
+* @param state - the relay's state; not changed.
+* @param key - the fingerprint, twelve lowercase hex digits.
+* @returns the new state, and whether a fix was removed.
+*/
+function removeFix(state, key) {
+	const blocked = state.blocked.includes(key) ? state.blocked : [...state.blocked, key];
+	const i = state.fixes.findIndex((f) => keyOf(f.entry) === key);
+	if (i < 0) return {
+		state: {
+			...state,
+			blocked
+		},
+		removed: false
+	};
+	const seq = state.seq + 1;
+	return {
+		state: {
+			...state,
+			seq,
+			fixes: state.fixes.filter((_, j) => j !== i),
+			removed: [...state.removed, {
+				seq,
+				key
+			}],
+			blocked
+		},
+		removed: true
+	};
+}
+/**
 * The fixes that changed after `since`, oldest change first, as a document in
 * the export's format. Entries are numbered afresh, since machines' own IDs
 * collide; an importing machine gives them IDs of its own anyway.
@@ -5010,11 +5059,13 @@ function acceptFixes(state, text) {
 * @param since - the sequence number the machine last saw.
 */
 function fixesSince(state, since) {
+	const removed = state.removed.filter((r) => r.seq > since).sort((a, b) => a.seq - b.seq).map((r) => r.key);
 	const changed = state.fixes.filter((f) => f.seq > since).sort((a, b) => a.seq - b.seq);
 	if (changed.length === 0) return {
 		seq: state.seq,
 		text: "",
-		count: 0
+		count: 0,
+		removed
 	};
 	const blocks = changed.map((f, i) => renderEntry({
 		...f.entry,
@@ -5023,9 +5074,11 @@ function fixesSince(state, since) {
 	return {
 		seq: state.seq,
 		text: `${DOCUMENT_HEADER}\n${RELAY_PREAMBLE}\n${blocks}`,
-		count: changed.length
+		count: changed.length,
+		removed
 	};
 }
+const FINGERPRINT_PATH = /^[0-9a-f]{12}$/;
 const MINUTE_MS = 6e4;
 /** Why a saved state could not be loaded. */
 var RelayStateError = class extends Error {};
@@ -5070,9 +5123,11 @@ function readBody(req, max) {
 async function startRelay(o) {
 	if (o.tokens.length === 0) throw new RangeError("the relay needs a token");
 	for (const token of o.tokens) if (token.length < 16) throw new RangeError(`each of the relay's tokens must be at least 16 characters`);
+	if (o.adminToken !== void 0 && o.adminToken.length < 16) throw new RangeError(`the relay's admin token must be at least 16 characters`);
 	const fs = o.fs ?? nodeStoreFs();
 	let state = await loadRelayState(o.dataFile, fs);
 	const known = new Set(o.tokens.map((t) => sha256Hex(`Bearer ${t}`)));
+	const admin = o.adminToken === void 0 ? void 0 : sha256Hex(`Bearer ${o.adminToken}`);
 	const limit = o.pushesPerMinute ?? 60;
 	const clock = o.now ?? (() => Date.now());
 	const pushes = /* @__PURE__ */ new Map();
@@ -5094,17 +5149,35 @@ async function startRelay(o) {
 	const handle = async (req, res) => {
 		const url = new URL(req.url ?? "/", "http://relay");
 		if (url.pathname === "/health" && req.method === "GET") return send(res, 200, "ok\n", "text/plain");
-		if (url.pathname !== "/v1/fixes") return send(res, 404, { error: "not found" });
+		const removal = /^\/v1\/fixes\/([^/]+)$/.exec(url.pathname);
+		if (url.pathname !== "/v1/fixes" && removal === null) return send(res, 404, { error: "not found" });
 		const key = sha256Hex(req.headers.authorization ?? "");
+		if (removal !== null) {
+			if (admin === void 0 || key !== admin) {
+				if (known.has(key)) return send(res, 403, { error: "removing a fix takes the owner's token" });
+				return send(res, 401, { error: "a missing or wrong token" });
+			}
+			if (req.method !== "DELETE") return send(res, 405, { error: "DELETE" });
+			const fingerprint = decodeURIComponent(removal[1] ?? "");
+			if (!FINGERPRINT_PATH.test(fingerprint)) return send(res, 400, { error: "a fingerprint of twelve hex digits" });
+			const result = removeFix(state, fingerprint);
+			state = result.state;
+			await save(state);
+			return send(res, 200, {
+				seq: state.seq,
+				removed: result.removed
+			});
+		}
 		if (!known.has(key)) return send(res, 401, { error: "a missing or wrong token" });
 		if (req.method === "GET") {
 			const since = Number(url.searchParams.get("since") ?? 0);
 			if (!Number.isInteger(since) || since < 0) return send(res, 400, { error: "since takes a whole number" });
-			const { seq, text, count } = fixesSince(state, since);
+			const { seq, text, count, removed } = fixesSince(state, since);
 			return send(res, 200, {
 				seq,
 				count,
-				document: text
+				document: text,
+				removed
 			});
 		}
 		if (req.method !== "POST") return send(res, 405, { error: "GET or POST" });
@@ -5221,13 +5294,15 @@ async function serve(args, io, deps) {
 	const host = flags.get("--host") ?? "127.0.0.1";
 	const cwd = deps.cwd ?? process.cwd();
 	const dataFile = resolve(cwd, flags.get("--data") ?? "antibody-relay.json");
+	const adminToken = io.env["ANTIBODY_RELAY_ADMIN_TOKEN"] || void 0;
 	let server;
 	try {
 		server = await startRelay({
 			tokens,
 			dataFile,
 			port,
-			host
+			host,
+			adminToken
 		});
 	} catch (error) {
 		io.stderr(`antibody: the relay could not start: ${error.message}\n`);
