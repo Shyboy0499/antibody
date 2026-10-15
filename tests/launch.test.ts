@@ -5,9 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { VERSION } from "../src/cli";
 
-// hooks/launch.cjs is what the Claude Code plugin starts. CI runs a Node new
-// enough for the bundle, so the hand-over to an older Node's ANTIBODY_NODE is
-// tested through plan(); the in-process path runs for real.
+// CI's Node is new enough for the bundle, so the hand-over to ANTIBODY_NODE is
+// only reachable through plan().
 const launcher = resolve(
   fileURLToPath(new URL("..", import.meta.url)),
   "hooks",
