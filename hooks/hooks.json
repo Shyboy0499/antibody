@@ -9,7 +9,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code-pretool"
             ],
@@ -25,7 +25,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code"
             ],
@@ -41,7 +41,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code"
             ],
@@ -57,7 +57,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code"
             ],
@@ -73,7 +73,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code"
             ],
@@ -89,7 +89,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs",
               "hook",
               "claude-code"
             ],

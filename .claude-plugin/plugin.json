@@ -13,7 +13,7 @@
   "mcpServers": {
     "antibody": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs", "mcp", "claude-code"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs", "mcp", "claude-code"]
     }
   }
 }

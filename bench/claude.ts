@@ -25,7 +25,9 @@ import { BENCH_DIR } from "./tasks";
 
 /** The antibody checkout the plugin's files are read from. */
 const PLUGIN_ROOT = resolve(BENCH_DIR, "..");
-const PLUGIN_BUNDLE = "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs";
+// The plugin starts the bundle through hooks/launch.cjs; the benchmark runs on
+// a Node new enough for the bundle, so its agents call the bundle directly.
+const PLUGIN_ENTRY = "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs";
 
 export interface ClaudeDriverOptions {
   /** The claude command. */
@@ -60,11 +62,11 @@ const PARENT_SESSION = [
   "CLAUDE_PROJECT_DIR",
 ];
 
-/** A file of the plugin, with its root replaced by the bundle's path. */
+/** A file of the plugin, with its entry point replaced by the bundle's path. */
 function pluginFile(file: string, bundle: string): Record<string, unknown> {
   const fill = (value: unknown): unknown =>
     typeof value === "string"
-      ? value.replaceAll(PLUGIN_BUNDLE, bundle)
+      ? value.replaceAll(PLUGIN_ENTRY, bundle)
       : Array.isArray(value)
         ? value.map(fill)
         : typeof value === "object" && value !== null
