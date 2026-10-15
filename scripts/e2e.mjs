@@ -6,7 +6,8 @@
 // exchange between Claude Code, Gemini CLI and Codex CLI agents, in every
 // direction. Then it measures how long a hook call takes.
 //
-// It drives dist/antibody.mjs exactly as Claude Code does: one process per
+// It drives dist/antibody.mjs as Claude Code does, minus hooks/launch.cjs, which on
+// a new enough Node only imports this same file: one process per
 // hook call with the payload on stdin, and `antibody mcp claude-code` as a
 // stdio MCP server with CLAUDE_PROJECT_DIR and CLAUDE_CODE_SESSION_ID set. No
 // model is involved; the agents' tool calls are scripted.

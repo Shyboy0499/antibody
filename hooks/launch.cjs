@@ -2,9 +2,10 @@
 // Plain CommonJS so a project's pinned older Node (mise, asdf, nvm) can still read it:
 // dist/antibody.mjs needs 22.13 and would crash out of sight, so on an older Node
 // this hands over to ANTIBODY_NODE, or explains on stderr and exits 0.
-const { spawnSync } = require("node:child_process");
-const { join } = require("node:path");
-const { pathToFileURL } = require("node:url");
+// Bare module names: the node: prefix needs Node 14.18 or 16.
+const { spawnSync } = require("child_process");
+const { join } = require("path");
+const { pathToFileURL } = require("url");
 
 const MINIMUM = [22, 13];
 const bundle = join(__dirname, "..", "dist", "antibody.mjs");
