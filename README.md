@@ -295,8 +295,8 @@ as it stops. Hooks never touch the network. `antibody relay sync` syncs by hand.
 To remove a bad fix, the owner starts the relay with a secret of its own in
 `ANTIBODY_RELAY_ADMIN_TOKEN` and calls `DELETE /v1/fixes/<fingerprint>` with it. The
 fingerprint is then blocked, so a machine that still has the fix cannot push it back.
-Machines that already pulled the fix keep their copy until their client handles
-removals, which is not built yet.
+A machine clears its copy at its next sync, whether the fix was applied or waits for
+review. A fix it has changed since is kept, since that is no longer the relay's copy.
 
 - **What the relay holds:** what export lets leave a machine, which is entries with
   a working fix, redacted again, without notes. It keeps the latest fix for each

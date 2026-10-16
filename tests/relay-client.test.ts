@@ -34,6 +34,7 @@ import type { ToolCall } from "../src/resolve-detect";
 import { parseDocument } from "../src/store";
 
 const TOKEN = "a-relay-token-long-enough";
+const OWNER = "the-owners-token-long-enough";
 const ENOENT = "ENOENT: no such file or directory, open '.env'";
 const EACCES = "EACCES: permission denied, open 'deploy.key'";
 const FIX = "Copy .env from the main checkout.";
@@ -105,10 +106,53 @@ afterEach(async () => {
 });
 
 describe("syncRelay", () => {
+  it("clears a fix the owner removed from the relay, on a machine that pulled it", async () => {
+    await meet(shop, ENOENT, FIX);
+    await sync(shop);
+    await sync(laptop, config("fleet"));
+    expect((await meet(laptop, ENOENT)).join("")).toContain(FIX);
+    const key = entries(shop)[0]!.meta.sig ?? entries(shop)[0]!.fingerprint;
+
+    // The owner removes it. The relay restarts from its saved state with an
+    // owner's token, which is what removal needs.
+    await relay.close();
+    relay = await startRelay({
+      tokens: [TOKEN],
+      adminToken: OWNER,
+      dataFile: join(root, "relay.json"),
+      port: 0,
+      host: "127.0.0.1",
+    });
+    url = `http://127.0.0.1:${relay.port}`;
+    const removal = await fetch(`${url}/v1/fixes/${key}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${OWNER}` },
+    });
+    expect(removal.status).toBe(200);
+
+    const result = await sync(laptop, config("fleet"));
+    expect(result.removed).toBe(1);
+    expect(entries(laptop)[0]?.fix).toBe("");
+    expect(entries(laptop)[0]?.status).toBe("open");
+    expect((await meet(laptop, ENOENT)).join("")).not.toContain(FIX);
+    // A second sync has nothing more to clear.
+    expect((await sync(laptop, config("fleet"))).removed).toBe(0);
+  });
+
   it("pushes one machine's fix, and another pulls it, held for review", async () => {
     await meet(shop, ENOENT, FIX);
-    expect(await sync(shop)).toEqual({ pushed: 1, pulled: 0, held: true });
-    expect(await sync(laptop)).toEqual({ pushed: 0, pulled: 1, held: true });
+    expect(await sync(shop)).toEqual({
+      pushed: 1,
+      pulled: 0,
+      held: true,
+      removed: 0,
+    });
+    expect(await sync(laptop)).toEqual({
+      pushed: 0,
+      pulled: 1,
+      held: true,
+      removed: 0,
+    });
     expect(entries(laptop).map((e) => [e.fix, e.meta.review])).toEqual([
       [FIX, "fix+text"],
     ]);
@@ -123,6 +167,7 @@ describe("syncRelay", () => {
       pushed: 0,
       pulled: 1,
       held: false,
+      removed: 0,
     });
     expect(entries(laptop)[0]?.meta.review).toBeUndefined();
     expect((await meet(laptop, ENOENT)).join("")).toContain(FIX);
@@ -142,11 +187,17 @@ describe("syncRelay", () => {
     await meet(shop, ENOENT, FIX);
     await sync(shop);
     await sync(laptop, config("fleet"));
-    expect(await sync(shop)).toEqual({ pushed: 0, pulled: 0, held: true });
+    expect(await sync(shop)).toEqual({
+      pushed: 0,
+      pulled: 0,
+      held: true,
+      removed: 0,
+    });
     expect(await sync(laptop, config("fleet"))).toEqual({
       pushed: 0,
       pulled: 0,
       held: false,
+      removed: 0,
     });
     await meet(shop, EACCES, "chmod 600 deploy.key");
     expect((await sync(shop)).pushed).toBe(1);
@@ -164,7 +215,12 @@ describe("syncRelay", () => {
     );
     // The laptop already holds the fix, so nothing more comes in, but it asks
     // this relay from the start and pushes nothing it pulled.
-    expect(await sync(laptop)).toEqual({ pushed: 0, pulled: 0, held: true });
+    expect(await sync(laptop)).toEqual({
+      pushed: 0,
+      pulled: 0,
+      held: true,
+      removed: 0,
+    });
     const state = JSON.parse(
       readFileSync(join(memoryDir(laptop), RELAY_STATE_FILE), "utf8"),
     );
@@ -316,6 +372,7 @@ describe("startRelaySync", () => {
       pushed: 0,
       pulled: 0,
       held: true,
+      removed: 0,
     },
   ) => {
     const calls: (number | undefined)[] = [];
