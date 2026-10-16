@@ -11,7 +11,7 @@ import { VERSION } from "../src/cli";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const json = (path: string) =>
   JSON.parse(readFileSync(resolve(root, path), "utf8"));
-const BUNDLE = "${CLAUDE_PLUGIN_ROOT}/dist/antibody.mjs";
+const LAUNCHER = "${CLAUDE_PLUGIN_ROOT}/hooks/launch.cjs";
 
 describe("the Claude Code plugin", () => {
   const plugin = json(".claude-plugin/plugin.json");
@@ -24,7 +24,7 @@ describe("the Claude Code plugin", () => {
     expect(plugin.license).toBe(pkg.license);
   });
 
-  it("runs the committed bundle for every hook event antibody handles", () => {
+  it("runs the launcher for every hook event antibody handles", () => {
     const { hooks } = json("hooks/hooks.json");
     expect(Object.keys(hooks).sort()).toEqual(
       [...HOOK_EVENTS, "PreToolUse"].sort(),
@@ -36,7 +36,7 @@ describe("the Claude Code plugin", () => {
           {
             type: "command",
             command: "node",
-            args: [BUNDLE, "hook", "claude-code-pretool"],
+            args: [LAUNCHER, "hook", "claude-code-pretool"],
             timeout: 5,
           },
         ],
@@ -49,7 +49,7 @@ describe("the Claude Code plugin", () => {
             {
               type: "command",
               command: "node",
-              args: [BUNDLE, "hook", "claude-code"],
+              args: [LAUNCHER, "hook", "claude-code"],
               timeout: 10,
             },
           ],
@@ -57,16 +57,17 @@ describe("the Claude Code plugin", () => {
       ]);
   });
 
-  it("starts the MCP server from the committed bundle, named for Claude Code", () => {
+  it("starts the MCP server through the launcher, named for Claude Code", () => {
     expect(plugin.mcpServers).toEqual({
-      antibody: { command: "node", args: [BUNDLE, "mcp", "claude-code"] },
+      antibody: { command: "node", args: [LAUNCHER, "mcp", "claude-code"] },
     });
     // At the repository root, .mcp.json would also be read as this
     // repository's own project config, where CLAUDE_PLUGIN_ROOT is unset.
     expect(existsSync(resolve(root, ".mcp.json"))).toBe(false);
   });
 
-  it("points at a bundle that is committed", () => {
+  it("points at a launcher and a bundle that are committed", () => {
+    expect(existsSync(resolve(root, "hooks", "launch.cjs"))).toBe(true);
     expect(existsSync(resolve(root, "dist", "antibody.mjs"))).toBe(true);
   });
 

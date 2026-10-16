@@ -72,7 +72,8 @@ unless you export it.
 
 ## Install in Claude Code
 
-antibody needs Node.js 22.13 or newer on your `PATH`. In Claude Code:
+antibody needs Node.js 22.13 or newer, first on your `PATH` or named by `ANTIBODY_NODE`
+(see below). In Claude Code:
 
 ```text
 /plugin marketplace add Shyboy0499/antibody
@@ -83,6 +84,18 @@ Then restart Claude Code. The plugin is the repository itself: its hooks run the
 committed `dist/antibody.mjs`, so there is nothing to build. From then on every
 session in every git repository takes part. Sessions in different worktrees of one
 repository share a memory, and sessions in different repositories do not.
+
+A project that pins an older Node through mise, asdf, nvm or volta puts that Node first
+on `PATH` inside the project, and the hooks would start under it. They start through
+`hooks/launch.cjs`, which older Node versions can still read: on one of those it hands
+over to the binary named by `ANTIBODY_NODE`. Without one it writes the reason to stderr
+and exits quietly, so the session carries on but antibody, its MCP tools included, is
+off in that project. Point it at a Node 22.13 or newer, for example in your shell
+profile:
+
+```sh
+export ANTIBODY_NODE=<path>/node
+```
 
 What happens next is automatic:
 
