@@ -36,7 +36,7 @@ repository, or on separate machines?**
 | Claude Code | `/plugin marketplace add Shyboy0499/antibody`, then `/plugin install antibody@antibody` |
 | Gemini CLI | `antibody setup gemini` |
 | Codex CLI | `antibody setup codex` |
-| Any MCP agent | add `node <path>/dist/antibody.mjs mcp` as an MCP server; it can then look fixes up and record them, but nothing is pushed to it |
+| Any MCP agent | add `node <path>/hooks/launch.cjs mcp` as an MCP server; it can then look fixes up and record them, but nothing is pushed to it |
 
 These are settings of the harness, not of the orchestrator, so every session the
 orchestrator starts picks them up.
