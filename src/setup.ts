@@ -19,6 +19,11 @@
 // The rest of the file is left as it was. A file that is not plain JSON is
 // never overwritten: Gemini CLI allows comments in it, which a rewrite would
 // lose.
+//
+// Every entry starts hooks/launch.cjs, not the bundle, as the Claude Code
+// plugin does. The CLI looks `node` up on PATH inside the project, and a
+// project that pins an older Node would crash the bundle as it loads; the
+// launcher hands over to ANTIBODY_NODE instead, or says why and exits 0.
 import { dirname, join, resolve } from "node:path";
 import type { CliIo } from "./cli";
 import { CODEX, CODEX_EVENTS } from "./codex";
@@ -36,6 +41,17 @@ export const CODEX_HOOK_TIMEOUT_SEC = 10;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The launcher of the checkout a script belongs to.
+ *
+ * @param script - dist/antibody.mjs, or hooks/launch.cjs itself when setup
+ *   runs through the launcher.
+ * @returns the absolute path of hooks/launch.cjs beside it.
+ */
+export function launcherFor(script: string): string {
+  return join(dirname(script), "..", "hooks", "launch.cjs");
+}
 
 /**
  * A path as one shell word, for a command string a shell will run.
@@ -107,19 +123,20 @@ function withHooks(
  * out. Other entries, and every other setting, are kept as they were.
  *
  * @param settings - the parsed settings.json, or {} when there is none.
- * @param bundle - the absolute path of dist/antibody.mjs.
+ * @param entry - the absolute path of the script the hooks and the MCP server
+ *   start: hooks/launch.cjs.
  * @param node - the Node.js executable the hooks run.
  * @param remove - take antibody's entries out instead of adding them.
  * @returns the new settings; the input is not changed.
  */
 export function geminiSettings(
   settings: Record<string, unknown>,
-  bundle: string,
+  entry: string,
   node: string,
   remove = false,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...settings };
-  const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${GEMINI}`;
+  const command = `${shellQuote(node)} ${shellQuote(entry)} hook ${GEMINI}`;
   const hooks = withHooks(
     settings.hooks,
     Object.keys(GEMINI_EVENTS),
@@ -140,13 +157,13 @@ export function geminiSettings(
     ? { ...settings.mcpServers }
     : {};
   if (remove) delete servers[SETUP_NAME];
-  else servers[SETUP_NAME] = { command: node, args: [bundle, "mcp", GEMINI] };
+  else servers[SETUP_NAME] = { command: node, args: [entry, "mcp", GEMINI] };
   if (Object.keys(servers).length > 0) next.mcpServers = servers;
   else delete next.mcpServers;
   return next;
 }
 
-// A hook runs `… hook codex`: antibody's, whatever path its bundle had.
+// A hook runs `… hook codex`: antibody's, whatever script and path it had.
 const CODEX_HOOK = / hook codex$/;
 
 /**
@@ -154,19 +171,20 @@ const CODEX_HOOK = / hook codex$/;
  * hooks, and every other field, are kept as they were.
  *
  * @param file - the parsed hooks.json, or {} when there is none.
- * @param bundle - the absolute path of dist/antibody.mjs.
+ * @param entry - the absolute path of the script the hooks start:
+ *   hooks/launch.cjs.
  * @param node - the Node.js executable the hooks run.
  * @param remove - take antibody's hooks out instead of adding them.
  * @returns the new file; the input is not changed.
  */
 export function codexHooks(
   file: Record<string, unknown>,
-  bundle: string,
+  entry: string,
   node: string,
   remove = false,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...file };
-  const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${CODEX}`;
+  const command = `${shellQuote(node)} ${shellQuote(entry)} hook ${CODEX}`;
   const hooks = withHooks(
     file.hooks,
     CODEX_EVENTS,
@@ -184,7 +202,10 @@ export function codexHooks(
 export interface SetupDeps {
   /** The home directory; $HOME by default. */
   home?: string;
-  /** The bundle the hooks run; the running file by default. */
+  /**
+   * The running script, the bundle or the launcher; the running file by
+   * default. The hooks start the launcher beside it.
+   */
   bundle?: string;
 }
 
@@ -274,10 +295,12 @@ export async function runSetup(
     }
   }
 
-  const bundle = deps.bundle ?? nodeFs.realpathSync(process.argv[1] as string);
+  const entry = launcherFor(
+    deps.bundle ?? nodeFs.realpathSync(process.argv[1] as string),
+  );
   const next = (harness === GEMINI ? geminiSettings : codexHooks)(
     settings,
-    bundle,
+    entry,
     "node",
     remove,
   );
@@ -308,7 +331,7 @@ export async function runSetup(
             `Added antibody's hooks (${CODEX_EVENTS.join(", ")}) to ${path}.`,
             "Codex runs new hooks once you trust them: review them with /hooks.",
             "To add the MCP server too, run",
-            `  codex mcp add ${SETUP_NAME} -- node ${shellQuote(bundle)} mcp ${CODEX}`,
+            `  codex mcp add ${SETUP_NAME} -- node ${shellQuote(entry)} mcp ${CODEX}`,
           ];
   io.stdout(`${lines.join("\n")}\n`);
   return 0;

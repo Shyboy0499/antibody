@@ -5515,6 +5515,16 @@ const SETUP_NAME = "antibody";
 const GEMINI_HOOK_TIMEOUT_MS = 1e4;
 const isRecord$1 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 /**
+* The launcher of the checkout a script belongs to.
+*
+* @param script - dist/antibody.mjs, or hooks/launch.cjs itself when setup
+*   runs through the launcher.
+* @returns the absolute path of hooks/launch.cjs beside it.
+*/
+function launcherFor(script) {
+	return join(dirname(script), "..", "hooks", "launch.cjs");
+}
+/**
 * A path as one shell word, for a command string a shell will run.
 *
 * The quoting belongs to the shell that runs the command, not to the path:
@@ -5553,14 +5563,15 @@ function withHooks(section, events, isOurs, hook) {
 * out. Other entries, and every other setting, are kept as they were.
 *
 * @param settings - the parsed settings.json, or {} when there is none.
-* @param bundle - the absolute path of dist/antibody.mjs.
+* @param entry - the absolute path of the script the hooks and the MCP server
+*   start: hooks/launch.cjs.
 * @param node - the Node.js executable the hooks run.
 * @param remove - take antibody's entries out instead of adding them.
 * @returns the new settings; the input is not changed.
 */
-function geminiSettings(settings, bundle, node, remove = false) {
+function geminiSettings(settings, entry, node, remove = false) {
 	const next = { ...settings };
-	const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${GEMINI}`;
+	const command = `${shellQuote(node)} ${shellQuote(entry)} hook ${GEMINI}`;
 	const hooks = withHooks(settings.hooks, Object.keys(GEMINI_EVENTS), (hook) => hook.name === SETUP_NAME, remove ? void 0 : {
 		type: "command",
 		name: SETUP_NAME,
@@ -5574,7 +5585,7 @@ function geminiSettings(settings, bundle, node, remove = false) {
 	else servers[SETUP_NAME] = {
 		command: node,
 		args: [
-			bundle,
+			entry,
 			"mcp",
 			GEMINI
 		]
@@ -5589,14 +5600,15 @@ const CODEX_HOOK = / hook codex$/;
 * hooks, and every other field, are kept as they were.
 *
 * @param file - the parsed hooks.json, or {} when there is none.
-* @param bundle - the absolute path of dist/antibody.mjs.
+* @param entry - the absolute path of the script the hooks start:
+*   hooks/launch.cjs.
 * @param node - the Node.js executable the hooks run.
 * @param remove - take antibody's hooks out instead of adding them.
 * @returns the new file; the input is not changed.
 */
-function codexHooks(file, bundle, node, remove = false) {
+function codexHooks(file, entry, node, remove = false) {
 	const next = { ...file };
-	const command = `${shellQuote(node)} ${shellQuote(bundle)} hook ${CODEX}`;
+	const command = `${shellQuote(node)} ${shellQuote(entry)} hook ${CODEX}`;
 	const hooks = withHooks(file.hooks, CODEX_EVENTS, (hook) => typeof hook.command === "string" && CODEX_HOOK.test(hook.command), remove ? void 0 : {
 		type: "command",
 		command,
@@ -5668,8 +5680,8 @@ async function runSetup(args, io, deps = {}) {
 			return 1;
 		}
 	}
-	const bundle = deps.bundle ?? nodeFs.realpathSync(process.argv[1]);
-	const next = (harness === "gemini" ? geminiSettings : codexHooks)(settings, bundle, "node", remove);
+	const entry = launcherFor(deps.bundle ?? nodeFs.realpathSync(process.argv[1]));
+	const next = (harness === "gemini" ? geminiSettings : codexHooks)(settings, entry, "node", remove);
 	const json = `${JSON.stringify(next, null, 2)}\n`;
 	if (print) {
 		io.stdout(json);
@@ -5683,7 +5695,7 @@ async function runSetup(args, io, deps = {}) {
 		`Added antibody's hooks (${CODEX_EVENTS.join(", ")}) to ${path}.`,
 		"Codex runs new hooks once you trust them: review them with /hooks.",
 		"To add the MCP server too, run",
-		`  codex mcp add ${SETUP_NAME} -- node ${shellQuote(bundle)} mcp ${CODEX}`
+		`  codex mcp add ${SETUP_NAME} -- node ${shellQuote(entry)} mcp ${CODEX}`
 	];
 	io.stdout(`${lines.join("\n")}\n`);
 	return 0;

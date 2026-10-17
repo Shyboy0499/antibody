@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { VERSION } from "../src/cli";
@@ -111,7 +111,8 @@ describe("the committed bundle as an MCP server", () => {
 });
 
 describe("the committed bundle's setup", () => {
-  it("points Gemini CLI's hooks at itself", () => {
+  it("points Gemini CLI's hooks at the launcher beside it", () => {
+    const launcher = resolve(dirname(bundle), "..", "hooks", "launch.cjs");
     const settings = JSON.parse(
       run([
         "setup",
@@ -122,12 +123,12 @@ describe("the committed bundle's setup", () => {
       ]),
     );
     expect(settings.mcpServers.antibody.args).toEqual([
-      bundle,
+      launcher,
       "mcp",
       "gemini",
     ]);
     expect(settings.hooks.AfterTool[0].hooks[0].command).toBe(
-      `node ${shellQuote(bundle)} hook gemini`,
+      `node ${shellQuote(launcher)} hook gemini`,
     );
   });
 });

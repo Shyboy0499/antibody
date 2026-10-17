@@ -14,26 +14,35 @@ import {
   GEMINI_HOOK_TIMEOUT_MS,
   codexHooks,
   geminiSettings,
+  launcherFor,
   runSetup,
   shellQuote,
 } from "../src/setup";
 
 const BUNDLE = "/opt/antibody/dist/antibody.mjs";
+const LAUNCHER = "/opt/antibody/hooks/launch.cjs";
 const ours = {
   hooks: [
     {
       type: "command",
       name: "antibody",
-      command: `node ${BUNDLE} hook gemini`,
+      command: `node ${LAUNCHER} hook gemini`,
       timeout: GEMINI_HOOK_TIMEOUT_MS,
     },
   ],
 };
-const server = { command: "node", args: [BUNDLE, "mcp", "gemini"] };
+const server = { command: "node", args: [LAUNCHER, "mcp", "gemini"] };
+
+describe("launcherFor", () => {
+  it("finds the launcher from the bundle, or from the launcher itself", () => {
+    expect(launcherFor(BUNDLE)).toBe(LAUNCHER);
+    expect(launcherFor(LAUNCHER)).toBe(LAUNCHER);
+  });
+});
 
 describe("geminiSettings", () => {
   it("adds a hook for each event and the MCP server", () => {
-    expect(geminiSettings({}, BUNDLE, "node")).toEqual({
+    expect(geminiSettings({}, LAUNCHER, "node")).toEqual({
       hooks: {
         SessionStart: [ours],
         BeforeAgent: [ours],
@@ -60,7 +69,7 @@ describe("geminiSettings", () => {
       hooks: { AfterTool: [theirs, mixed], Notification: [theirs] },
       mcpServers: { github: { command: "gh-mcp" } },
     };
-    const once = geminiSettings(before, BUNDLE, "node");
+    const once = geminiSettings(before, LAUNCHER, "node");
     expect(once).toEqual({
       theme: "dark",
       hooks: {
@@ -72,13 +81,13 @@ describe("geminiSettings", () => {
       },
       mcpServers: { github: { command: "gh-mcp" }, antibody: server },
     });
-    expect(geminiSettings(once, BUNDLE, "node")).toEqual(once);
+    expect(geminiSettings(once, LAUNCHER, "node")).toEqual(once);
     expect(before.hooks.AfterTool).toHaveLength(2);
   });
 
   it("takes its entries out again, leaving no empty sections", () => {
-    const added = geminiSettings({ theme: "dark" }, BUNDLE, "node");
-    expect(geminiSettings(added, BUNDLE, "node", true)).toEqual({
+    const added = geminiSettings({ theme: "dark" }, LAUNCHER, "node");
+    expect(geminiSettings(added, LAUNCHER, "node", true)).toEqual({
       theme: "dark",
     });
     const kept = geminiSettings(
@@ -86,10 +95,10 @@ describe("geminiSettings", () => {
         hooks: { AfterTool: [{ hooks: [{ type: "command", command: "x" }] }] },
         mcpServers: { github: { command: "gh-mcp" } },
       },
-      BUNDLE,
+      LAUNCHER,
       "node",
     );
-    expect(geminiSettings(kept, BUNDLE, "node", true)).toEqual({
+    expect(geminiSettings(kept, LAUNCHER, "node", true)).toEqual({
       hooks: { AfterTool: [{ hooks: [{ type: "command", command: "x" }] }] },
       mcpServers: { github: { command: "gh-mcp" } },
     });
@@ -99,7 +108,7 @@ describe("geminiSettings", () => {
     expect(
       geminiSettings(
         { hooks: { AfterTool: "oops" }, mcpServers: [] },
-        BUNDLE,
+        LAUNCHER,
         "node",
       ).hooks,
     ).toMatchObject({ AfterTool: [ours] });
@@ -172,10 +181,10 @@ describe("antibody setup gemini", () => {
     expect(out).toBe(
       `Added antibody's hooks (SessionStart, BeforeAgent, AfterTool, SessionEnd) and MCP server to ${file()}.\nRestart Gemini CLI to load them.\n`,
     );
-    expect(read()).toEqual(geminiSettings({}, BUNDLE, "node"));
+    expect(read()).toEqual(geminiSettings({}, LAUNCHER, "node"));
     expect(readFileSync(file(), "utf8").endsWith("}\n")).toBe(true);
     expect(await setup("gemini")).toBe(0);
-    expect(read()).toEqual(geminiSettings({}, BUNDLE, "node"));
+    expect(read()).toEqual(geminiSettings({}, LAUNCHER, "node"));
   });
 
   it("keeps the user's settings and removes only its own", async () => {
@@ -191,10 +200,34 @@ describe("antibody setup gemini", () => {
     expect(read()).toEqual({ theme: "dark" });
   });
 
+  it("replaces the entries an older setup wrote for the bundle", async () => {
+    // Before #167 the hooks and the MCP server started dist/antibody.mjs.
+    const older = JSON.stringify(
+      geminiSettings({ theme: "dark" }, BUNDLE, "node"),
+    );
+    mkdirSync(join(home, ".gemini"));
+    writeFileSync(file(), older);
+    expect(await setup("gemini")).toBe(0);
+    expect(read()).toEqual(geminiSettings({ theme: "dark" }, LAUNCHER, "node"));
+    writeFileSync(file(), older);
+    expect(await setup("gemini", "--remove")).toBe(0);
+    expect(read()).toEqual({ theme: "dark" });
+  });
+
+  it("writes the same settings when setup runs through the launcher", async () => {
+    const code = await runSetup(
+      ["gemini", "--print"],
+      { stdout: (t) => void (out += t), stderr: () => undefined, env: {} },
+      { home, bundle: LAUNCHER },
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual(geminiSettings({}, LAUNCHER, "node"));
+  });
+
   it("prints instead of writing when asked, to any settings file", async () => {
     const other = join(home, "custom.json");
     expect(await setup("gemini", "--settings", other, "--print")).toBe(0);
-    expect(JSON.parse(out)).toEqual(geminiSettings({}, BUNDLE, "node"));
+    expect(JSON.parse(out)).toEqual(geminiSettings({}, LAUNCHER, "node"));
     expect(() => readFileSync(other)).toThrow();
   });
 
@@ -208,7 +241,7 @@ describe("antibody setup gemini", () => {
     err = "";
     expect(await setup("gemini", "--print")).toBe(0);
     expect(err).toContain("printing antibody's entries alone");
-    expect(JSON.parse(out)).toEqual(geminiSettings({}, BUNDLE, "node"));
+    expect(JSON.parse(out)).toEqual(geminiSettings({}, LAUNCHER, "node"));
   });
 
   it("treats an empty file as no settings, and reports one it cannot read", async () => {
@@ -254,14 +287,14 @@ describe("codexHooks", () => {
     hooks: [
       {
         type: "command",
-        command: `node ${BUNDLE} hook codex`,
+        command: `node ${LAUNCHER} hook codex`,
         timeout: CODEX_HOOK_TIMEOUT_SEC,
       },
     ],
   };
 
   it("adds a hook for each event Codex reports", () => {
-    expect(codexHooks({}, BUNDLE, "node")).toEqual({
+    expect(codexHooks({}, LAUNCHER, "node")).toEqual({
       hooks: {
         SessionStart: [codexHook],
         UserPromptSubmit: [codexHook],
@@ -271,7 +304,7 @@ describe("codexHooks", () => {
     });
   });
 
-  it("replaces its own hooks, from any bundle path, and keeps the rest", () => {
+  it("replaces its own hooks, from any path, and keeps the rest", () => {
     const theirs = {
       matcher: "Bash",
       hooks: [{ type: "command", command: "./audit.sh", timeout: 5 }],
@@ -285,7 +318,7 @@ describe("codexHooks", () => {
       description: "team hooks",
       hooks: { PostToolUse: [theirs, stale], Stop: [theirs] },
     };
-    const after = codexHooks(before, BUNDLE, "node");
+    const after = codexHooks(before, LAUNCHER, "node");
     expect(after).toEqual({
       description: "team hooks",
       hooks: {
@@ -296,13 +329,13 @@ describe("codexHooks", () => {
         SessionEnd: [codexHook],
       },
     });
-    expect(codexHooks(after, BUNDLE, "node")).toEqual(after);
-    expect(codexHooks(after, BUNDLE, "node", true)).toEqual({
+    expect(codexHooks(after, LAUNCHER, "node")).toEqual(after);
+    expect(codexHooks(after, LAUNCHER, "node", true)).toEqual({
       description: "team hooks",
       hooks: { PostToolUse: [theirs], Stop: [theirs] },
     });
     expect(
-      codexHooks(codexHooks({}, BUNDLE, "node"), BUNDLE, "node", true),
+      codexHooks(codexHooks({}, LAUNCHER, "node"), LAUNCHER, "node", true),
     ).toEqual({});
   });
 });
@@ -334,14 +367,14 @@ describe("antibody setup codex", () => {
     expect(await setup({}, "codex")).toBe(0);
     const file = join(home, ".codex", "hooks.json");
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(
-      codexHooks({}, BUNDLE, "node"),
+      codexHooks({}, LAUNCHER, "node"),
     );
     expect(out).toBe(
       [
         `Added antibody's hooks (SessionStart, UserPromptSubmit, PostToolUse, SessionEnd) to ${file}.`,
         "Codex runs new hooks once you trust them: review them with /hooks.",
         "To add the MCP server too, run",
-        `  codex mcp add antibody -- node ${BUNDLE} mcp codex`,
+        `  codex mcp add antibody -- node ${LAUNCHER} mcp codex`,
         "",
       ].join("\n"),
     );
@@ -350,6 +383,20 @@ describe("antibody setup codex", () => {
     expect(out).toBe(
       `Removed antibody's hooks from ${file}.\nIf you added its MCP server, remove it with: codex mcp remove antibody\n`,
     );
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
+  });
+
+  it("replaces the hooks an older setup wrote for the bundle", async () => {
+    const file = join(home, ".codex", "hooks.json");
+    const older = JSON.stringify(codexHooks({}, BUNDLE, "node"));
+    mkdirSync(join(home, ".codex"));
+    writeFileSync(file, older);
+    expect(await setup({}, "codex")).toBe(0);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(
+      codexHooks({}, LAUNCHER, "node"),
+    );
+    writeFileSync(file, older);
+    expect(await setup({}, "codex", "--remove")).toBe(0);
     expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({});
   });
 

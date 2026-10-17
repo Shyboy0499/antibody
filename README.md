@@ -4,6 +4,7 @@
 
 ![Status](https://img.shields.io/badge/status-M6%3A%20many%20machines-yellowgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
+![Node.js](https://img.shields.io/badge/node-%E2%89%A5%2022.13-339933)
 
 > **Status: M6, fixes that travel between machines.** antibody installs as a Claude
 > Code plugin, and `antibody setup` adds it to Gemini CLI and Codex CLI. Hooks capture
@@ -178,9 +179,12 @@ node ~/.local/share/antibody/dist/antibody.mjs setup codex    # ~/.codex/hooks.j
   output ends in an error line, and never for commands that only display text (`cat`,
   `grep`, `git log` and the like).
 
-Run setup again after moving the clone. `--remove` takes antibody out again,
-`--print` shows the result without writing it, and a settings file with comments is
-never rewritten.
+The hooks and the MCP server start through `hooks/launch.cjs`, as Claude Code's do, so
+a project that pins an older Node needs `ANTIBODY_NODE` here too (see
+[Install in Claude Code](#install-in-claude-code)). Run setup again after moving the
+clone, or to move hooks written by an older setup over to the launcher. `--remove`
+takes antibody out again, `--print` shows the result without writing it, and a
+settings file with comments is never rewritten.
 
 ### Other agents
 
@@ -192,7 +196,7 @@ pushed. Point it at the server, named after the agent:
   "mcpServers": {
     "antibody": {
       "command": "node",
-      "args": ["/path/to/antibody/dist/antibody.mjs", "mcp", "cursor"]
+      "args": ["/path/to/antibody/hooks/launch.cjs", "mcp", "cursor"]
     }
   }
 }
